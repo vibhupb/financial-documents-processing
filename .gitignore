@@ -1,0 +1,37 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+cdk.out/
+*.js
+*.d.ts
+
+# CDK asset staging
+.cdk.staging/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
+
+# Lambda packages
+lambda/**/__pycache__/
+lambda/**/*.pyc
+lambda/**/package/
+
+# Test coverage
+coverage/
+
+# Logs
+*.log
+npm-debug.log*
