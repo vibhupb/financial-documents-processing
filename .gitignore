@@ -12,9 +12,9 @@ cdk.out/
 
 # IDE
 .idea/
-.vscode/
 *.swp
 *.swo
+# Note: .vscode/ is NOT ignored - we share VS Code settings for team consistency
 
 # OS
 .DS_Store

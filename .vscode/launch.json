@@ -1,0 +1,47 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Debug Router Lambda",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/lambda/router/handler.py",
+      "console": "integratedTerminal",
+      "env": {
+        "BUCKET_NAME": "test-bucket",
+        "BEDROCK_MODEL_ID": "anthropic.claude-3-haiku-20240307-v1:0"
+      }
+    },
+    {
+      "name": "Debug Extractor Lambda",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/lambda/extractor/handler.py",
+      "console": "integratedTerminal",
+      "env": {
+        "BUCKET_NAME": "test-bucket"
+      }
+    },
+    {
+      "name": "Debug Normalizer Lambda",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/lambda/normalizer/handler.py",
+      "console": "integratedTerminal",
+      "env": {
+        "BUCKET_NAME": "test-bucket",
+        "TABLE_NAME": "financial-documents",
+        "BEDROCK_MODEL_ID": "anthropic.claude-3-5-sonnet-20241022-v2:0"
+      }
+    },
+    {
+      "name": "CDK Synth",
+      "type": "node",
+      "request": "launch",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["ts-node", "--prefer-ts-exts", "bin/app.ts"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal"
+    }
+  ]
+}
