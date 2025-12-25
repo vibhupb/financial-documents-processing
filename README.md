@@ -71,6 +71,22 @@ A production-ready AWS serverless architecture for processing high-volume financ
                         └─────────────────────────────────────────────────────────┘
 ```
 
+### Generate Architecture Diagram
+
+Generate a professional AWS architecture diagram with official icons:
+
+```bash
+# Create virtual environment and install dependencies
+uv venv .venv && source .venv/bin/activate
+uv pip install diagrams
+
+# Generate diagrams
+python3 scripts/generate-architecture-diagram.py           # Detailed vertical
+python3 scripts/generate-architecture-diagram-horizontal.py  # Compact horizontal
+
+# Output: docs/aws-architecture.png, docs/aws-architecture-horizontal.png
+```
+
 ## Supported Document Types
 
 ### Loan Packages
