@@ -10,6 +10,7 @@ cdk.out/
 !tailwind.config.js
 !postcss.config.js
 !vite.config.ts
+!presentation/*.js
 
 # CDK asset staging
 .cdk.staging/
@@ -84,8 +85,12 @@ frontend/.env.local
 .temp/
 
 # Generated docs and notes
-docs/
+docs/*.pdf
+docs/*.py
+docs/*.md
 .project-notes.md
+# Keep architecture diagrams
+!docs/aws-architecture*.png
 
 # Playwright MCP
 .playwright-mcp/

@@ -23,45 +23,45 @@ from diagrams.aws.general import Users
 from diagrams.aws.management import Cloudwatch
 
 
-# Dark theme configuration for presentations
+# Light theme configuration for presentations
 graph_attr = {
-    "bgcolor": "#0f172a",      # Dark slate background
-    "fontcolor": "white",       # White text for titles
+    "bgcolor": "#f8fafc",       # Light slate background
+    "fontcolor": "#1e293b",     # Dark text for titles
     "fontname": "Arial Bold",
     "fontsize": "24",
     "pad": "1.0",
-    "splines": "spline",        # Curved edges
-    "nodesep": "0.8",           # Node spacing
-    "ranksep": "1.0",           # Rank spacing
-    "dpi": "200",               # High resolution
+    "splines": "ortho",         # Straight orthogonal lines
+    "nodesep": "0.8",
+    "ranksep": "1.0",
+    "dpi": "200",
     "compound": "true",
 }
 
 node_attr = {
-    "fontcolor": "white",
+    "fontcolor": "#1e293b",
     "fontname": "Arial",
     "fontsize": "11",
 }
 
 edge_attr = {
-    "fontcolor": "#e2e8f0",
+    "fontcolor": "#475569",
     "fontname": "Arial",
     "fontsize": "9",
 }
 
-# Cluster styles
+# Cluster styles - Light theme
 aws_cloud_style = {
-    "bgcolor": "#1a2332",
-    "fontcolor": "#ff9900",
+    "bgcolor": "#fff7ed",       # Light orange tint
+    "fontcolor": "#c2410c",     # AWS Orange darker
     "fontsize": "18",
-    "pencolor": "#ff9900",
+    "pencolor": "#f97316",      # AWS Orange
     "penwidth": "3",
     "style": "rounded",
 }
 
 frontend_cluster_style = {
-    "bgcolor": "#1e3a5f",
-    "fontcolor": "#60a5fa",
+    "bgcolor": "#eff6ff",       # Light blue
+    "fontcolor": "#1d4ed8",
     "fontsize": "14",
     "pencolor": "#3b82f6",
     "penwidth": "2",
@@ -69,8 +69,8 @@ frontend_cluster_style = {
 }
 
 api_cluster_style = {
-    "bgcolor": "#1e3a3a",
-    "fontcolor": "#4ade80",
+    "bgcolor": "#f0fdf4",       # Light green
+    "fontcolor": "#15803d",
     "fontsize": "14",
     "pencolor": "#22c55e",
     "penwidth": "2",
@@ -78,8 +78,8 @@ api_cluster_style = {
 }
 
 processing_cluster_style = {
-    "bgcolor": "#2d1f3d",
-    "fontcolor": "#c4b5fd",
+    "bgcolor": "#faf5ff",       # Light purple
+    "fontcolor": "#7c3aed",
     "fontsize": "14",
     "pencolor": "#8b5cf6",
     "penwidth": "2",
@@ -87,8 +87,8 @@ processing_cluster_style = {
 }
 
 ai_cluster_style = {
-    "bgcolor": "#3d2d1f",
-    "fontcolor": "#fbbf24",
+    "bgcolor": "#fffbeb",       # Light amber
+    "fontcolor": "#b45309",
     "fontsize": "12",
     "pencolor": "#f59e0b",
     "penwidth": "2",
@@ -96,8 +96,8 @@ ai_cluster_style = {
 }
 
 storage_cluster_style = {
-    "bgcolor": "#1f2d3d",
-    "fontcolor": "#94a3b8",
+    "bgcolor": "#f1f5f9",       # Light slate
+    "fontcolor": "#475569",
     "fontsize": "14",
     "pencolor": "#64748b",
     "penwidth": "2",
@@ -105,10 +105,10 @@ storage_cluster_style = {
 }
 
 step_functions_cluster_style = {
-    "bgcolor": "#2d2d1f",
-    "fontcolor": "#fb923c",
+    "bgcolor": "#fff1f2",       # Light rose
+    "fontcolor": "#be123c",
     "fontsize": "14",
-    "pencolor": "#f97316",
+    "pencolor": "#f43f5e",
     "penwidth": "2",
     "style": "rounded",
 }
@@ -174,30 +174,30 @@ with Diagram(
         cloudwatch = Cloudwatch("CloudWatch\nLogs & Metrics")
 
     # Connections - User Flow
-    users >> Edge(color="#60a5fa", penwidth="2", label="HTTPS") >> cloudfront
+    users >> Edge(color="#3b82f6", penwidth="2", label="HTTPS") >> cloudfront
     cloudfront >> Edge(color="#3b82f6") >> s3_frontend
 
     # API Flow
-    users >> Edge(color="#4ade80", penwidth="2", label="REST API") >> api_gw
+    users >> Edge(color="#22c55e", penwidth="2", label="REST API") >> api_gw
     api_gw >> Edge(color="#22c55e") >> api_lambda
     api_lambda >> Edge(color="#22c55e", style="dashed") >> dynamodb
     api_lambda >> Edge(color="#22c55e", style="dashed", label="Presigned URL") >> s3_ingest
 
     # Document Upload Flow
-    cloudfront >> Edge(color="#f59e0b", label="Upload") >> s3_ingest
-    s3_ingest >> Edge(color="#f97316", penwidth="2", label="S3 Event") >> trigger_lambda
-    trigger_lambda >> Edge(color="#f97316", label="Check Duplicate") >> dynamodb
-    trigger_lambda >> Edge(color="#f97316", penwidth="2", label="Start Execution") >> sfn
+    cloudfront >> Edge(color="#f97316", label="Upload") >> s3_ingest
+    s3_ingest >> Edge(color="#f43f5e", penwidth="2", label="S3 Event") >> trigger_lambda
+    trigger_lambda >> Edge(color="#f43f5e", label="Check Duplicate") >> dynamodb
+    trigger_lambda >> Edge(color="#f43f5e", penwidth="2", label="Start Execution") >> sfn
 
     # Step Functions Internal Flow
-    sfn >> Edge(color="#c4b5fd", penwidth="2") >> router_lambda
-    router_lambda >> Edge(color="#fbbf24", label="Classify") >> bedrock_haiku
+    sfn >> Edge(color="#8b5cf6", penwidth="2") >> router_lambda
+    router_lambda >> Edge(color="#f59e0b", label="Classify") >> bedrock_haiku
 
-    router_lambda >> Edge(color="#c4b5fd", penwidth="2", label="Page Map") >> extractor_lambda
-    extractor_lambda >> Edge(color="#fbbf24", label="OCR Pages") >> textract
+    router_lambda >> Edge(color="#8b5cf6", penwidth="2", label="Page Map") >> extractor_lambda
+    extractor_lambda >> Edge(color="#f59e0b", label="OCR Pages") >> textract
 
-    extractor_lambda >> Edge(color="#c4b5fd", penwidth="2", label="Raw Data") >> normalizer_lambda
-    normalizer_lambda >> Edge(color="#fbbf24", label="Normalize") >> bedrock_haiku_norm
+    extractor_lambda >> Edge(color="#8b5cf6", penwidth="2", label="Raw Data") >> normalizer_lambda
+    normalizer_lambda >> Edge(color="#f59e0b", label="Normalize") >> bedrock_haiku_norm
 
     # Storage Output
     normalizer_lambda >> Edge(color="#64748b", penwidth="2", label="Final Data") >> dynamodb

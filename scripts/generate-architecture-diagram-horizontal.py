@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Generate Horizontal AWS Architecture Diagram for Financial Documents Processing.
-Optimized for presentations and README display.
+Optimized for presentations and README display with light theme.
 """
 
 from diagrams import Diagram, Cluster, Edge
@@ -13,51 +13,51 @@ from diagrams.aws.integration import StepFunctions
 from diagrams.aws.ml import Bedrock, Textract
 from diagrams.aws.general import Users
 
-# Dark theme configuration for presentations
+# Light theme configuration for presentations
 graph_attr = {
-    "bgcolor": "#0f172a",
-    "fontcolor": "white",
+    "bgcolor": "#f8fafc",       # Light slate background
+    "fontcolor": "#1e293b",     # Dark text
     "fontname": "Arial Bold",
     "fontsize": "20",
     "pad": "0.8",
-    "splines": "spline",
+    "splines": "ortho",         # Straight orthogonal lines
     "nodesep": "0.6",
     "ranksep": "0.8",
     "dpi": "150",
 }
 
 node_attr = {
-    "fontcolor": "white",
+    "fontcolor": "#1e293b",
     "fontname": "Arial",
     "fontsize": "10",
 }
 
 edge_attr = {
-    "fontcolor": "#e2e8f0",
+    "fontcolor": "#475569",
     "fontname": "Arial",
     "fontsize": "8",
 }
 
-# Cluster styles
+# Cluster styles - Light theme
 aws_cloud_style = {
-    "bgcolor": "#1a2332",
-    "fontcolor": "#ff9900",
+    "bgcolor": "#fff7ed",
+    "fontcolor": "#c2410c",
     "fontsize": "14",
-    "pencolor": "#ff9900",
+    "pencolor": "#f97316",
     "penwidth": "2",
     "style": "rounded",
 }
 
 frontend_style = {
-    "bgcolor": "#1e3a5f",
-    "fontcolor": "#60a5fa",
+    "bgcolor": "#eff6ff",
+    "fontcolor": "#1d4ed8",
     "fontsize": "11",
     "style": "rounded",
 }
 
 processing_style = {
-    "bgcolor": "#2d1f3d",
-    "fontcolor": "#c4b5fd",
+    "bgcolor": "#faf5ff",
+    "fontcolor": "#7c3aed",
     "fontsize": "11",
     "pencolor": "#8b5cf6",
     "penwidth": "2",
@@ -65,15 +65,15 @@ processing_style = {
 }
 
 ai_style = {
-    "bgcolor": "#3d2d1f",
-    "fontcolor": "#fbbf24",
+    "bgcolor": "#fffbeb",
+    "fontcolor": "#b45309",
     "fontsize": "10",
     "style": "rounded",
 }
 
 storage_style = {
-    "bgcolor": "#1f2d3d",
-    "fontcolor": "#94a3b8",
+    "bgcolor": "#f1f5f9",
+    "fontcolor": "#475569",
     "fontsize": "11",
     "style": "rounded",
 }
@@ -128,28 +128,28 @@ with Diagram(
             s3_audit = S3("S3 Audit")
 
     # Connections
-    users >> Edge(color="#60a5fa", penwidth="2") >> cloudfront
+    users >> Edge(color="#3b82f6", penwidth="2") >> cloudfront
     cloudfront >> s3_web
 
-    users >> Edge(color="#4ade80", style="dashed") >> api_gw
+    users >> Edge(color="#22c55e", style="dashed") >> api_gw
     api_gw >> api_lambda
-    api_lambda >> Edge(color="#4ade80", style="dashed") >> s3_ingest
+    api_lambda >> Edge(color="#22c55e", style="dashed") >> s3_ingest
 
-    s3_ingest >> Edge(color="#f97316", penwidth="2") >> trigger
-    trigger >> Edge(color="#f97316", penwidth="2") >> sfn
+    s3_ingest >> Edge(color="#f43f5e", penwidth="2") >> trigger
+    trigger >> Edge(color="#f43f5e", penwidth="2") >> sfn
 
-    sfn >> Edge(color="#c4b5fd") >> router
-    router >> Edge(color="#fbbf24") >> haiku1
+    sfn >> Edge(color="#8b5cf6") >> router
+    router >> Edge(color="#f59e0b") >> haiku1
 
-    router >> Edge(color="#c4b5fd") >> extractor
-    extractor >> Edge(color="#fbbf24") >> textract
+    router >> Edge(color="#8b5cf6") >> extractor
+    extractor >> Edge(color="#f59e0b") >> textract
 
-    extractor >> Edge(color="#c4b5fd") >> normalizer
-    normalizer >> Edge(color="#fbbf24") >> haiku2
+    extractor >> Edge(color="#8b5cf6") >> normalizer
+    normalizer >> Edge(color="#f59e0b") >> haiku2
 
     normalizer >> Edge(color="#64748b", penwidth="2") >> dynamodb
     normalizer >> Edge(color="#64748b", style="dashed") >> s3_audit
 
-    api_lambda >> Edge(color="#4ade80", style="dashed") >> dynamodb
+    api_lambda >> Edge(color="#22c55e", style="dashed") >> dynamodb
 
 print("Horizontal diagram saved to docs/aws-architecture-horizontal.png")
