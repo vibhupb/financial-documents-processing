@@ -6,58 +6,65 @@ This file provides context and guidance for Claude (Opus 4.5) when working on th
 
 **Project Name**: Financial Documents Processing
 **Pattern**: Router Pattern - Cost-Optimized Intelligent Document Processing
-**Industry**: Financial Services (Mortgage Loan Processing)
+**Industry**: Financial Services (Mortgage Loan Processing, Credit Agreements)
 **Repository**: https://github.com/vibhupb/financial-documents-processing
 
 ### Purpose
 
-This project implements a serverless AWS architecture for processing high-volume financial documents (Loan Packages, M&A Contracts) with optimal cost efficiency and precision. It uses a "Router Pattern" to classify documents first, then extract data only from relevant pages.
+This project implements a serverless AWS architecture for processing high-volume financial documents (Loan Packages, Credit Agreements, M&A Contracts) with optimal cost efficiency and precision. It uses a "Router Pattern" to classify documents first, then extract data only from relevant pages. Includes a React dashboard for document management and review workflows.
 
 ## Architecture Summary
 
 ```
-┌─────────────┐     ┌─────────────┐     ┌──────────────────────┐
-│   S3 Ingest │────▶│   Trigger   │────▶│   Step Functions     │
-│   Bucket    │     │   Lambda    │     │   Orchestrator       │
-└─────────────┘     └─────────────┘     └──────────────────────┘
-                                                   │
-                    ┌──────────────────────────────┼──────────────────┐
-                    │                              ▼                  │
-                    │  ┌─────────────────────────────────────────┐    │
-                    │  │  ROUTER: Classification (Claude Haiku)  │    │
-                    │  │  - Extract text snippets from all pages │    │
-                    │  │  - Identify key document types          │    │
-                    │  │  - Cost: ~$0.01 per document            │    │
-                    │  └─────────────────────────────────────────┘    │
-                    │                              │                  │
-                    │         ┌────────────────────┼────────────┐     │
-                    │         ▼                    ▼            ▼     │
-                    │  ┌────────────┐  ┌────────────┐  ┌──────────┐   │
-                    │  │ Promissory │  │  Closing   │  │  Form    │   │
-                    │  │    Note    │  │ Disclosure │  │  1003    │   │
-                    │  └────────────┘  └────────────┘  └──────────┘   │
-                    │                              │                  │
-                    │  ┌─────────────────────────────────────────┐    │
-                    │  │  SURGEON: Textract (Targeted Pages)     │    │
-                    │  │  - Process ONLY identified pages        │    │
-                    │  │  - Queries, Tables, Forms extraction    │    │
-                    │  │  - Cost: ~$0.03 per document            │    │
-                    │  └─────────────────────────────────────────┘    │
-                    │                              │                  │
-                    │  ┌─────────────────────────────────────────┐    │
-                    │  │  CLOSER: Normalization (Claude Sonnet)  │    │
-                    │  │  - Normalize rates, names, dates        │    │
-                    │  │  - Cross-reference validation           │    │
-                    │  │  - Schema-compliant JSON output         │    │
-                    │  └─────────────────────────────────────────┘    │
-                    └──────────────────────────────┼──────────────────┘
-                                                   │
-                              ┌────────────────────┴────────────┐
-                              ▼                                 ▼
-                       ┌────────────┐                    ┌────────────┐
-                       │  DynamoDB  │                    │  S3 Audit  │
-                       │  (Results) │                    │   Trail    │
-                       └────────────┘                    └────────────┘
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                        FINANCIAL DOCUMENT PROCESSING                             │
+│                   Router Pattern with React Dashboard                            │
+└─────────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────┐     ┌─────────────────────────────────────────────────────────┐
+│  React Frontend │     │                    AWS BACKEND                          │
+│   (CloudFront)  │────▶│                                                         │
+│                 │     │  ┌──────────────┐     ┌──────────────────────────────┐  │
+│  - Dashboard    │     │  │  API Gateway │────▶│   API Lambda                 │  │
+│  - Upload       │     │  │   (REST)     │     │   - Document CRUD            │  │
+│  - Review Queue │     │  └──────────────┘     │   - Upload URLs (presigned)  │  │
+│  - Doc Viewer   │     │                       │   - Review workflow          │  │
+└─────────────────┘     │                       │   - Metrics                  │  │
+                        │                       └──────────────────────────────┘  │
+                        │                                                         │
+                        │  ┌──────────────┐     ┌──────────────────────────────┐  │
+                        │  │   S3 Bucket  │────▶│   Trigger Lambda             │  │
+                        │  │   (ingest/)  │     │   - SHA-256 content hash     │  │
+                        │  └──────────────┘     │   - Deduplication check      │  │
+                        │                       │   - Start Step Functions     │  │
+                        │                       └──────────────────────────────┘  │
+                        │                                    │                    │
+                        │  ┌─────────────────────────────────▼──────────────────┐ │
+                        │  │              AWS STEP FUNCTIONS                     │ │
+                        │  │  ┌─────────────────────────────────────────────┐   │ │
+                        │  │  │  ROUTER: Classification (Claude 3 Haiku)   │   │ │
+                        │  │  │  - PyPDF text extraction                   │   │ │
+                        │  │  │  - Identify document types & page numbers  │   │ │
+                        │  │  └─────────────────────────────────────────────┘   │ │
+                        │  │                       │                            │ │
+                        │  │  ┌─────────────────────────────────────────────┐   │ │
+                        │  │  │  EXTRACTOR: Textract (Targeted Pages)      │   │ │
+                        │  │  │  - Queries, Tables, Forms extraction       │   │ │
+                        │  │  └─────────────────────────────────────────────┘   │ │
+                        │  │                       │                            │ │
+                        │  │  ┌─────────────────────────────────────────────┐   │ │
+                        │  │  │  NORMALIZER: Claude 3.5 Haiku              │   │ │
+                        │  │  │  - Normalize, validate, output JSON        │   │ │
+                        │  │  └─────────────────────────────────────────────┘   │ │
+                        │  └──────────────────────────────────────────────────┘ │
+                        │                          │                             │
+                        │         ┌────────────────┴────────────────┐            │
+                        │         ▼                                 ▼            │
+                        │  ┌──────────────┐                 ┌──────────────┐     │
+                        │  │   DynamoDB   │                 │   S3 Bucket  │     │
+                        │  │  (App Data)  │                 │   (Audit)    │     │
+                        │  └──────────────┘                 └──────────────┘     │
+                        └─────────────────────────────────────────────────────────┘
 ```
 
 ## Technology Stack
@@ -68,54 +75,105 @@ This project implements a serverless AWS architecture for processing high-volume
 | Orchestration | AWS Step Functions | Workflow management |
 | Storage | Amazon S3 | Document storage & audit trail |
 | Database | Amazon DynamoDB | Extracted data storage |
-| Classification | Amazon Bedrock (Claude 3 Haiku) | Fast document routing |
-| Extraction | Amazon Textract | Visual document extraction |
-| Normalization | Amazon Bedrock (Claude 3.5 Sonnet) | Data refinement |
-| Functions | AWS Lambda (Python 3.11) | Serverless compute |
+| Classification | Amazon Bedrock (Claude 3 Haiku) | Fast document routing (~$0.006/doc) |
+| Extraction | Amazon Textract | Visual document extraction (~$0.30/doc) |
+| Normalization | Amazon Bedrock (Claude 3.5 Haiku) | Data refinement (~$0.03/doc) |
+| API | AWS API Gateway + Lambda | REST API for frontend |
+| Frontend | React + TypeScript + Vite | Dashboard UI |
+| PDF Viewing | react-pdf | In-browser PDF rendering |
+| Styling | Tailwind CSS | Utility-first CSS framework |
 
 ## Project Structure
 
 ```
 financial-documents-processing/
 ├── bin/
-│   └── app.ts                    # CDK app entry point
+│   └── app.ts                        # CDK app entry point
 ├── lib/
 │   └── stacks/
-│       └── document-processing-stack.ts  # Main infrastructure
+│       └── document-processing-stack.ts  # Main infrastructure (CDK)
 ├── lambda/
-│   ├── trigger/                  # S3 event → Step Functions
-│   │   └── handler.py
-│   ├── router/                   # Document classification
-│   │   └── handler.py
-│   ├── extractor/                # Textract extraction
-│   │   └── handler.py
-│   ├── normalizer/               # Data normalization
-│   │   └── handler.py
+│   ├── api/                          # REST API Lambda
+│   │   └── handler.py                # Document CRUD, upload, review workflow
+│   ├── trigger/                      # S3 event trigger
+│   │   └── handler.py                # Deduplication, start Step Functions
+│   ├── router/                       # Document classification
+│   │   └── handler.py                # Claude Haiku classification
+│   ├── extractor/                    # Data extraction
+│   │   └── handler.py                # Textract targeted extraction
+│   ├── normalizer/                   # Data normalization
+│   │   └── handler.py                # Claude 3.5 Haiku normalization
 │   └── layers/
-│       └── pypdf/                # PyPDF Lambda layer
+│       └── pypdf/                    # PyPDF Lambda layer
 │           ├── requirements.txt
 │           └── build.sh
+├── frontend/                         # React Dashboard
+│   ├── src/
+│   │   ├── components/               # Reusable UI components
+│   │   │   ├── DocumentViewer.tsx    # PDF + extracted data viewer
+│   │   │   ├── ExtractedValuesPanel.tsx  # Formatted data display
+│   │   │   ├── PDFViewer.tsx         # PDF rendering with react-pdf
+│   │   │   └── StatusBadge.tsx       # Processing status indicator
+│   │   ├── pages/                    # Route pages
+│   │   │   ├── Dashboard.tsx         # Overview & metrics
+│   │   │   ├── Upload.tsx            # Document upload with drag-drop
+│   │   │   ├── Documents.tsx         # Document list
+│   │   │   ├── DocumentDetail.tsx    # Document viewer page
+│   │   │   └── ReviewDocument.tsx    # Review workflow page
+│   │   ├── services/
+│   │   │   └── api.ts                # API client (TanStack Query)
+│   │   └── types/
+│   │       └── index.ts              # TypeScript interfaces
+│   ├── package.json
+│   ├── tailwind.config.js
+│   └── vite.config.ts
+├── src/                              # Python source modules
+│   └── financial_docs/
+│       ├── common/                   # Shared utilities
+│       ├── schemas/                  # Data schemas
+│       └── utils/                    # Helper functions
+├── tests/                            # Python tests
 ├── scripts/
-│   ├── deploy.sh                 # One-command deployment
-│   ├── test-local.sh             # Local testing
-│   └── upload-test-doc.sh        # Test document upload
-├── .vscode/                      # VS Code configuration
-├── package.json                  # Node.js dependencies
-├── tsconfig.json                 # TypeScript config
-├── cdk.json                      # CDK configuration
-├── CLAUDE.md                     # This file
-└── README.md                     # Project documentation
+│   ├── deploy.sh                     # Full deployment script
+│   ├── setup-dev.sh                  # Development environment setup
+│   └── upload-test-doc.sh            # Test document upload
+├── .vscode/                          # VS Code configuration
+├── package.json                      # CDK dependencies
+├── tsconfig.json                     # TypeScript config
+├── pyproject.toml                    # Python project config
+├── cdk.json                          # CDK configuration
+├── CLAUDE.md                         # This file
+└── README.md                         # Project documentation
 ```
+
+## Supported Document Types
+
+### Loan Packages
+- **Promissory Note**: Interest rate, principal amount, borrower names, maturity date, monthly payment
+- **Closing Disclosure (TILA-RESPA)**: Loan amount, fees, closing costs, cash to close
+- **Form 1003**: Borrower info, property address, employment details, SSN (masked)
+
+### Credit Agreements
+- **Agreement Info**: Document type, amendment number, agreement/effective/maturity dates
+- **Parties**: Borrower, ultimate holdings, administrative agent, lead arrangers, guarantors
+- **Facility Terms**: Max revolving credit, elected commitment, LC commitment/sublimit, swingline sublimit
+- **Facilities**: Facility type, name, commitment amount, maturity date
+- **Applicable Rates**: Reference rate, pricing basis, floor, pricing tiers (SOFR/ABR spreads, unused fees)
+- **Payment Terms**: Interest period options, interest payment dates
+- **Fees**: Commitment fee rate, LC fee rate, fronting fee rate, agency fee
+- **Lender Commitments**: Per-lender allocations (name, percentage, term/revolving commitments)
+- **Covenants**: Fixed charge coverage ratio, other covenants
 
 ## Development Guidelines
 
 ### Code Style
 
-**TypeScript (CDK Infrastructure)**:
+**TypeScript (CDK Infrastructure & Frontend)**:
 - Use strict TypeScript settings
 - Prefer `const` over `let`
 - Use meaningful variable names
 - Document complex logic with comments
+- Use TanStack Query for data fetching in React
 
 **Python (Lambda Functions)**:
 - Follow PEP 8 style guide
@@ -132,33 +190,48 @@ financial-documents-processing/
 | Environment Variables | SCREAMING_SNAKE | `BUCKET_NAME` |
 | Python functions | snake_case | `extract_page_snippets` |
 | TypeScript functions | camelCase | `createStateMachine` |
+| React Components | PascalCase | `DocumentViewer` |
+| CSS Classes | kebab-case | `btn-primary` |
 
 ### AWS Resource Naming
 
 - S3 Bucket: `financial-docs-{account}-{region}`
+- S3 Frontend Bucket: `financial-docs-frontend-{account}-{region}`
 - DynamoDB Table: `financial-documents`
 - Step Functions: `financial-doc-processor`
 - Lambda: `doc-processor-{function}`
+- API Gateway: `doc-processor-api`
+- CloudFront: For frontend distribution
 
 ## Key Design Decisions
 
 ### 1. Cost Optimization Strategy
 - **Why**: Processing 300-page documents with full OCR costs ~$4.50
-- **Solution**: Use cheap Claude Haiku ($0.01) to classify first, then extract only needed pages ($0.03)
-- **Result**: 98.7% cost reduction
+- **Solution**: Use cheap Claude Haiku ($0.006) to classify first, then extract only needed pages ($0.30)
+- **Result**: 92.5% cost reduction (~$0.34 vs $4.55)
 
 ### 2. PyPDF for Text Extraction
 - **Why**: Faster and cheaper than OCR for text-based PDFs
 - **Trade-off**: Won't work for scanned images (would need Textract for those)
 - **Solution**: Check if page has extractable text; fallback to Textract if needed
 
-### 3. Parallel Extraction
+### 3. Content-Based Deduplication
+- **Why**: Avoid reprocessing identical documents
+- **Solution**: SHA-256 hash of document content stored in DynamoDB GSI
+- **Benefit**: Returns cached results instantly for duplicates
+
+### 4. Parallel Extraction
 - **Why**: Different document types need different extraction methods
 - **Solution**: Step Functions Parallel state runs Queries, Tables, Forms extraction concurrently
 
-### 4. Dual Storage (DynamoDB + S3)
-- **DynamoDB**: Fast queries for application use
-- **S3**: Complete audit trail for compliance
+### 5. Dual Storage (DynamoDB + S3)
+- **DynamoDB**: Fast queries for application use, GSIs for status/review filtering
+- **S3**: Complete audit trail for compliance, presigned URLs for PDF viewing
+
+### 6. React Frontend with CloudFront
+- **Why**: Modern, responsive UI for document management
+- **Solution**: Vite + React + TypeScript, deployed to S3 + CloudFront
+- **Features**: PDF viewer, side-by-side extracted data, review workflow
 
 ## Common Tasks
 
@@ -175,6 +248,37 @@ financial-documents-processing/
 3. Update `lambda/normalizer/handler.py`:
    - Add normalization rules for the new document type
    - Update the output schema
+
+4. Update `frontend/src/types/index.ts`:
+   - Add TypeScript interface for new document type
+   - Add to `LoanData` or `CreditAgreementData`
+
+5. Update `frontend/src/components/ExtractedValuesPanel.tsx`:
+   - Add new section for displaying extracted data
+   - Create field component for the document type
+
+### Adding New Fields to Credit Agreement
+
+1. Update `lambda/normalizer/handler.py`:
+   - Add field extraction in the normalization prompt
+
+2. Update `frontend/src/types/index.ts`:
+   - Add field to `CreditAgreement` interface
+
+3. Update `frontend/src/components/ExtractedValuesPanel.tsx`:
+   - Add `<FieldRow>` in `CreditAgreementFields` component
+
+4. Update `frontend/src/pages/ReviewDocument.tsx`:
+   - Add field in `renderCreditAgreementData` function
+
+### Deploying Frontend Changes
+
+```bash
+cd frontend
+npm run build
+aws s3 sync dist/ s3://financial-docs-frontend-{account}-{region}/ --delete
+aws cloudfront create-invalidation --distribution-id {DIST_ID} --paths "/*"
+```
 
 ### Modifying Extraction Queries
 
@@ -200,11 +304,30 @@ environment: {
 new_var = os.environ.get('NEW_VAR')
 ```
 
+## API Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/documents` | List all documents |
+| GET | `/documents/{id}` | Get document details |
+| GET | `/documents/{id}/pdf` | Get presigned PDF URL |
+| GET | `/documents/{id}/status` | Get processing status |
+| GET | `/documents/{id}/audit` | Get audit trail |
+| POST | `/upload` | Get presigned upload URL |
+| GET | `/metrics` | Get processing metrics |
+| GET | `/review` | List documents pending review |
+| GET | `/review/{id}` | Get document for review |
+| POST | `/review/{id}/approve` | Approve document |
+| POST | `/review/{id}/reject` | Reject document |
+| PUT | `/documents/{id}/fields` | Correct field values |
+| POST | `/documents/{id}/reprocess` | Trigger reprocessing |
+
 ## Testing
 
-### Local Testing
+### Local Development
 ```bash
-./scripts/test-local.sh
+cd frontend
+npm run dev  # Start Vite dev server at localhost:5173
 ```
 
 ### Integration Testing
@@ -219,29 +342,34 @@ new_var = os.environ.get('NEW_VAR')
 aws stepfunctions list-executions --state-machine-arn <arn>
 ```
 
-### Unit Testing (Future)
+### Unit Testing
 ```bash
 npm test          # CDK tests
-pytest lambda/    # Python Lambda tests
+pytest tests/     # Python tests
 ```
 
 ## Deployment
 
 ### Prerequisites
 - Node.js 18+
-- Python 3.11+
+- Python 3.13+
 - AWS CLI configured with appropriate credentials
 - AWS CDK installed (`npm install -g aws-cdk`)
 
-### Deploy Commands
+### Deploy Backend
 ```bash
-# Full deployment
-./scripts/deploy.sh
-
-# Manual steps
 npm install
 npm run build
 cdk deploy --all
+```
+
+### Deploy Frontend
+```bash
+cd frontend
+npm install
+npm run build
+aws s3 sync dist/ s3://financial-docs-frontend-{account}-{region}/ --delete
+aws cloudfront create-invalidation --distribution-id {DIST_ID} --paths "/*"
 ```
 
 ### Destroy Infrastructure
@@ -260,6 +388,8 @@ When working on this project, Claude should:
 - Document any non-obvious design decisions
 - Ensure error handling is comprehensive
 - Consider audit trail requirements for financial compliance
+- Keep frontend and backend types synchronized
+- Use TanStack Query for data fetching in React
 - Test changes locally before suggesting deployment
 
 ### DON'T:
@@ -269,6 +399,7 @@ When working on this project, Claude should:
 - Use synchronous Textract for multi-page documents (use async for >1 page)
 - Hardcode AWS account IDs or regions
 - Skip error handling in Lambda functions
+- Forget to update both frontend pages when changing data structures
 
 ### When Adding Features:
 1. Consider impact on cost (is there a cheaper way?)
@@ -276,6 +407,7 @@ When working on this project, Claude should:
 3. Ensure backward compatibility with existing documents
 4. Add appropriate CloudWatch metrics/alarms
 5. Update README.md with usage instructions
+6. Update frontend types and components together
 
 ## Troubleshooting
 
@@ -297,7 +429,43 @@ When working on this project, Claude should:
 - Check CloudWatch Logs for detailed error messages
 - Verify Lambda function permissions
 
+**Frontend Not Showing Data**:
+- Check if `extractedData` vs `data` is being accessed correctly
+- Verify API response structure matches TypeScript types
+- Check browser console for errors
+- Hard refresh (Cmd+Shift+R) after CloudFront invalidation
+
+**CORS Errors**:
+- API Lambda returns CORS headers for all responses
+- Check `CORS_ORIGIN` environment variable
+- Ensure presigned URLs use regional S3 endpoint
+
 ## Cost Monitoring
+
+### Per-Document Cost Breakdown (300-page Credit Agreement)
+
+| Stage | Service | Details | Cost |
+|-------|---------|---------|------|
+| **Router** | Claude 3 Haiku | ~20K input + 500 output tokens | ~$0.006 |
+| **Textract** | Tables + Queries | ~15 pages x $0.02/page | ~$0.30 |
+| **Normalizer** | Claude 3.5 Haiku | ~10K input + 4K output tokens | ~$0.03 |
+| **Total** | | | **~$0.34** |
+
+### Model Pricing Reference (per 1K tokens)
+
+| Model | Input | Output | Use Case |
+|-------|-------|--------|----------|
+| Claude 3 Haiku | $0.00025 | $0.00125 | Router |
+| Claude 3.5 Haiku | $0.001 | $0.005 | Normalizer |
+| Textract (Tables + Queries) | $0.02/page | - | Extraction |
+
+### Monthly Cost Estimates
+
+| Volume | Per-Doc Cost | Monthly Cost |
+|--------|-------------|--------------|
+| 100 docs | $0.34 | $34 |
+| 1,000 docs | $0.34 | $340 |
+| 10,000 docs | $0.34 | $3,400 |
 
 ### Key Metrics to Track
 - Bedrock token usage (per model)
@@ -305,17 +473,22 @@ When working on this project, Claude should:
 - Lambda invocations and duration
 - S3 storage and requests
 - DynamoDB read/write capacity
+- CloudFront requests and data transfer
 
 ### Cost Optimization Tips
 1. Use Intelligent Tiering for S3 processed documents
 2. Set DynamoDB TTL to auto-delete old records
 3. Monitor Bedrock token usage with CloudWatch
 4. Use reserved concurrency for predictable Lambda costs
+5. **Claude 3.5 Haiku** for normalization saves ~70% vs Sonnet 4
+6. Content deduplication prevents reprocessing identical documents
 
 ## Version History
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 2.0.0 | 2024-12-25 | Add React dashboard, Review workflow, Credit Agreement support |
+| 1.1.0 | 2024-12-21 | Cost optimization: Switch normalizer from Sonnet 4 to Claude 3.5 Haiku |
 | 1.0.0 | 2024-12-21 | Initial implementation |
 
 ## Contact & Support
