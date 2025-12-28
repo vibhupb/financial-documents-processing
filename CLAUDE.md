@@ -233,6 +233,68 @@ financial-documents-processing/
 - **Solution**: Vite + React + TypeScript, deployed to S3 + CloudFront
 - **Features**: PDF viewer, side-by-side extracted data, review workflow
 
+## Architectural Design Rationale: Router Pattern vs Alternatives
+
+### Why Not Use Expensive LLMs (Opus 4.5, GPT-4) with Tool Calling?
+
+Many document processing solutions use expensive foundation models with tool calling or schema-constrained outputs. While powerful, this approach has critical limitations:
+
+| Approach | Cost/300-page Doc | Limitations |
+|----------|-------------------|-------------|
+| Claude Opus 4.5 (tool calling) | ~$15-25 | Token limits truncate large docs; cost prohibitive at scale |
+| GPT-4 Turbo (function calling) | ~$8-15 | Rate limits; same truncation issues |
+| Bedrock Data Automation (BDA) | ~$2-5 | Processes entire document; limited customization |
+| **Router Pattern** | **~$0.34** | Surgical precision; 92.5% cost reduction |
+
+### The Router Pattern Philosophy
+
+> **"Use a cheap model to figure out WHERE to look, then use specialized tools to extract WHAT you need."**
+
+**Key Insights:**
+1. **Classification is cheap** - Claude Haiku excels at understanding document structure (~$0.006)
+2. **OCR is specialized** - Textract beats LLM vision for tables/forms ($0.02/page)
+3. **Normalization needs intelligence** - But not $75/M output token intelligence (~$0.03)
+
+### Why This Pattern is Superior
+
+**vs. Claude Opus 4.5 with Tool Calling:**
+- ❌ Cost prohibitive: $15/M input + $75/M output tokens
+- ❌ Context limits may truncate 300-page documents
+- ❌ No page-level audit trail for compliance
+- ❌ Overkill: Using a genius to do a librarian's job
+
+**vs. Bedrock Data Automation (BDA):**
+- ❌ Still processes entire document (no intelligent page selection)
+- ❌ Limited schema customization (pre-defined templates)
+- ❌ Higher per-document cost (~$2-5 vs $0.34)
+- ❌ Less control (black-box pipeline)
+
+**Router Pattern Advantages:**
+- ✅ 92.5% cost reduction: $0.34/doc vs $4.55 (Textract) or $15+ (Opus)
+- ✅ Page-level audit trail: Know exactly which page data came from
+- ✅ Schema flexibility: Custom extraction for any document type
+- ✅ Parallel extraction: Process sections simultaneously
+- ✅ Deduplication: SHA-256 prevents reprocessing identical documents
+- ✅ Human-in-the-loop: Built-in review workflow
+
+### Cost Comparison at Scale
+
+| Volume | Router Pattern | BDA | Opus 4.5 |
+|--------|----------------|-----|----------|
+| 100 docs/month | $34 | ~$300 | ~$2,000 |
+| 1,000 docs/month | $340 | ~$3,000 | ~$20,000 |
+| 10,000 docs/month | **$3,400** | ~$30,000 | ~$200,000 |
+
+### When to Use Router Pattern
+
+| Use Case | Recommendation |
+|----------|----------------|
+| High-volume financial docs (1000+/month) | ✅ Router Pattern |
+| Documents >50 pages | ✅ Router Pattern |
+| Need page-level audit trail | ✅ Router Pattern |
+| One-off complex analysis | Consider Opus 4.5 |
+| Simple single-page forms | BDA or direct Textract |
+
 ## Common Tasks
 
 ### Adding a New Document Type

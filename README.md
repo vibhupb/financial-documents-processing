@@ -257,6 +257,97 @@ financial-documents-processing/
 | 1,000 docs | $0.34 | $340 |
 | 10,000 docs | $0.34 | $3,400 |
 
+## Why Router Pattern? Comparison vs Alternative Approaches
+
+### The Problem with Brute-Force LLM Approaches
+
+Many document processing solutions use expensive foundation models (Claude Opus 4.5, GPT-4) with tool calling or schema-constrained outputs to extract data. While powerful, this approach has critical limitations for high-volume financial document processing:
+
+| Approach | Cost/300-page Doc | Issues |
+|----------|-------------------|--------|
+| **Claude Opus 4.5** (tool calling) | ~$15-25 | Extremely expensive at scale; token limits may truncate large documents |
+| **GPT-4 Turbo** (function calling) | ~$8-15 | Same issues; rate limits at high volume |
+| **Bedrock Data Automation (BDA)** | ~$2-5 | Better, but still processes entire document; limited customization |
+| **Full Textract OCR** | ~$4.55 | Brute force all pages; no intelligence about relevance |
+| **Router Pattern** | **~$0.34** | **92.5% cheaper**; surgical precision |
+
+### Router Pattern: Key Technical Differentiators
+
+#### 1. **Intelligent Page Selection** (Not Brute Force)
+Instead of feeding an entire 300-page Credit Agreement to an expensive model, the Router Pattern:
+- Uses **cheap Claude 3 Haiku** (~$0.006) to classify and identify relevant pages
+- Extracts **only 15-30 pages** that contain actual data (vs 300 pages)
+- Reduces downstream processing by **90%+**
+
+```
+Traditional: 300 pages × $0.015/page = $4.50
+Router Pattern: 15 pages × $0.02/page = $0.30 (+ $0.04 for classification/normalization)
+```
+
+#### 2. **Specialized Tools for Each Stage**
+The pattern uses the **right tool for each job**, not a single expensive model:
+
+| Stage | Tool | Why This Choice |
+|-------|------|-----------------|
+| **Classification** | Claude 3 Haiku | Fast, cheap, excellent at understanding document structure |
+| **OCR/Extraction** | Amazon Textract | Purpose-built for tables, forms, queries; better than LLM vision |
+| **Normalization** | Claude 3.5 Haiku | Great at data cleanup, schema compliance, cross-validation |
+
+#### 3. **Why Not Just Use Opus 4.5 or BDA?**
+
+**Claude Opus 4.5 with Tool Calling:**
+- ❌ **Cost prohibitive**: $15/M input + $75/M output tokens
+- ❌ **Context limits**: May truncate 300-page documents
+- ❌ **No page-level audit**: Can't trace which page data came from
+- ❌ **Overkill**: Using a genius to do a librarian's job
+
+**Bedrock Data Automation (BDA):**
+- ❌ **Still processes entire document**: No intelligent page selection
+- ❌ **Limited schema customization**: Pre-defined extraction templates
+- ❌ **Higher per-document cost**: ~$2-5 vs $0.34
+- ❌ **Less control**: Black-box processing pipeline
+
+**Router Pattern Advantages:**
+- ✅ **92.5% cost reduction**: $0.34 vs $4.55 (Textract) or $15+ (Opus)
+- ✅ **Page-level audit trail**: Know exactly which page each data point came from
+- ✅ **Schema flexibility**: Custom extraction for any document type
+- ✅ **Parallel extraction**: Process different document sections simultaneously
+- ✅ **Deduplication**: SHA-256 hashing prevents reprocessing identical documents
+- ✅ **Human-in-the-loop**: Built-in review workflow for corrections
+
+#### 4. **Production-Ready Features**
+
+| Feature | Router Pattern | BDA | Opus Tool Calling |
+|---------|----------------|-----|-------------------|
+| Page-level audit trail | ✅ | ❌ | ❌ |
+| Content deduplication | ✅ | ❌ | ❌ |
+| Human review workflow | ✅ | Limited | ❌ |
+| Custom document types | ✅ Easy | Limited | ✅ |
+| Cost at 10K docs/month | **$3,400** | ~$25,000 | ~$150,000+ |
+| Processing time | ~2-3 min | ~5-10 min | ~5-15 min |
+
+### When to Use Router Pattern vs Alternatives
+
+| Use Case | Recommended Approach |
+|----------|---------------------|
+| **High-volume financial docs** (1000+/month) | ✅ Router Pattern |
+| **Documents >50 pages** | ✅ Router Pattern |
+| **Need page-level audit trail** | ✅ Router Pattern |
+| **One-off complex analysis** | Consider Opus 4.5 |
+| **Simple single-page forms** | BDA or direct Textract |
+| **Unstructured text extraction** | Direct LLM call |
+
+### The Core Insight
+
+> **"Use a cheap model to figure out WHERE to look, then use specialized tools to extract WHAT you need."**
+
+This is fundamentally different from the "throw Opus at it" approach. The Router Pattern recognizes that:
+1. **Classification is cheap** - Claude Haiku excels at understanding document structure
+2. **OCR is specialized** - Textract beats LLM vision for tables and forms
+3. **Normalization needs intelligence** - But not $75/M output token intelligence
+
+The result: **Enterprise-grade document processing at startup costs**.
+
 ## API Endpoints
 
 | Method | Endpoint | Description |
