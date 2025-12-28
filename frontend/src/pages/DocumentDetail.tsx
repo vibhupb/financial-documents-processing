@@ -15,7 +15,7 @@ import DocumentViewer from '../components/DocumentViewer';
 export default function DocumentDetail() {
   const { documentId } = useParams<{ documentId: string }>();
 
-  // Fetch document data
+  // Fetch document data with polling while processing
   const {
     data: documentData,
     isLoading: isDocumentLoading,
@@ -24,6 +24,14 @@ export default function DocumentDetail() {
     queryKey: ['document', documentId],
     queryFn: () => api.getDocument(documentId!),
     enabled: !!documentId,
+    refetchInterval: (query) => {
+      const status = query.state.data?.document?.status;
+      // Poll every 3 seconds while processing, stop when done
+      if (!status || ['PROCESSED', 'FAILED', 'SKIPPED'].includes(status)) {
+        return false;
+      }
+      return 3000;
+    },
   });
 
   // Fetch PDF URL for viewing
