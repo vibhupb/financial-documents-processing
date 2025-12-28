@@ -131,14 +131,44 @@ if (fs.existsSync(diagramPath)) {
 }
 
 // ============================================================================
-// SLIDE 5: Cost Comparison
+// SLIDE 5: Step Functions Workflow (Execution View)
 // ============================================================================
 let slide5 = pptx.addSlide();
-slide5.addShape(pptx.shapes.RECTANGLE, { x: 0, y: 0, w: '100%', h: 1.2, fill: { color: colors.success } });
-slide5.addText('Cost Comparison: 92.5% Savings', { x: 0.5, y: 0.4, w: 9, h: 0.5, fontSize: 32, bold: true, color: 'FFFFFF', fontFace: 'Arial' });
+slide5.addShape(pptx.shapes.RECTANGLE, { x: 0, y: 0, w: '100%', h: 1.2, fill: { color: colors.primary } });
+slide5.addText('Step Functions Workflow', { x: 0.5, y: 0.4, w: 9, h: 0.5, fontSize: 32, bold: true, color: 'FFFFFF', fontFace: 'Arial' });
+
+// Add the Step Functions execution graph
+const sfnGraphPath = path.join(__dirname, '../docs/stepfunctions_graph.png');
+if (fs.existsSync(sfnGraphPath)) {
+    slide5.addImage({ path: sfnGraphPath, x: 0.2, y: 1.35, w: 9.6, h: 2.8 });
+} else {
+    slide5.addText('Step Functions graph: docs/stepfunctions_graph.png',
+        { x: 1, y: 2.5, w: 8, h: 1, fontSize: 16, color: colors.dark, align: 'center' });
+}
+
+// Workflow highlights
+const workflowHighlights = [
+    { title: 'Smart Routing', desc: 'DocumentTypeChoice branches to Loan or Credit Agreement path', color: colors.accent },
+    { title: 'Parallel Extraction', desc: 'Multiple Textract tasks run simultaneously for speed', color: colors.teal },
+    { title: 'Error Handling', desc: 'Built-in error handling with graceful failure recovery', color: colors.danger },
+];
+
+workflowHighlights.forEach((h, i) => {
+    const x = 0.4 + (i * 3.2);
+    slide5.addShape(pptx.shapes.ROUNDED_RECTANGLE, { x, y: 4.3, w: 3, h: 1.2, fill: { color: 'FFFFFF' }, line: { color: h.color, pt: 2 }, rectRadius: 0.08 });
+    slide5.addText(h.title, { x, y: 4.4, w: 3, h: 0.35, fontSize: 13, bold: true, color: h.color, align: 'center', fontFace: 'Arial' });
+    slide5.addText(h.desc, { x: x + 0.1, y: 4.8, w: 2.8, h: 0.6, fontSize: 10, color: colors.dark, align: 'center', fontFace: 'Arial' });
+});
+
+// ============================================================================
+// SLIDE 6: Cost Comparison
+// ============================================================================
+let slide6 = pptx.addSlide();
+slide6.addShape(pptx.shapes.RECTANGLE, { x: 0, y: 0, w: '100%', h: 1.2, fill: { color: colors.success } });
+slide6.addText('Cost Comparison: 92.5% Savings', { x: 0.5, y: 0.4, w: 9, h: 0.5, fontSize: 32, bold: true, color: 'FFFFFF', fontFace: 'Arial' });
 
 // Cost comparison table
-slide5.addTable([
+slide6.addTable([
     [
         { text: 'Approach', options: { fill: { color: colors.secondary }, color: 'FFFFFF', bold: true } },
         { text: 'Cost/Doc', options: { fill: { color: colors.secondary }, color: 'FFFFFF', bold: true } },
@@ -174,10 +204,10 @@ slide5.addTable([
 });
 
 // Cost breakdown chart
-slide5.addText('Per-Document Cost Breakdown (300-page Credit Agreement)',
+slide6.addText('Per-Document Cost Breakdown (300-page Credit Agreement)',
     { x: 0.5, y: 3.9, w: 9, h: 0.3, fontSize: 14, bold: true, color: colors.dark, fontFace: 'Arial' });
 
-slide5.addChart(pptx.charts.BAR, [{
+slide6.addChart(pptx.charts.BAR, [{
     name: 'Cost',
     labels: ['Router (Haiku)', 'Extractor (Textract)', 'Normalizer (Haiku)'],
     values: [0.006, 0.30, 0.03]
@@ -195,7 +225,7 @@ slide5.addChart(pptx.charts.BAR, [{
 });
 
 // Pie chart for cost distribution
-slide5.addChart(pptx.charts.PIE, [{
+slide6.addChart(pptx.charts.PIE, [{
     name: 'Cost Distribution',
     labels: ['Textract (89%)', 'Normalizer (9%)', 'Router (2%)'],
     values: [0.30, 0.03, 0.006]
@@ -208,14 +238,14 @@ slide5.addChart(pptx.charts.PIE, [{
 });
 
 // ============================================================================
-// SLIDE 6: Why Router Pattern? (vs Alternatives)
+// SLIDE 7: Why Router Pattern? (vs Alternatives)
 // ============================================================================
-let slide6 = pptx.addSlide();
-slide6.addShape(pptx.shapes.RECTANGLE, { x: 0, y: 0, w: '100%', h: 1.2, fill: { color: colors.danger } });
-slide6.addText('Why Router Pattern? vs Alternatives', { x: 0.5, y: 0.4, w: 9, h: 0.5, fontSize: 28, bold: true, color: 'FFFFFF', fontFace: 'Arial' });
+let slide7 = pptx.addSlide();
+slide7.addShape(pptx.shapes.RECTANGLE, { x: 0, y: 0, w: '100%', h: 1.2, fill: { color: colors.danger } });
+slide7.addText('Why Router Pattern? vs Alternatives', { x: 0.5, y: 0.4, w: 9, h: 0.5, fontSize: 28, bold: true, color: 'FFFFFF', fontFace: 'Arial' });
 
 // Comparison table
-slide6.addTable([
+slide7.addTable([
     [
         { text: 'Approach', options: { fill: { color: colors.secondary }, color: 'FFFFFF', bold: true, fontSize: 11 } },
         { text: 'Cost/Doc', options: { fill: { color: colors.secondary }, color: 'FFFFFF', bold: true, fontSize: 11 } },
@@ -256,8 +286,8 @@ slide6.addTable([
 });
 
 // Core insight
-slide6.addShape(pptx.shapes.ROUNDED_RECTANGLE, { x: 0.3, y: 3.6, w: 9.4, h: 0.7, fill: { color: colors.accent }, rectRadius: 0.1 });
-slide6.addText('"Use a cheap model to figure out WHERE to look, then use specialized tools to extract WHAT you need."',
+slide7.addShape(pptx.shapes.ROUNDED_RECTANGLE, { x: 0.3, y: 3.6, w: 9.4, h: 0.7, fill: { color: colors.accent }, rectRadius: 0.1 });
+slide7.addText('"Use a cheap model to figure out WHERE to look, then use specialized tools to extract WHAT you need."',
     { x: 0.4, y: 3.7, w: 9.2, h: 0.5, fontSize: 13, italic: true, color: 'FFFFFF', align: 'center', fontFace: 'Arial' });
 
 // Why boxes
@@ -269,18 +299,18 @@ const whyBoxes = [
 
 whyBoxes.forEach((b, i) => {
     const x = 0.4 + (i * 3.2);
-    slide6.addShape(pptx.shapes.ROUNDED_RECTANGLE, { x, y: 4.5, w: 3, h: 1.0, fill: { color: 'FFFFFF' }, line: { color: b.color, pt: 2 }, rectRadius: 0.08 });
-    slide6.addText(b.title, { x, y: 4.55, w: 3, h: 0.3, fontSize: 11, bold: true, color: b.color, align: 'center', fontFace: 'Arial' });
-    slide6.addText(b.desc, { x, y: 4.85, w: 3, h: 0.4, fontSize: 9, color: colors.dark, align: 'center', fontFace: 'Arial' });
-    slide6.addText(b.cost, { x, y: 5.25, w: 3, h: 0.2, fontSize: 10, bold: true, color: colors.success, align: 'center', fontFace: 'Arial' });
+    slide7.addShape(pptx.shapes.ROUNDED_RECTANGLE, { x, y: 4.5, w: 3, h: 1.0, fill: { color: 'FFFFFF' }, line: { color: b.color, pt: 2 }, rectRadius: 0.08 });
+    slide7.addText(b.title, { x, y: 4.55, w: 3, h: 0.3, fontSize: 11, bold: true, color: b.color, align: 'center', fontFace: 'Arial' });
+    slide7.addText(b.desc, { x, y: 4.85, w: 3, h: 0.4, fontSize: 9, color: colors.dark, align: 'center', fontFace: 'Arial' });
+    slide7.addText(b.cost, { x, y: 5.25, w: 3, h: 0.2, fontSize: 10, bold: true, color: colors.success, align: 'center', fontFace: 'Arial' });
 });
 
 // ============================================================================
-// SLIDE 7: Key Differentiators
+// SLIDE 8: Key Differentiators
 // ============================================================================
-let slide7 = pptx.addSlide();
-slide7.addShape(pptx.shapes.RECTANGLE, { x: 0, y: 0, w: '100%', h: 1.2, fill: { color: colors.purple } });
-slide7.addText('Key Differentiators', { x: 0.5, y: 0.4, w: 9, h: 0.5, fontSize: 32, bold: true, color: 'FFFFFF', fontFace: 'Arial' });
+let slide8 = pptx.addSlide();
+slide8.addShape(pptx.shapes.RECTANGLE, { x: 0, y: 0, w: '100%', h: 1.2, fill: { color: colors.purple } });
+slide8.addText('Key Differentiators', { x: 0.5, y: 0.4, w: 9, h: 0.5, fontSize: 32, bold: true, color: 'FFFFFF', fontFace: 'Arial' });
 
 const differentiators = [
     { title: 'Intelligent Classification', desc: 'AI identifies document types & relevant pages before expensive OCR', icon: '🧠' },
@@ -297,34 +327,34 @@ differentiators.forEach((d, i) => {
     const x = 0.4 + (col * 4.8);
     const y = 1.4 + (row * 1.3);
 
-    slide7.addShape(pptx.shapes.ROUNDED_RECTANGLE, { x, y, w: 4.6, h: 1.15, fill: { color: 'FFFFFF' }, line: { color: colors.purple, pt: 1 }, rectRadius: 0.08 });
-    slide7.addText(d.icon, { x: x + 0.1, y: y + 0.25, w: 0.6, h: 0.6, fontSize: 24 });
-    slide7.addText(d.title, { x: x + 0.8, y: y + 0.15, w: 3.6, h: 0.35, fontSize: 14, bold: true, color: colors.dark, fontFace: 'Arial' });
-    slide7.addText(d.desc, { x: x + 0.8, y: y + 0.55, w: 3.6, h: 0.5, fontSize: 11, color: colors.secondary, fontFace: 'Arial' });
+    slide8.addShape(pptx.shapes.ROUNDED_RECTANGLE, { x, y, w: 4.6, h: 1.15, fill: { color: 'FFFFFF' }, line: { color: colors.purple, pt: 1 }, rectRadius: 0.08 });
+    slide8.addText(d.icon, { x: x + 0.1, y: y + 0.25, w: 0.6, h: 0.6, fontSize: 24 });
+    slide8.addText(d.title, { x: x + 0.8, y: y + 0.15, w: 3.6, h: 0.35, fontSize: 14, bold: true, color: colors.dark, fontFace: 'Arial' });
+    slide8.addText(d.desc, { x: x + 0.8, y: y + 0.55, w: 3.6, h: 0.5, fontSize: 11, color: colors.secondary, fontFace: 'Arial' });
 });
 
 // ============================================================================
-// SLIDE 8: Supported Document Types
+// SLIDE 9: Supported Document Types
 // ============================================================================
-let slide8 = pptx.addSlide();
-slide8.addShape(pptx.shapes.RECTANGLE, { x: 0, y: 0, w: '100%', h: 1.2, fill: { color: colors.teal } });
-slide8.addText('Supported Document Types', { x: 0.5, y: 0.4, w: 9, h: 0.5, fontSize: 32, bold: true, color: 'FFFFFF', fontFace: 'Arial' });
+let slide9 = pptx.addSlide();
+slide9.addShape(pptx.shapes.RECTANGLE, { x: 0, y: 0, w: '100%', h: 1.2, fill: { color: colors.teal } });
+slide9.addText('Supported Document Types', { x: 0.5, y: 0.4, w: 9, h: 0.5, fontSize: 32, bold: true, color: 'FFFFFF', fontFace: 'Arial' });
 
 // Loan Packages
-slide8.addShape(pptx.shapes.ROUNDED_RECTANGLE, { x: 0.4, y: 1.4, w: 4.6, h: 3.8, fill: { color: 'F0FDFA' }, line: { color: colors.teal, pt: 2 }, rectRadius: 0.1 });
-slide8.addText('📄 Loan Packages', { x: 0.5, y: 1.55, w: 4.4, h: 0.4, fontSize: 18, bold: true, color: colors.teal, fontFace: 'Arial' });
+slide9.addShape(pptx.shapes.ROUNDED_RECTANGLE, { x: 0.4, y: 1.4, w: 4.6, h: 3.8, fill: { color: 'F0FDFA' }, line: { color: colors.teal, pt: 2 }, rectRadius: 0.1 });
+slide9.addText('📄 Loan Packages', { x: 0.5, y: 1.55, w: 4.4, h: 0.4, fontSize: 18, bold: true, color: colors.teal, fontFace: 'Arial' });
 
 const loanDocs = [
     'Promissory Note - Interest rate, principal, borrower names, maturity date',
     'Closing Disclosure - Loan amount, fees, cash to close',
     'Form 1003 - Borrower info, property address, employment',
 ];
-slide8.addText(loanDocs.map(d => ({ text: d, options: { bullet: { type: 'bullet' }, paraSpaceBefore: 8 } })),
+slide9.addText(loanDocs.map(d => ({ text: d, options: { bullet: { type: 'bullet' }, paraSpaceBefore: 8 } })),
     { x: 0.6, y: 2.1, w: 4.2, h: 2.8, fontSize: 12, color: colors.dark, fontFace: 'Arial' });
 
 // Credit Agreements
-slide8.addShape(pptx.shapes.ROUNDED_RECTANGLE, { x: 5, y: 1.4, w: 4.6, h: 3.8, fill: { color: 'FAF5FF' }, line: { color: colors.purple, pt: 2 }, rectRadius: 0.1 });
-slide8.addText('📋 Credit Agreements', { x: 5.1, y: 1.55, w: 4.4, h: 0.4, fontSize: 18, bold: true, color: colors.purple, fontFace: 'Arial' });
+slide9.addShape(pptx.shapes.ROUNDED_RECTANGLE, { x: 5, y: 1.4, w: 4.6, h: 3.8, fill: { color: 'FAF5FF' }, line: { color: colors.purple, pt: 2 }, rectRadius: 0.1 });
+slide9.addText('📋 Credit Agreements', { x: 5.1, y: 1.55, w: 4.4, h: 0.4, fontSize: 18, bold: true, color: colors.purple, fontFace: 'Arial' });
 
 const creditDocs = [
     'Agreement Info - Type, dates, amendment number',
@@ -334,16 +364,16 @@ const creditDocs = [
     'Lender Commitments - Per-lender allocations',
     'Covenants - Financial ratios, requirements',
 ];
-slide8.addText(creditDocs.map(d => ({ text: d, options: { bullet: { type: 'bullet' }, paraSpaceBefore: 6 } })),
+slide9.addText(creditDocs.map(d => ({ text: d, options: { bullet: { type: 'bullet' }, paraSpaceBefore: 6 } })),
     { x: 5.2, y: 2.1, w: 4.2, h: 2.8, fontSize: 11, color: colors.dark, fontFace: 'Arial' });
 
 // ============================================================================
-// SLIDE 9: Technology Stack & Call to Action
+// SLIDE 10: Technology Stack & Call to Action
 // ============================================================================
-let slide9 = pptx.addSlide();
-slide9.addShape(pptx.shapes.RECTANGLE, { x: 0, y: 0, w: '100%', h: '100%', fill: { color: colors.secondary } });
+let slide10 = pptx.addSlide();
+slide10.addShape(pptx.shapes.RECTANGLE, { x: 0, y: 0, w: '100%', h: '100%', fill: { color: colors.secondary } });
 
-slide9.addText('Built on AWS', { x: 0.5, y: 0.4, w: 9, h: 0.5, fontSize: 32, bold: true, color: 'FFFFFF', fontFace: 'Arial' });
+slide10.addText('Built on AWS', { x: 0.5, y: 0.4, w: 9, h: 0.5, fontSize: 32, bold: true, color: 'FFFFFF', fontFace: 'Arial' });
 
 // Tech stack grid
 const techStack = [
@@ -361,23 +391,23 @@ techStack.forEach((t, i) => {
     const x = 0.5 + (col * 3.15);
     const y = 1.2 + (row * 1.1);
 
-    slide9.addShape(pptx.shapes.ROUNDED_RECTANGLE, { x, y, w: 3, h: 0.95, fill: { color: colors.primary }, rectRadius: 0.08 });
-    slide9.addText(t.service, { x, y: y + 0.15, w: 3, h: 0.35, fontSize: 13, bold: true, color: 'FFFFFF', align: 'center', fontFace: 'Arial' });
-    slide9.addText(t.purpose, { x, y: y + 0.5, w: 3, h: 0.3, fontSize: 11, color: 'FFFFFF', align: 'center', fontFace: 'Arial' });
+    slide10.addShape(pptx.shapes.ROUNDED_RECTANGLE, { x, y, w: 3, h: 0.95, fill: { color: colors.primary }, rectRadius: 0.08 });
+    slide10.addText(t.service, { x, y: y + 0.15, w: 3, h: 0.35, fontSize: 13, bold: true, color: 'FFFFFF', align: 'center', fontFace: 'Arial' });
+    slide10.addText(t.purpose, { x, y: y + 0.5, w: 3, h: 0.3, fontSize: 11, color: 'FFFFFF', align: 'center', fontFace: 'Arial' });
 });
 
 // Call to action
-slide9.addShape(pptx.shapes.ROUNDED_RECTANGLE, { x: 1.5, y: 3.6, w: 7, h: 1.8, fill: { color: 'FFFFFF' }, rectRadius: 0.15 });
-slide9.addText('Get Started', { x: 1.5, y: 3.75, w: 7, h: 0.4, fontSize: 22, bold: true, color: colors.primary, align: 'center', fontFace: 'Arial' });
-slide9.addText([
+slide10.addShape(pptx.shapes.ROUNDED_RECTANGLE, { x: 1.5, y: 3.6, w: 7, h: 1.8, fill: { color: 'FFFFFF' }, rectRadius: 0.15 });
+slide10.addText('Get Started', { x: 1.5, y: 3.75, w: 7, h: 0.4, fontSize: 22, bold: true, color: colors.primary, align: 'center', fontFace: 'Arial' });
+slide10.addText([
     { text: 'GitHub: ', options: { bold: true } },
     { text: 'github.com/vibhupb/financial-documents-processing' },
 ], { x: 1.5, y: 4.2, w: 7, h: 0.35, fontSize: 14, color: colors.dark, align: 'center', fontFace: 'Arial' });
-slide9.addText([
+slide10.addText([
     { text: 'Deploy: ', options: { bold: true } },
     { text: 'npm install && cdk deploy --all' },
 ], { x: 1.5, y: 4.6, w: 7, h: 0.35, fontSize: 14, color: colors.dark, align: 'center', fontFace: 'Arial' });
-slide9.addText('~$0.34/doc  |  92.5% savings  |  Production ready',
+slide10.addText('~$0.34/doc  |  92.5% savings  |  Production ready',
     { x: 1.5, y: 5.1, w: 7, h: 0.3, fontSize: 12, color: colors.success, align: 'center', fontFace: 'Arial', bold: true });
 
 // Save presentation
