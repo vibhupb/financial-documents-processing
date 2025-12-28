@@ -164,6 +164,9 @@ export class DocumentProcessingStack extends cdk.Stack {
         // AWS recommends 90%+ for financial applications; using 85% as default
         // to balance accuracy with data completeness
         CONFIDENCE_THRESHOLD: '85.0',
+        // Parallel processing: number of concurrent Textract API calls per section
+        // 5 workers provides ~5x speedup while staying within Textract rate limits
+        MAX_PARALLEL_WORKERS: '5',
       },
       tracing: lambda.Tracing.ACTIVE,
     });

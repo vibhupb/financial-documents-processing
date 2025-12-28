@@ -19,8 +19,9 @@ import io
 import boto3
 from botocore.exceptions import ClientError
 from pypdf import PdfReader, PdfWriter
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Tuple
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # PyMuPDF for rendering PDF pages to images (Textract works better with images)
 try:
@@ -40,6 +41,11 @@ BUCKET_NAME = os.environ.get('BUCKET_NAME')
 # Confidence threshold for financial documents (AWS recommends 90%+ for financial applications)
 # Results below this threshold will be flagged as low confidence
 CONFIDENCE_THRESHOLD = float(os.environ.get('CONFIDENCE_THRESHOLD', '85.0'))
+
+# Parallel processing configuration
+# Max workers for concurrent Textract API calls (balances speed vs API throttling)
+# 5 workers provides ~5x speedup while staying within typical Textract rate limits
+MAX_PARALLEL_WORKERS = int(os.environ.get('MAX_PARALLEL_WORKERS', '5'))
 
 # Credit Agreement section-specific queries with synonyms for better extraction
 # Based on loan_prompts_map.py terminology and legal document variations
@@ -520,6 +526,259 @@ def upload_temp_section(bucket: str, document_id: str, section_name: str, page_b
     return key
 
 
+# =============================================================================
+# Parallel Processing Helper Functions
+# =============================================================================
+
+def _process_single_page_queries(
+    args: Tuple[int, bytes, str, List[str]]
+) -> Tuple[int, Dict[str, Any]]:
+    """Process queries for a single page (used by parallel executor).
+
+    Args:
+        args: Tuple of (page_index, image_bytes, bucket, queries)
+
+    Returns:
+        Tuple of (page_index, query_results)
+    """
+    page_idx, image_bytes, bucket, queries = args
+    try:
+        results = extract_with_queries(bucket, "", queries, image_bytes=image_bytes)
+        return (page_idx, results)
+    except Exception as e:
+        print(f"Error processing page {page_idx + 1} queries: {str(e)}")
+        return (page_idx, {"error": str(e)})
+
+
+def _process_single_page_tables(
+    args: Tuple[int, bytes, str]
+) -> Tuple[int, Dict[str, Any]]:
+    """Process table extraction for a single page (used by parallel executor).
+
+    Args:
+        args: Tuple of (page_index, image_bytes, bucket)
+
+    Returns:
+        Tuple of (page_index, table_results)
+    """
+    page_idx, image_bytes, bucket = args
+    try:
+        results = extract_tables(bucket, "", image_bytes=image_bytes)
+        return (page_idx, results)
+    except Exception as e:
+        print(f"Error processing page {page_idx + 1} tables: {str(e)}")
+        return (page_idx, {"error": str(e), "tables": [], "tableCount": 0})
+
+
+def _process_single_page_signatures(
+    args: Tuple[int, bytes, str]
+) -> Tuple[int, Dict[str, Any]]:
+    """Process signature detection for a single page (used by parallel executor).
+
+    Args:
+        args: Tuple of (page_index, image_bytes, bucket)
+
+    Returns:
+        Tuple of (page_index, signature_results)
+    """
+    page_idx, image_bytes, bucket = args
+    try:
+        results = extract_signatures(bucket, "", image_bytes=image_bytes)
+        return (page_idx, results)
+    except Exception as e:
+        print(f"Error processing page {page_idx + 1} signatures: {str(e)}")
+        return (page_idx, {"error": str(e), "signatures": [], "signatureCount": 0})
+
+
+def process_pages_queries_parallel(
+    page_images: List[bytes],
+    queries: List[str],
+    bucket: str,
+) -> Dict[str, Any]:
+    """Process query extraction for multiple pages in parallel.
+
+    Uses ThreadPoolExecutor to run Textract query API calls concurrently.
+    Merges results, keeping highest confidence answer for each query.
+
+    Args:
+        page_images: List of PNG image bytes, one per page
+        queries: List of natural language queries to run
+        bucket: S3 bucket name (for API signature, not used with image bytes)
+
+    Returns:
+        Merged query results with source page tracking
+    """
+    all_query_results = {}
+    pages_processed = 0
+    pages_failed = 0
+
+    # Prepare arguments for parallel processing
+    task_args = [(idx, img, bucket, queries) for idx, img in enumerate(page_images)]
+
+    print(f"  Starting parallel query processing for {len(page_images)} pages with {MAX_PARALLEL_WORKERS} workers...")
+    start_time = time.time()
+
+    with ThreadPoolExecutor(max_workers=MAX_PARALLEL_WORKERS) as executor:
+        futures = {executor.submit(_process_single_page_queries, args): args[0] for args in task_args}
+
+        for future in as_completed(futures):
+            page_idx = futures[future]
+            try:
+                result_page_idx, page_results = future.result()
+
+                if page_results.get("error"):
+                    print(f"  Page {result_page_idx + 1}: queries failed - {page_results.get('error')}")
+                    pages_failed += 1
+                    continue
+
+                pages_processed += 1
+
+                # Merge results - keep highest confidence answer for each query
+                for query_text, answer_data in page_results.items():
+                    if query_text in ["error", "errorMessage", "queries", "fallbackUsed", "_extractionMetadata"]:
+                        continue
+                    if isinstance(answer_data, dict) and answer_data.get("answer"):
+                        existing = all_query_results.get(query_text)
+                        if not existing or answer_data.get("confidence", 0) > existing.get("confidence", 0):
+                            all_query_results[query_text] = answer_data.copy()
+                            all_query_results[query_text]["sourcePage"] = result_page_idx + 1
+
+            except Exception as e:
+                print(f"  Page {page_idx + 1}: future error - {str(e)}")
+                pages_failed += 1
+
+    elapsed = time.time() - start_time
+    print(f"  Parallel query processing completed in {elapsed:.2f}s ({pages_processed} succeeded, {pages_failed} failed)")
+
+    return all_query_results
+
+
+def process_pages_tables_parallel(
+    page_images: List[bytes],
+    bucket: str,
+) -> Tuple[List[Dict[str, Any]], bool]:
+    """Process table extraction for multiple pages in parallel.
+
+    Uses ThreadPoolExecutor to run Textract table API calls concurrently.
+
+    Args:
+        page_images: List of PNG image bytes, one per page
+        bucket: S3 bucket name (for API signature, not used with image bytes)
+
+    Returns:
+        Tuple of (all_tables list, any_failed boolean)
+    """
+    all_tables = []
+    pages_processed = 0
+    pages_failed = 0
+
+    # Prepare arguments for parallel processing
+    task_args = [(idx, img, bucket) for idx, img in enumerate(page_images)]
+
+    print(f"  Starting parallel table processing for {len(page_images)} pages with {MAX_PARALLEL_WORKERS} workers...")
+    start_time = time.time()
+
+    # Collect results with page indices for proper ordering
+    results_by_page = {}
+
+    with ThreadPoolExecutor(max_workers=MAX_PARALLEL_WORKERS) as executor:
+        futures = {executor.submit(_process_single_page_tables, args): args[0] for args in task_args}
+
+        for future in as_completed(futures):
+            page_idx = futures[future]
+            try:
+                result_page_idx, page_results = future.result()
+
+                if page_results.get("error"):
+                    print(f"  Page {result_page_idx + 1}: tables failed - {page_results.get('error')}")
+                    pages_failed += 1
+                    continue
+
+                pages_processed += 1
+
+                # Store tables with page index for later ordering
+                page_tables = page_results.get("tables", [])
+                for table in page_tables:
+                    table["sourcePage"] = result_page_idx + 1
+                results_by_page[result_page_idx] = page_tables
+
+            except Exception as e:
+                print(f"  Page {page_idx + 1}: future error - {str(e)}")
+                pages_failed += 1
+
+    # Combine tables in page order
+    for page_idx in sorted(results_by_page.keys()):
+        all_tables.extend(results_by_page[page_idx])
+
+    elapsed = time.time() - start_time
+    print(f"  Parallel table processing completed in {elapsed:.2f}s ({pages_processed} succeeded, {pages_failed} failed)")
+
+    return all_tables, (pages_failed > 0 and pages_processed == 0)
+
+
+def process_pages_signatures_parallel(
+    page_images: List[bytes],
+    bucket: str,
+) -> List[Dict[str, Any]]:
+    """Process signature detection for multiple pages in parallel.
+
+    Uses ThreadPoolExecutor to run Textract signature API calls concurrently.
+
+    Args:
+        page_images: List of PNG image bytes, one per page
+        bucket: S3 bucket name (for API signature, not used with image bytes)
+
+    Returns:
+        List of all detected signatures with source page tracking
+    """
+    all_signatures = []
+    pages_processed = 0
+    pages_failed = 0
+
+    # Prepare arguments for parallel processing
+    task_args = [(idx, img, bucket) for idx, img in enumerate(page_images)]
+
+    print(f"  Starting parallel signature processing for {len(page_images)} pages with {MAX_PARALLEL_WORKERS} workers...")
+    start_time = time.time()
+
+    # Collect results with page indices for proper ordering
+    results_by_page = {}
+
+    with ThreadPoolExecutor(max_workers=MAX_PARALLEL_WORKERS) as executor:
+        futures = {executor.submit(_process_single_page_signatures, args): args[0] for args in task_args}
+
+        for future in as_completed(futures):
+            page_idx = futures[future]
+            try:
+                result_page_idx, page_results = future.result()
+
+                if page_results.get("error"):
+                    print(f"  Page {result_page_idx + 1}: signatures failed - {page_results.get('error')}")
+                    pages_failed += 1
+                    continue
+
+                pages_processed += 1
+
+                # Store signatures with page index for later ordering
+                page_sigs = page_results.get("signatures", [])
+                for sig in page_sigs:
+                    sig["sourcePage"] = result_page_idx + 1
+                results_by_page[result_page_idx] = page_sigs
+
+            except Exception as e:
+                print(f"  Page {page_idx + 1}: future error - {str(e)}")
+                pages_failed += 1
+
+    # Combine signatures in page order
+    for page_idx in sorted(results_by_page.keys()):
+        all_signatures.extend(results_by_page[page_idx])
+
+    elapsed = time.time() - start_time
+    print(f"  Parallel signature processing completed in {elapsed:.2f}s ({pages_processed} succeeded, {pages_failed} failed)")
+
+    return all_signatures
+
+
 def extract_credit_agreement_section(
     bucket: str,
     key: str,
@@ -555,6 +814,9 @@ def extract_credit_agreement_section(
 
     print(f"Extracting Credit Agreement section '{section_name}' from pages {page_numbers}")
 
+    # Start timing for performance measurement
+    section_start_time = time.time()
+
     # Get queries for this section
     queries = CREDIT_AGREEMENT_QUERIES.get(section_name, [])
 
@@ -588,35 +850,24 @@ def extract_credit_agreement_section(
             temp_key = upload_temp_section(bucket, document_id, section_name, section_bytes)
             print(f"Uploaded section '{section_name}' ({len(page_numbers)} pages) to s3://{bucket}/{temp_key}")
 
-        # Run queries extraction on ALL pages if we have queries
+        # Run queries extraction on ALL pages if we have queries (PARALLEL PROCESSING)
         if queries:
             print(f"Running {len(queries)} queries for section '{section_name}' across {len(page_images) if page_images else 1} page(s)")
-            all_query_results = {}
 
-            if page_images:
-                # Process each page and merge query results
-                for page_idx, image_bytes in enumerate(page_images):
-                    print(f"  Processing page {page_idx + 1}/{len(page_images)} for queries...")
-                    page_query_results = extract_with_queries(bucket, "", queries, image_bytes=image_bytes)
-
-                    if page_query_results.get("error"):
-                        print(f"  Textract queries failed for page {page_idx + 1}: {page_query_results.get('error')}")
-                        continue
-
-                    # Merge results - keep highest confidence answer for each query
-                    for query_text, answer_data in page_query_results.items():
-                        if query_text in ["error", "errorMessage", "queries", "fallbackUsed"]:
-                            continue
-                        if isinstance(answer_data, dict) and answer_data.get("answer"):
-                            existing = all_query_results.get(query_text)
-                            if not existing or answer_data.get("confidence", 0) > existing.get("confidence", 0):
-                                all_query_results[query_text] = answer_data
-                                all_query_results[query_text]["sourcePage"] = page_idx + 1
-
+            if page_images and len(page_images) > 1:
+                # PARALLEL: Process all pages concurrently using ThreadPoolExecutor
+                all_query_results = process_pages_queries_parallel(page_images, queries, bucket)
                 results["queries"] = all_query_results
                 if not all_query_results:
                     textract_failed = True
                     print(f"Textract queries failed for all pages in '{section_name}'")
+            elif page_images:
+                # Single page - no need for parallelism overhead
+                page_query_results = extract_with_queries(bucket, "", queries, image_bytes=page_images[0])
+                if page_query_results.get("error"):
+                    textract_failed = True
+                    print(f"Textract queries failed for '{section_name}': {page_query_results.get('error')}")
+                results["queries"] = page_query_results
             else:
                 # Fall back to S3 path (single document)
                 query_results = extract_with_queries(bucket, temp_key, queries)
@@ -625,30 +876,24 @@ def extract_credit_agreement_section(
                     textract_failed = True
                     print(f"Textract queries failed for '{section_name}': {query_results.get('error')}")
 
-        # For lender commitments, extract tables from ALL pages
+        # For lender commitments, extract tables from ALL pages (PARALLEL PROCESSING)
         if section_name == "lenderCommitments":
             print(f"Running table extraction for '{section_name}' across {len(page_images) if page_images else 1} page(s)")
-            all_tables = []
 
-            if page_images:
-                for page_idx, image_bytes in enumerate(page_images):
-                    print(f"  Processing page {page_idx + 1}/{len(page_images)} for tables...")
-                    page_table_results = extract_tables(bucket, "", image_bytes=image_bytes)
-
-                    if page_table_results.get("error"):
-                        print(f"  Textract tables failed for page {page_idx + 1}: {page_table_results.get('error')}")
-                        continue
-
-                    # Append tables from this page
-                    page_tables = page_table_results.get("tables", [])
-                    for table in page_tables:
-                        table["sourcePage"] = page_idx + 1
-                        all_tables.append(table)
-
+            if page_images and len(page_images) > 1:
+                # PARALLEL: Process all pages concurrently
+                all_tables, all_failed = process_pages_tables_parallel(page_images, bucket)
                 results["tables"] = {"tables": all_tables, "tableCount": len(all_tables)}
-                if not all_tables:
+                if all_failed:
                     textract_failed = True
                     print(f"Textract tables failed for all pages in '{section_name}'")
+            elif page_images:
+                # Single page - no parallelism overhead
+                page_table_results = extract_tables(bucket, "", image_bytes=page_images[0])
+                if page_table_results.get("error"):
+                    textract_failed = True
+                    print(f"Textract tables failed for '{section_name}': {page_table_results.get('error')}")
+                results["tables"] = page_table_results
             else:
                 table_results = extract_tables(bucket, temp_key)
                 results["tables"] = table_results
@@ -656,29 +901,24 @@ def extract_credit_agreement_section(
                     textract_failed = True
                     print(f"Textract tables failed for '{section_name}': {table_results.get('error')}")
 
-        # For applicable rates, extract tables (pricing grids) from ALL pages
+        # For applicable rates, extract tables (pricing grids) from ALL pages (PARALLEL PROCESSING)
         if section_name == "applicableRates":
             print(f"Running table extraction for '{section_name}' (pricing grid) across {len(page_images) if page_images else 1} page(s)")
-            all_tables = []
 
-            if page_images:
-                for page_idx, image_bytes in enumerate(page_images):
-                    print(f"  Processing page {page_idx + 1}/{len(page_images)} for pricing tables...")
-                    page_table_results = extract_tables(bucket, "", image_bytes=image_bytes)
-
-                    if page_table_results.get("error"):
-                        print(f"  Textract tables failed for page {page_idx + 1}: {page_table_results.get('error')}")
-                        continue
-
-                    page_tables = page_table_results.get("tables", [])
-                    for table in page_tables:
-                        table["sourcePage"] = page_idx + 1
-                        all_tables.append(table)
-
+            if page_images and len(page_images) > 1:
+                # PARALLEL: Process all pages concurrently
+                all_tables, all_failed = process_pages_tables_parallel(page_images, bucket)
                 results["tables"] = {"tables": all_tables, "tableCount": len(all_tables)}
-                if not all_tables:
+                if all_failed:
                     textract_failed = True
                     print(f"Textract tables failed for all pages in '{section_name}'")
+            elif page_images:
+                # Single page - no parallelism overhead
+                page_table_results = extract_tables(bucket, "", image_bytes=page_images[0])
+                if page_table_results.get("error"):
+                    textract_failed = True
+                    print(f"Textract tables failed for '{section_name}': {page_table_results.get('error')}")
+                results["tables"] = page_table_results
             else:
                 table_results = extract_tables(bucket, temp_key)
                 results["tables"] = table_results
@@ -686,83 +926,66 @@ def extract_credit_agreement_section(
                     textract_failed = True
                     print(f"Textract tables failed for '{section_name}': {table_results.get('error')}")
 
-        # For facility terms, extract tables (commitment amounts, sublimits) from ALL pages
+        # For facility terms, extract tables (commitment amounts, sublimits) from ALL pages (PARALLEL PROCESSING)
         if section_name == "facilityTerms":
             print(f"Running table extraction for '{section_name}' (facility commitments) across {len(page_images) if page_images else 1} page(s)")
-            all_tables = []
 
-            if page_images:
-                for page_idx, image_bytes in enumerate(page_images):
-                    print(f"  Processing page {page_idx + 1}/{len(page_images)} for facility tables...")
-                    page_table_results = extract_tables(bucket, "", image_bytes=image_bytes)
-
-                    if page_table_results.get("error"):
-                        print(f"  Textract tables failed for page {page_idx + 1}: {page_table_results.get('error')}")
-                        continue
-
-                    page_tables = page_table_results.get("tables", [])
-                    for table in page_tables:
-                        table["sourcePage"] = page_idx + 1
-                        all_tables.append(table)
-
+            if page_images and len(page_images) > 1:
+                # PARALLEL: Process all pages concurrently
+                all_tables, _ = process_pages_tables_parallel(page_images, bucket)
                 results["tables"] = {"tables": all_tables, "tableCount": len(all_tables)}
+            elif page_images:
+                # Single page - no parallelism overhead
+                page_table_results = extract_tables(bucket, "", image_bytes=page_images[0])
+                if page_table_results.get("error"):
+                    print(f"Textract tables failed for '{section_name}': {page_table_results.get('error')}")
+                results["tables"] = page_table_results
             else:
                 table_results = extract_tables(bucket, temp_key)
                 results["tables"] = table_results
                 if table_results.get("error"):
                     print(f"Textract tables failed for '{section_name}': {table_results.get('error')}")
 
-        # For fees section, extract tables from ALL pages
+        # For fees section, extract tables from ALL pages (PARALLEL PROCESSING)
         if section_name == "fees":
             print(f"Running table extraction for '{section_name}' across {len(page_images) if page_images else 1} page(s)")
-            all_tables = []
 
-            if page_images:
-                for page_idx, image_bytes in enumerate(page_images):
-                    print(f"  Processing page {page_idx + 1}/{len(page_images)} for fee tables...")
-                    page_table_results = extract_tables(bucket, "", image_bytes=image_bytes)
-
-                    if page_table_results.get("error"):
-                        print(f"  Textract tables failed for page {page_idx + 1}: {page_table_results.get('error')}")
-                        continue
-
-                    page_tables = page_table_results.get("tables", [])
-                    for table in page_tables:
-                        table["sourcePage"] = page_idx + 1
-                        all_tables.append(table)
-
+            if page_images and len(page_images) > 1:
+                # PARALLEL: Process all pages concurrently
+                all_tables, _ = process_pages_tables_parallel(page_images, bucket)
                 results["tables"] = {"tables": all_tables, "tableCount": len(all_tables)}
+            elif page_images:
+                # Single page - no parallelism overhead
+                page_table_results = extract_tables(bucket, "", image_bytes=page_images[0])
+                if page_table_results.get("error"):
+                    print(f"Textract tables failed for '{section_name}': {page_table_results.get('error')}")
+                results["tables"] = page_table_results
             else:
                 table_results = extract_tables(bucket, temp_key)
                 results["tables"] = table_results
                 if table_results.get("error"):
                     print(f"Textract tables failed for '{section_name}': {table_results.get('error')}")
 
-        # For agreementInfo section, also detect signatures (critical for legal docs)
+        # For agreementInfo section, also detect signatures (critical for legal docs) (PARALLEL PROCESSING)
         if section_name == "agreementInfo":
             print(f"Running signature detection for '{section_name}' across {len(page_images) if page_images else 1} page(s)")
-            all_signatures = []
 
-            if page_images:
-                for page_idx, image_bytes in enumerate(page_images):
-                    print(f"  Detecting signatures on page {page_idx + 1}/{len(page_images)}...")
-                    page_sig_results = extract_signatures(bucket, "", image_bytes=image_bytes)
-
-                    if page_sig_results.get("error"):
-                        print(f"  Signature detection failed for page {page_idx + 1}: {page_sig_results.get('error')}")
-                        continue
-
-                    page_sigs = page_sig_results.get("signatures", [])
-                    for sig in page_sigs:
-                        sig["sourcePage"] = page_idx + 1
-                        all_signatures.append(sig)
-
+            if page_images and len(page_images) > 1:
+                # PARALLEL: Process all pages concurrently
+                all_signatures = process_pages_signatures_parallel(page_images, bucket)
                 results["signatures"] = {
                     "signatures": all_signatures,
                     "signatureCount": len(all_signatures),
                     "hasSignatures": len(all_signatures) > 0,
                 }
                 print(f"Found {len(all_signatures)} signature(s) in agreementInfo section")
+            elif page_images:
+                # Single page - no parallelism overhead
+                page_sig_results = extract_signatures(bucket, "", image_bytes=page_images[0])
+                if page_sig_results.get("error"):
+                    print(f"Signature detection failed for '{section_name}': {page_sig_results.get('error')}")
+                results["signatures"] = page_sig_results
+                print(f"Found {page_sig_results.get('signatureCount', 0)} signature(s) in agreementInfo section")
             else:
                 sig_results = extract_signatures(bucket, temp_key)
                 results["signatures"] = sig_results
@@ -791,6 +1014,10 @@ def extract_credit_agreement_section(
             except Exception as cleanup_error:
                 print(f"Warning: Failed to clean up temp file: {cleanup_error}")
 
+        # Calculate processing time
+        processing_time = time.time() - section_start_time
+        print(f"Section '{section_name}' completed in {processing_time:.2f}s (parallel processing with {MAX_PARALLEL_WORKERS} workers)")
+
         return {
             "creditAgreementSection": section_name,
             "status": "EXTRACTED" if not textract_failed else "PARTIAL_EXTRACTION",
@@ -801,6 +1028,8 @@ def extract_credit_agreement_section(
             "textractFailed": textract_failed,
             "fallbackUsed": textract_failed and bool(fallback_text),
             "usedImageRendering": len(page_images) > 0,
+            "processingTimeSeconds": round(processing_time, 2),
+            "parallelWorkersUsed": MAX_PARALLEL_WORKERS,
         }
 
     except Exception as e:
@@ -823,6 +1052,10 @@ def extract_credit_agreement_section(
             except Exception:
                 pass
 
+        # Calculate processing time even for exceptions
+        processing_time = time.time() - section_start_time
+        print(f"Section '{section_name}' failed after {processing_time:.2f}s")
+
         # Return partial results instead of raising
         return {
             "creditAgreementSection": section_name,
@@ -833,6 +1066,7 @@ def extract_credit_agreement_section(
             "error": str(e),
             "textractFailed": True,
             "fallbackUsed": bool(fallback_text),
+            "processingTimeSeconds": round(processing_time, 2),
         }
 
 
