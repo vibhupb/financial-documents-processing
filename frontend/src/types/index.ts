@@ -43,6 +43,21 @@ export interface ProcessingCost {
       outputTokens: number;
       cost: number;
     };
+    // Optional AWS infrastructure costs
+    stepFunctions?: {
+      stateTransitions: number;
+      costPerTransition: number;
+      cost: number;
+    };
+    lambda?: {
+      invocations: number;
+      gbSeconds: number;
+      memoryMb: number;
+      estimatedDurationMs: number;
+      invocationCost: number;
+      computeCost: number;
+      cost: number;
+    };
   };
 }
 
@@ -240,6 +255,8 @@ export interface CreditAgreement {
     lcSublimit?: number;
     swinglineSublimit?: string;
     termLoanACommitment?: number;
+    termLoanBCommitment?: number;
+    termLoanBondRedemption?: number;
     termCommitment?: number;
   };
   applicableRates?: {

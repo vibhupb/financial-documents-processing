@@ -128,7 +128,7 @@ export class DocumentProcessingStack extends cdk.Stack {
       handler: 'handler.lambda_handler',
       code: lambda.Code.fromAsset(path.join(__dirname, '../../lambda/router')),
       layers: [pypdfLayer],
-      memorySize: 1024,
+      memorySize: 2048,  // 2GB = 1 vCPU - faster PyPDF text extraction (CPU-bound)
       timeout: cdk.Duration.minutes(5),
       environment: {
         BUCKET_NAME: documentBucket.bucketName,
@@ -157,7 +157,7 @@ export class DocumentProcessingStack extends cdk.Stack {
       handler: 'handler.lambda_handler',
       code: lambda.Code.fromAsset(path.join(__dirname, '../../lambda/extractor')),
       layers: [pypdfLayer],
-      memorySize: 1024,  // Increased for multi-page PDF rendering
+      memorySize: 2048,  // 2GB provides 2x CPU for faster PDF rendering with 30 parallel workers
       timeout: cdk.Duration.minutes(10),  // Increased for large sections
       environment: {
         BUCKET_NAME: documentBucket.bucketName,
@@ -165,8 +165,10 @@ export class DocumentProcessingStack extends cdk.Stack {
         // to balance accuracy with data completeness
         CONFIDENCE_THRESHOLD: '85.0',
         // Parallel processing: number of concurrent Textract API calls per section
-        // 5 workers provides ~5x speedup while staying within Textract rate limits
-        MAX_PARALLEL_WORKERS: '5',
+        // 30 workers utilizes ~60% of 50 TPS quota (leaves headroom for burst/overhead)
+        MAX_PARALLEL_WORKERS: '30',
+        // Image rendering DPI - 150 provides good OCR quality with faster processing
+        IMAGE_DPI: '150',
       },
       tracing: lambda.Tracing.ACTIVE,
     });
@@ -191,8 +193,8 @@ export class DocumentProcessingStack extends cdk.Stack {
       runtime: lambda.Runtime.PYTHON_3_13,
       handler: 'handler.lambda_handler',
       code: lambda.Code.fromAsset(path.join(__dirname, '../../lambda/normalizer')),
-      memorySize: 512,  // Reduced - Claude 3.5 Haiku is efficient
-      timeout: cdk.Duration.minutes(5),  // Reduced - Haiku is faster
+      memorySize: 2048,  // 2GB = 1 vCPU - faster JSON parsing and processing
+      timeout: cdk.Duration.minutes(5),  // Haiku is fast
       environment: {
         BUCKET_NAME: documentBucket.bucketName,
         TABLE_NAME: documentTable.tableName,

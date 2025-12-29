@@ -90,15 +90,22 @@ format rules and validate against allowed values where specified.
    - Note: Usually defined in definitions section or facility terms
 
 4. **Amendment Number**
-   - Keywords: "Amendment No.", "First Amendment", "Second Amendment"
+   - Keywords: "Amendment No.", "First Amendment", "Second Amendment", "Third Amendment"
    - Format: String or null
+   - CRITICAL: If documentType is "Amended and Restated Credit Agreement", the amendmentNumber should be null
+     unless explicitly titled as "Amendment No. X to Amended and Restated Credit Agreement"
+   - Do NOT use random document reference numbers (like "112" from footer/header) as amendment numbers
+   - Only use amendment numbers if clearly stated in the document TITLE
 
 === PARTIES ===
 
-5. **Borrower**
-   - Keywords: "Borrower", "the Company", "as borrower"
-   - Extract: Full legal name and jurisdiction (state of incorporation)
-   - Format: {{"name": string, "jurisdiction": string}}
+5. **Borrower(s)** - IMPORTANT: Many agreements have JOINT BORROWERS
+   - Keywords: "Borrower", "the Company", "as borrower", "together with", "individually and collectively"
+   - CRITICAL: If multiple companies are listed as "Borrower" (e.g., "Company A and Company B, as Borrower"),
+     extract ALL of them. Put the first company in "borrower" field, and additional companies in "coBorrowers" array.
+   - Example: "AVIVA METALS, INC. and W.P. PROPERTY, INC., as Borrower" means BOTH are borrowers
+   - Format for borrower: {{"name": string, "jurisdiction": string}}
+   - Format for coBorrowers: [{{"name": string, "jurisdiction": string}}]
 
 6. **Administrative Agent**
    - Keywords: "Administrative Agent", "as Agent", "Agent"
@@ -131,8 +138,9 @@ format rules and validate against allowed values where specified.
     - Format: Number
 
 13. **Term Loan Commitments**
-    - Keywords: "Term Loan A Commitment", "Term Loan B", "Term Commitment"
+    - Keywords: "Term Loan A Commitment", "Term Loan B", "Term Commitment", "Term Loan Bond Redemption"
     - Format: Number for each term loan type
+    - Note: Some agreements have Term Loan Bond Redemption facilities with different maturity dates
 
 === APPLICABLE RATES (PRICING) ===
 
@@ -147,6 +155,8 @@ format rules and validate against allowed values where specified.
 16. **Pricing Tiers** (CRITICAL - extract from "Applicable Rate" or "Applicable Margin" tables)
     - Look for tables with columns like: Level, Threshold, Term SOFR Spread, ABR Spread, Commitment Fee
     - Keywords: "Applicable Rate", "Applicable Margin", "Pricing Level", "Pricing Grid"
+    - IMPORTANT: Extract ALL rows from the pricing table - do NOT summarize or truncate!
+    - Typical tables have 5 tiers (e.g., ≥90%, <90%, ≤75%, ≤50%, ≤25%) - extract EVERY one
     - Extract each tier with:
       - level: "I", "II", "III", "IV", "V" or "Level 1", "Level 2", etc.
       - threshold: Availability or financial metric condition (e.g., "≥ $300,000,000", "< $150,000,000")
@@ -226,6 +236,8 @@ Return ONLY valid JSON matching this structure:
         "lcSublimit": <string or number or null>,
         "swinglineSublimit": <number or null>,
         "termLoanACommitment": <number or null>,
+        "termLoanBCommitment": <number or null>,
+        "termLoanBondRedemption": <number or null>,
         "termCommitment": <number or null>
       }},
       "applicableRates": {{
@@ -300,6 +312,8 @@ CRITICAL INSTRUCTIONS:
 - NEVER guess or hallucinate values
 - Include validation notes for any uncertain extractions
 - Track which section each value was extracted from in the audit trail
+- CRITICAL: For pricing tiers/arrays, include EVERY row from the source table - do NOT truncate, summarize, or limit to 3 items!
+- If a table has 5 rows of pricing tiers, output all 5 tiers in the JSON array
 
 Output the JSON now:"""
 
@@ -741,22 +755,301 @@ Respond with ONLY valid JSON matching the schema above."""
         raise ValueError(f"Failed to parse Bedrock response: {str(e)}")
 
 
+def parse_percentage_to_decimal(value: str) -> Optional[float]:
+    """Convert percentage string to decimal (e.g., '4.25%' -> 0.0425)."""
+    if not value:
+        return None
+    try:
+        value = str(value).strip().replace('%', '')
+        return float(value) / 100
+    except (ValueError, TypeError):
+        return None
+
+
+def parse_currency_to_number(value: str) -> Optional[float]:
+    """Convert currency string to number (e.g., '$27,000,000.00' -> 27000000.0)."""
+    if not value:
+        return None
+    try:
+        value = str(value).strip().replace('$', '').replace(',', '')
+        return float(value)
+    except (ValueError, TypeError):
+        return None
+
+
+def find_table_for_section(
+    raw_extractions: List[Dict[str, Any]],
+    section_name: str
+) -> Optional[Dict[str, Any]]:
+    """Find and return the first table from a specific extraction section.
+
+    Args:
+        raw_extractions: List of raw extraction results
+        section_name: The creditAgreementSection name to look for
+
+    Returns:
+        Table dict with 'rows' key, or None if not found
+    """
+    for ext in raw_extractions:
+        if not isinstance(ext, dict):
+            continue
+        if ext.get('creditAgreementSection') == section_name:
+            results = ext.get('results', {})
+            if results is None:
+                continue
+            tables_data = results.get('tables', {})
+            if tables_data is None:
+                continue
+            tables = tables_data.get('tables', [])
+            if tables:
+                return tables[0]
+    return None
+
+
+def ensure_all_table_data(
+    normalized_data: Dict[str, Any],
+    raw_extractions: List[Dict[str, Any]]
+) -> Dict[str, Any]:
+    """Post-process to ensure all table data from Textract is preserved.
+
+    Claude 3.5 Haiku sometimes truncates arrays. This function extracts data
+    directly from Textract tables to ensure all rows are included.
+
+    Handles multiple table types:
+    - applicableRates.tiers (pricing grid)
+    - lenderCommitments (lender allocation table)
+
+    Args:
+        normalized_data: The LLM-normalized data
+        raw_extractions: Raw extraction results containing Textract tables
+
+    Returns:
+        Updated normalized_data with all table rows preserved
+    """
+    # Ensure nested structure exists
+    if 'loanData' not in normalized_data:
+        normalized_data['loanData'] = {}
+    if 'creditAgreement' not in normalized_data['loanData']:
+        normalized_data['loanData']['creditAgreement'] = {}
+
+    credit_agreement = normalized_data['loanData']['creditAgreement']
+
+    # Initialize validation notes list
+    if 'validation' not in normalized_data:
+        normalized_data['validation'] = {}
+    if 'validationNotes' not in normalized_data['validation']:
+        normalized_data['validation']['validationNotes'] = []
+
+    # ============================================================
+    # 1. Preserve applicableRates.tiers (pricing grid table)
+    # ============================================================
+    try:
+        applicable_rates_table = find_table_for_section(raw_extractions, 'applicableRates')
+
+        if applicable_rates_table:
+            table_rows = applicable_rates_table.get('rows', [])
+            if len(table_rows) >= 2:  # Need header + at least 1 data row
+                header = table_rows[0]
+                header_lower = [str(h).lower() for h in header]
+
+                # Find column indices for pricing tier table
+                level_idx = None
+                sofr_idx = None
+                abr_idx = None
+                fee_idx = None
+
+                for i, h in enumerate(header_lower):
+                    if 'usage' in h or 'level' in h or 'threshold' in h:
+                        level_idx = i
+                    elif 'term' in h or 'sofr' in h or 'benchmark' in h or 'rfr' in h:
+                        sofr_idx = i
+                    elif 'abr' in h or 'base rate' in h:
+                        abr_idx = i
+                    elif 'unused' in h or 'commitment fee' in h or 'fee rate' in h:
+                        fee_idx = i
+
+                print(f"[applicableRates] Column mapping: level={level_idx}, sofr={sofr_idx}, abr={abr_idx}, fee={fee_idx}")
+
+                data_rows = table_rows[1:]
+                num_table_tiers = len(data_rows)
+                print(f"[applicableRates] Found {num_table_tiers} pricing tiers in Textract table")
+
+                # Check current normalized tiers count
+                if 'applicableRates' not in credit_agreement:
+                    credit_agreement['applicableRates'] = {}
+                current_tiers = credit_agreement.get('applicableRates', {}).get('tiers', [])
+                print(f"[applicableRates] Current normalized tiers count: {len(current_tiers)}")
+
+                # If normalized has fewer tiers, rebuild from table
+                if len(current_tiers) < num_table_tiers:
+                    print(f"[applicableRates] Rebuilding tiers from Textract table ({num_table_tiers} rows)")
+                    new_tiers = []
+
+                    for row in data_rows:
+                        tier = {}
+
+                        if level_idx is not None and level_idx < len(row):
+                            level_val = str(row[level_idx]).strip()
+                            tier['level'] = level_val
+                            tier['threshold'] = level_val
+
+                        if sofr_idx is not None and sofr_idx < len(row):
+                            sofr_val = parse_percentage_to_decimal(row[sofr_idx])
+                            if sofr_val is not None:
+                                tier['termBenchmarkRFRSpread'] = sofr_val
+
+                        if abr_idx is not None and abr_idx < len(row):
+                            abr_val = parse_percentage_to_decimal(row[abr_idx])
+                            if abr_val is not None:
+                                tier['abrSpread'] = abr_val
+
+                        if fee_idx is not None and fee_idx < len(row):
+                            fee_val = parse_percentage_to_decimal(row[fee_idx])
+                            if fee_val is not None:
+                                tier['unusedCommitmentFeeRate'] = fee_val
+
+                        if tier:
+                            new_tiers.append(tier)
+
+                    if new_tiers:
+                        credit_agreement['applicableRates']['tiers'] = new_tiers
+                        print(f"[applicableRates] Updated with {len(new_tiers)} tiers from Textract table")
+                        normalized_data['validation']['validationNotes'].append(
+                            f"Pricing tiers rebuilt from Textract table ({len(new_tiers)} tiers, LLM returned only {len(current_tiers)})"
+                        )
+                else:
+                    print("[applicableRates] All tiers preserved, no post-processing needed")
+
+    except Exception as e:
+        print(f"Error processing applicableRates table: {str(e)}")
+
+    # ============================================================
+    # 2. Preserve lenderCommitments (lender allocation table)
+    # ============================================================
+    try:
+        lender_table = find_table_for_section(raw_extractions, 'lenderCommitments')
+
+        if lender_table:
+            table_rows = lender_table.get('rows', [])
+            if len(table_rows) >= 2:
+                header = table_rows[0]
+                header_lower = [str(h).lower() for h in header]
+
+                # Find column indices for lender commitments table
+                name_idx = None
+                pct_idx = None
+                term_idx = None
+                revolving_idx = None
+                max_revolving_idx = None
+
+                for i, h in enumerate(header_lower):
+                    if 'name' in h or 'lender' in h:
+                        name_idx = i
+                    elif 'applicable' in h and 'percentage' in h:
+                        pct_idx = i
+                    elif 'term' in h and 'commitment' in h:
+                        term_idx = i
+                    elif 'elected' in h and 'revolving' in h:
+                        revolving_idx = i
+                    elif 'maximum' in h or 'max' in h:
+                        max_revolving_idx = i
+
+                print(f"[lenderCommitments] Column mapping: name={name_idx}, pct={pct_idx}, term={term_idx}, revolving={revolving_idx}, max={max_revolving_idx}")
+
+                # Filter out TOTAL/summary rows
+                data_rows = [row for row in table_rows[1:] if not str(row[0]).strip().upper() == 'TOTAL']
+                num_table_lenders = len(data_rows)
+                print(f"[lenderCommitments] Found {num_table_lenders} lenders in Textract table (excluding TOTAL row)")
+
+                # Check current normalized lender commitments count
+                current_lenders = credit_agreement.get('lenderCommitments', [])
+                print(f"[lenderCommitments] Current normalized lenders count: {len(current_lenders)}")
+
+                # If normalized has fewer lenders, rebuild from table
+                if len(current_lenders) < num_table_lenders:
+                    print(f"[lenderCommitments] Rebuilding lenders from Textract table ({num_table_lenders} rows)")
+                    new_lenders = []
+
+                    for row in data_rows:
+                        lender = {}
+
+                        if name_idx is not None and name_idx < len(row):
+                            name_val = str(row[name_idx]).strip()
+                            if name_val and name_val.upper() != 'TOTAL':
+                                lender['lenderName'] = name_val
+
+                        if pct_idx is not None and pct_idx < len(row):
+                            pct_val = parse_percentage_to_decimal(row[pct_idx])
+                            if pct_val is not None:
+                                lender['applicablePercentage'] = pct_val
+
+                        if term_idx is not None and term_idx < len(row):
+                            term_val = parse_currency_to_number(row[term_idx])
+                            if term_val is not None:
+                                lender['termCommitment'] = term_val
+
+                        if revolving_idx is not None and revolving_idx < len(row):
+                            revolving_val = parse_currency_to_number(row[revolving_idx])
+                            if revolving_val is not None:
+                                lender['electedRevolvingCreditCommitment'] = revolving_val
+                                lender['revolvingCreditCommitment'] = revolving_val
+
+                        if max_revolving_idx is not None and max_revolving_idx < len(row):
+                            max_val = parse_currency_to_number(row[max_revolving_idx])
+                            if max_val is not None:
+                                lender['maxRevolvingCreditAmount'] = max_val
+
+                        if lender.get('lenderName'):
+                            new_lenders.append(lender)
+
+                    if new_lenders:
+                        credit_agreement['lenderCommitments'] = new_lenders
+                        print(f"[lenderCommitments] Updated with {len(new_lenders)} lenders from Textract table")
+                        normalized_data['validation']['validationNotes'].append(
+                            f"Lender commitments rebuilt from Textract table ({len(new_lenders)} lenders, LLM returned only {len(current_lenders)})"
+                        )
+                else:
+                    print("[lenderCommitments] All lenders preserved, no post-processing needed")
+
+    except Exception as e:
+        print(f"Error processing lenderCommitments table: {str(e)}")
+
+    return normalized_data
+
+
+# Keep the old function name as an alias for backward compatibility
+def ensure_all_pricing_tiers(
+    normalized_data: Dict[str, Any],
+    raw_extractions: List[Dict[str, Any]]
+) -> Dict[str, Any]:
+    """Deprecated: Use ensure_all_table_data instead."""
+    return ensure_all_table_data(normalized_data, raw_extractions)
+
+
 def calculate_processing_cost(
     normalizer_tokens: Dict[str, int],
     textract_pages: int,
     router_tokens: Optional[Dict[str, int]] = None,
+    is_credit_agreement: bool = False,
+    lambda_memory_mb: int = 1024,
+    estimated_duration_ms: int = 30000,
 ) -> Dict[str, Any]:
-    """Calculate the total processing cost for a document.
+    """Calculate the total processing cost for a document including ALL AWS services.
 
-    Pricing (per 1K tokens):
-    - Claude 3 Haiku (Router): $0.00025 input, $0.00125 output
-    - Claude 3.5 Haiku (Normalizer): $0.001 input, $0.005 output
+    Pricing:
+    - Claude 3 Haiku (Router): $0.00025/1K input, $0.00125/1K output
+    - Claude 3.5 Haiku (Normalizer): $0.001/1K input, $0.005/1K output
     - Textract (Tables + Queries): $0.02 per page
+    - Step Functions (Standard): $0.000025 per state transition
+    - Lambda: $0.0000002 per invocation + $0.0000166667 per GB-second
 
     Args:
         normalizer_tokens: Dict with inputTokens and outputTokens from normalizer
         textract_pages: Number of pages processed by Textract
         router_tokens: Optional dict with inputTokens and outputTokens from router
+        is_credit_agreement: Whether this is a Credit Agreement (affects state count)
+        lambda_memory_mb: Lambda memory allocation in MB
+        estimated_duration_ms: Estimated total Lambda execution time in ms
 
     Returns:
         Dict with cost breakdown and total
@@ -767,6 +1060,13 @@ def calculate_processing_cost(
     CLAUDE_35_HAIKU_INPUT = 0.001
     CLAUDE_35_HAIKU_OUTPUT = 0.005
     TEXTRACT_PER_PAGE = 0.02  # Tables + Queries combined
+
+    # Step Functions pricing (Standard Workflow)
+    STEP_FUNCTIONS_PER_TRANSITION = 0.000025  # $25 per million
+
+    # Lambda pricing
+    LAMBDA_PER_INVOCATION = 0.0000002  # $0.20 per million
+    LAMBDA_PER_GB_SECOND = 0.0000166667
 
     # Router cost (Claude 3 Haiku)
     router_cost = 0.0
@@ -799,8 +1099,26 @@ def calculate_processing_cost(
     # Textract cost
     textract_cost = textract_pages * TEXTRACT_PER_PAGE
 
+    # Step Functions cost
+    # Credit Agreement: classify -> choice -> 7 parallel branches -> normalize -> complete = 11 transitions
+    # Mortgage: classify -> choice -> 3 parallel branches -> normalize -> complete = 7 transitions
+    state_transitions = 11 if is_credit_agreement else 7
+    step_functions_cost = state_transitions * STEP_FUNCTIONS_PER_TRANSITION
+
+    # Lambda cost
+    # 4 Lambda invocations per document: trigger, router, extractor, normalizer
+    lambda_invocations = 4
+    lambda_invocation_cost = lambda_invocations * LAMBDA_PER_INVOCATION
+
+    # Lambda compute cost (GB-seconds)
+    # Convert memory from MB to GB, duration from ms to seconds
+    lambda_gb_seconds = (lambda_memory_mb / 1024) * (estimated_duration_ms / 1000)
+    lambda_compute_cost = lambda_gb_seconds * LAMBDA_PER_GB_SECOND
+
+    total_lambda_cost = lambda_invocation_cost + lambda_compute_cost
+
     # Total cost
-    total_cost = router_cost + textract_cost + normalizer_cost
+    total_cost = router_cost + textract_cost + normalizer_cost + step_functions_cost + total_lambda_cost
 
     return {
         'totalCost': round(total_cost, 4),
@@ -821,6 +1139,20 @@ def calculate_processing_cost(
                 'inputTokens': normalizer_input,
                 'outputTokens': normalizer_output,
                 'cost': round(normalizer_cost, 6),
+            },
+            'stepFunctions': {
+                'stateTransitions': state_transitions,
+                'costPerTransition': STEP_FUNCTIONS_PER_TRANSITION,
+                'cost': round(step_functions_cost, 6),
+            },
+            'lambda': {
+                'invocations': lambda_invocations,
+                'gbSeconds': round(lambda_gb_seconds, 2),
+                'memoryMb': lambda_memory_mb,
+                'estimatedDurationMs': estimated_duration_ms,
+                'invocationCost': round(lambda_invocation_cost, 8),
+                'computeCost': round(lambda_compute_cost, 6),
+                'cost': round(total_lambda_cost, 6),
             },
         },
         'currency': 'USD',
@@ -857,11 +1189,14 @@ def calculate_processing_time(
         except (ValueError, TypeError) as e:
             print(f"Warning: Could not parse uploadedAt timestamp: {uploaded_at} - {e}")
 
-    # Estimate phase breakdown (approximate based on typical processing patterns)
-    # Router: ~10% of time, Textract: ~60% of time, Normalizer: ~30% of time
-    router_seconds = total_seconds * 0.10
-    textract_seconds = total_seconds * 0.60
-    normalizer_seconds = total_seconds * 0.30
+    # Estimate phase breakdown (approximate based on actual parallel processing patterns)
+    # With 30-worker parallel Textract extraction:
+    # - Router: ~45% of time (PyPDF text extraction + Claude Haiku classification)
+    # - Textract: ~20% of time (parallel extraction across all sections)
+    # - Normalizer: ~35% of time (Claude 3.5 Haiku data normalization)
+    router_seconds = total_seconds * 0.45
+    textract_seconds = total_seconds * 0.20
+    normalizer_seconds = total_seconds * 0.35
 
     return {
         'totalSeconds': round(total_seconds, 2),
@@ -1095,6 +1430,30 @@ def lambda_handler(event, context):
         normalized_data = normalization_result['data']
         normalizer_tokens = normalization_result['tokenUsage']
         print(f"Normalization complete. Validation: {normalized_data.get('validation', {})}")
+
+        # Post-processing fix for amendment number
+        # "Amended and Restated" agreements are NOT amendments - they are restated documents
+        # Textract often picks up document reference numbers (like "112") incorrectly
+        if is_credit_agreement:
+            loan_data = normalized_data.get('loanData', {})
+            credit_agreement = loan_data.get('creditAgreement', {})
+            agreement_info = credit_agreement.get('agreementInfo', {})
+            doc_type = agreement_info.get('documentType', '') or ''
+            amendment_num = agreement_info.get('amendmentNumber')
+
+            # If document type contains "Amended and Restated" (case insensitive),
+            # amendmentNumber should be null unless it's explicitly an "Amendment No. X to..."
+            if 'amended and restated' in doc_type.lower():
+                # Check if this is actually an amendment TO an amended and restated agreement
+                if not ('amendment no' in doc_type.lower() or 'amendment number' in doc_type.lower()):
+                    if amendment_num is not None:
+                        print(f"Post-processing: Setting amendmentNumber to null (was '{amendment_num}') for '{doc_type}'")
+                        normalized_data['loanData']['creditAgreement']['agreementInfo']['amendmentNumber'] = None
+
+            # Post-processing: Ensure all pricing tiers are preserved from Textract tables
+            # Claude 3.5 Haiku sometimes truncates arrays to 3 items
+            normalized_data = ensure_all_pricing_tiers(normalized_data, extractions)
+
         print(f"Normalizer tokens - Input: {normalizer_tokens['inputTokens']}, Output: {normalizer_tokens['outputTokens']}")
 
         # 2. Calculate Textract pages from extractions
@@ -1110,13 +1469,22 @@ def lambda_handler(event, context):
 
         print(f"Textract pages processed: {textract_pages}")
 
-        # 3. Calculate processing cost
+        # 3. Calculate processing cost (including Step Functions and Lambda costs)
+        # Estimate Lambda duration based on page count and document type
+        # Credit Agreements with many pages take longer (~40-60s), smaller docs ~15-30s
+        estimated_duration_ms = 30000 + (textract_pages * 1000)  # Base 30s + 1s per page
+        if is_credit_agreement:
+            estimated_duration_ms += 10000  # Credit Agreements have more complex processing
+
         processing_cost = calculate_processing_cost(
             normalizer_tokens=normalizer_tokens,
             textract_pages=textract_pages,
             router_tokens=None,  # Router tokens not passed through, using estimate
+            is_credit_agreement=is_credit_agreement,
+            lambda_memory_mb=1024,  # Current Lambda memory configuration
+            estimated_duration_ms=estimated_duration_ms,
         )
-        print(f"Processing cost: ${processing_cost['totalCost']:.4f}")
+        print(f"Processing cost: ${processing_cost['totalCost']:.4f} (includes Step Functions + Lambda)")
 
         # 4. Calculate processing time
         processing_time = calculate_processing_time(

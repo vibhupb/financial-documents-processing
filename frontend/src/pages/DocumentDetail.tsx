@@ -20,12 +20,20 @@ export default function DocumentDetail() {
     data: documentData,
     isLoading: isDocumentLoading,
     error: documentError,
+    failureCount,
   } = useQuery({
     queryKey: ['document', documentId],
     queryFn: () => api.getDocument(documentId!),
     enabled: !!documentId,
+    retry: 10, // Retry up to 10 times for newly uploaded documents
+    retryDelay: (attemptIndex) => Math.min(1000 * (attemptIndex + 1), 5000), // 1s, 2s, 3s, 4s, 5s max
     refetchInterval: (query) => {
-      const status = query.state.data?.document?.status;
+      const data = query.state.data;
+      // If document not found yet (just uploaded), keep polling
+      if (data && 'error' in data) {
+        return 2000; // Poll every 2 seconds waiting for trigger Lambda
+      }
+      const status = data && 'document' in data ? data.document?.status : undefined;
       // Poll every 3 seconds while processing, stop when done
       if (!status || ['PROCESSED', 'FAILED', 'SKIPPED'].includes(status)) {
         return false;
@@ -33,6 +41,16 @@ export default function DocumentDetail() {
       return 3000;
     },
   });
+
+  // Helper to safely get document from response
+  const getDocument = () => {
+    if (documentData && 'document' in documentData) {
+      return documentData.document;
+    }
+    return undefined;
+  };
+
+  const currentDoc = getDocument();
 
   // Fetch PDF URL for viewing
   const {
@@ -42,7 +60,7 @@ export default function DocumentDetail() {
   } = useQuery({
     queryKey: ['document-pdf', documentId],
     queryFn: () => api.getDocumentPdfUrl(documentId!),
-    enabled: !!documentId && documentData?.document?.status === 'PROCESSED',
+    enabled: !!documentId && currentDoc?.status === 'PROCESSED',
     staleTime: 1000 * 60 * 50, // 50 minutes (URLs expire in 1 hour)
   });
 
@@ -52,8 +70,8 @@ export default function DocumentDetail() {
     queryFn: () => api.getProcessingStatus(documentId!),
     enabled: !!documentId,
     refetchInterval:
-      documentData?.document?.status === 'PROCESSED' ||
-      documentData?.document?.status === 'FAILED'
+      currentDoc?.status === 'PROCESSED' ||
+      currentDoc?.status === 'FAILED'
         ? false
         : 5000,
   });
@@ -70,8 +88,31 @@ export default function DocumentDetail() {
     );
   }
 
-  // Error state
-  if (documentError || !documentData?.document) {
+  // Waiting for document to be created (just uploaded, trigger Lambda hasn't run yet)
+  if (documentData && 'error' in documentData && failureCount < 10) {
+    return (
+      <div className="flex items-center justify-center h-full">
+        <div className="text-center max-w-md">
+          <div className="relative">
+            <div className="animate-spin rounded-full h-16 w-16 border-4 border-primary-200 border-t-primary-600 mx-auto" />
+            <Clock className="w-6 h-6 text-primary-600 absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2" />
+          </div>
+          <h3 className="text-xl font-semibold text-gray-900 mt-6 mb-2">
+            Initializing Document
+          </h3>
+          <p className="text-gray-500 mb-2">
+            Your document is being uploaded and initialized...
+          </p>
+          <p className="text-sm text-gray-400 font-mono">
+            ID: {documentId}
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  // Error state (after retries exhausted)
+  if (documentError || !currentDoc) {
     return (
       <div className="flex items-center justify-center h-full">
         <div className="text-center max-w-md">
@@ -94,7 +135,7 @@ export default function DocumentDetail() {
     );
   }
 
-  const doc = documentData.document;
+  const doc = currentDoc;
   const isProcessing = !['PROCESSED', 'FAILED', 'SKIPPED'].includes(doc.status);
 
   // Processing state - show progress

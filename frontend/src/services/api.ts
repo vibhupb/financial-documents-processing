@@ -46,7 +46,7 @@ export const api = {
   },
 
   getDocument: (documentId: string) =>
-    fetchApi<{ document: Document }>(`/documents/${documentId}`),
+    fetchApi<{ document: Document } | { error: string; documentId: string }>(`/documents/${documentId}`),
 
   getDocumentAudit: (documentId: string) =>
     fetchApi<{ documentId: string; auditFiles: AuditFile[] }>(`/documents/${documentId}/audit`),

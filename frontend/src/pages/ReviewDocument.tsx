@@ -1,9 +1,10 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { api } from '../services/api';
-import type { Document, ReviewDocumentResponse, ValidationResult, ProcessingCost, ProcessingTime } from '../types';
+import type { Document, ReviewDocumentResponse, ValidationResult } from '../types';
 import PDFViewer from '../components/PDFViewer';
 import StatusBadge from '../components/StatusBadge';
+import ProcessingMetricsPanel from '../components/ProcessingMetricsPanel';
 
 export default function ReviewDocument() {
   const { documentId } = useParams<{ documentId: string }>();
@@ -554,155 +555,6 @@ export default function ReviewDocument() {
     );
   }
 
-  function renderProcessingCost(cost: ProcessingCost | undefined) {
-    if (!cost) return null;
-
-    const { breakdown } = cost;
-
-    return (
-      <div className="bg-white shadow rounded-lg p-4">
-        <h3 className="text-lg font-medium text-gray-900 mb-3">Processing Cost</h3>
-        <div className="space-y-3">
-          {/* Total Cost */}
-          <div className="flex justify-between items-center border-b border-gray-200 pb-2">
-            <span className="text-lg font-semibold text-gray-900">Total Cost</span>
-            <span className="text-lg font-bold text-green-600">
-              ${cost.totalCost.toFixed(4)} {cost.currency}
-            </span>
-          </div>
-
-          {/* Breakdown */}
-          <div className="space-y-2 text-sm">
-            {/* Router */}
-            <div className="flex justify-between items-center">
-              <div className="text-gray-600">
-                <span className="font-medium">Router</span>
-                <span className="text-xs text-gray-400 ml-1">({breakdown.router.model})</span>
-              </div>
-              <span className="text-gray-900">${breakdown.router.cost.toFixed(6)}</span>
-            </div>
-            <div className="flex justify-between items-center text-xs text-gray-500 pl-4">
-              <span>{breakdown.router.inputTokens.toLocaleString()} input + {breakdown.router.outputTokens.toLocaleString()} output tokens</span>
-            </div>
-
-            {/* Textract */}
-            <div className="flex justify-between items-center">
-              <div className="text-gray-600">
-                <span className="font-medium">Textract</span>
-                <span className="text-xs text-gray-400 ml-1">({breakdown.textract.pages} pages)</span>
-              </div>
-              <span className="text-gray-900">${breakdown.textract.cost.toFixed(4)}</span>
-            </div>
-            <div className="flex justify-between items-center text-xs text-gray-500 pl-4">
-              <span>${breakdown.textract.costPerPage}/page (Tables + Queries)</span>
-            </div>
-
-            {/* Normalizer */}
-            <div className="flex justify-between items-center">
-              <div className="text-gray-600">
-                <span className="font-medium">Normalizer</span>
-                <span className="text-xs text-gray-400 ml-1">({breakdown.normalizer.model})</span>
-              </div>
-              <span className="text-gray-900">${breakdown.normalizer.cost.toFixed(6)}</span>
-            </div>
-            <div className="flex justify-between items-center text-xs text-gray-500 pl-4">
-              <span>{breakdown.normalizer.inputTokens.toLocaleString()} input + {breakdown.normalizer.outputTokens.toLocaleString()} output tokens</span>
-            </div>
-          </div>
-
-          {/* Cost comparison note */}
-          <div className="mt-3 pt-3 border-t border-gray-200">
-            <p className="text-xs text-gray-500 italic">
-              vs. Full OCR (300 pages): ~$4.50 | Savings: ~{((1 - cost.totalCost / 4.5) * 100).toFixed(0)}%
-            </p>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  function renderProcessingTime(time: ProcessingTime | undefined) {
-    if (!time) return null;
-
-    const { breakdown } = time;
-
-    // Format seconds to human-readable
-    const formatTime = (seconds: number) => {
-      if (seconds < 60) {
-        return `${seconds.toFixed(1)}s`;
-      }
-      const mins = Math.floor(seconds / 60);
-      const secs = seconds % 60;
-      return `${mins}m ${secs.toFixed(0)}s`;
-    };
-
-    return (
-      <div className="bg-white shadow rounded-lg p-4">
-        <h3 className="text-lg font-medium text-gray-900 mb-3">Processing Time</h3>
-        <div className="space-y-3">
-          {/* Total Time */}
-          <div className="flex justify-between items-center border-b border-gray-200 pb-2">
-            <span className="text-lg font-semibold text-gray-900">Total Time</span>
-            <span className="text-lg font-bold text-blue-600">
-              {formatTime(time.totalSeconds)}
-            </span>
-          </div>
-
-          {/* Time Breakdown */}
-          <div className="space-y-2 text-sm">
-            {/* Router */}
-            <div className="flex justify-between items-center">
-              <div className="text-gray-600">
-                <span className="font-medium">Router</span>
-              </div>
-              <span className="text-gray-900">{formatTime(breakdown.router.estimatedSeconds)}</span>
-            </div>
-            <div className="text-xs text-gray-500 pl-4">
-              {breakdown.router.description}
-            </div>
-
-            {/* Textract */}
-            <div className="flex justify-between items-center">
-              <div className="text-gray-600">
-                <span className="font-medium">Textract</span>
-                <span className="text-xs text-gray-400 ml-1">({breakdown.textract.pages} pages)</span>
-              </div>
-              <span className="text-gray-900">{formatTime(breakdown.textract.estimatedSeconds)}</span>
-            </div>
-            <div className="text-xs text-gray-500 pl-4">
-              {breakdown.textract.description}
-            </div>
-
-            {/* Normalizer */}
-            <div className="flex justify-between items-center">
-              <div className="text-gray-600">
-                <span className="font-medium">Normalizer</span>
-              </div>
-              <span className="text-gray-900">{formatTime(breakdown.normalizer.estimatedSeconds)}</span>
-            </div>
-            <div className="text-xs text-gray-500 pl-4">
-              {breakdown.normalizer.description}
-            </div>
-          </div>
-
-          {/* Timestamps */}
-          {time.startedAt && (
-            <div className="mt-3 pt-3 border-t border-gray-200 text-xs text-gray-500">
-              <div className="flex justify-between">
-                <span>Started:</span>
-                <span>{new Date(time.startedAt).toLocaleString()}</span>
-              </div>
-              <div className="flex justify-between mt-1">
-                <span>Completed:</span>
-                <span>{new Date(time.completedAt).toLocaleString()}</span>
-              </div>
-            </div>
-          )}
-        </div>
-      </div>
-    );
-  }
-
   if (loading) {
     return (
       <div className="flex justify-center items-center h-64">
@@ -838,11 +690,11 @@ export default function ReviewDocument() {
           {/* Extracted Data */}
           {renderExtractedData(document.extractedData as Record<string, unknown>)}
 
-          {/* Processing Cost */}
-          {renderProcessingCost(document.processingCost)}
-
-          {/* Processing Time */}
-          {renderProcessingTime(document.processingTime)}
+          {/* Processing Metrics (Cost & Time) */}
+          <ProcessingMetricsPanel
+            processingCost={document.processingCost}
+            processingTime={document.processingTime}
+          />
 
           {/* Review Actions */}
           {document.reviewStatus === 'PENDING_REVIEW' && (

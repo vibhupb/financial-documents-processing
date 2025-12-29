@@ -108,9 +108,11 @@ python3 scripts/generate-architecture-diagram-horizontal.py  # Compact horizonta
 | Feature | Description |
 |---------|-------------|
 | **Cost Optimization** | Process only relevant pages (~$0.34/doc vs $4.55 brute force) |
+| **High Performance** | ~35s processing time with parallel Textract extraction (30 workers) |
 | **Document Deduplication** | SHA-256 content hashing prevents reprocessing |
 | **Audit Trail** | Track exactly which page each data point came from |
 | **Review Workflow** | Approve/Reject/Correct extracted data |
+| **Processing Metrics** | Real-time cost and time breakdown per document |
 | **PDF Viewer** | Side-by-side PDF and extracted data view |
 | **Real-time Status** | Live processing status updates |
 
@@ -174,6 +176,16 @@ Via CLI:
 aws s3 cp your-document.pdf s3://financial-docs-<account>-<region>/ingest/
 ```
 
+### Reset Environment for Testing
+
+```bash
+# Full cleanup (removes all documents and processed data)
+./scripts/cleanup.sh
+
+# Keep source PDFs, only clean processed data
+./scripts/cleanup.sh --keep-source
+```
+
 ## Project Structure
 
 ```
@@ -201,6 +213,7 @@ financial-documents-processing/
 │   │   ├── components/               # Reusable UI components
 │   │   │   ├── DocumentViewer.tsx    # PDF + extracted data viewer
 │   │   │   ├── ExtractedValuesPanel.tsx  # Formatted data display
+│   │   │   ├── ProcessingMetricsPanel.tsx  # Cost & time breakdown
 │   │   │   └── PDFViewer.tsx         # PDF rendering
 │   │   ├── pages/                    # Route pages
 │   │   │   ├── Dashboard.tsx         # Overview & metrics
@@ -222,6 +235,8 @@ financial-documents-processing/
 ├── tests/                            # Python tests
 ├── scripts/
 │   ├── deploy.sh                     # Full deployment script
+│   ├── cleanup.sh                    # Reset S3 and DynamoDB for testing
+│   ├── generate-architecture-diagram.py  # Generate AWS architecture diagram
 │   └── upload-test-doc.sh            # Test document upload
 ├── package.json                      # CDK dependencies
 ├── tsconfig.json                     # TypeScript config
@@ -324,7 +339,7 @@ The pattern uses the **right tool for each job**, not a single expensive model:
 | Human review workflow | ✅ | Limited | ❌ |
 | Custom document types | ✅ Easy | Limited | ✅ |
 | Cost at 10K docs/month | **$3,400** | ~$25,000 | ~$150,000+ |
-| Processing time | ~2-3 min | ~5-10 min | ~5-15 min |
+| Processing time | **~35s** | ~5-10 min | ~5-15 min |
 
 ### When to Use Router Pattern vs Alternatives
 
@@ -391,6 +406,27 @@ The result: **Enterprise-grade document processing at startup costs**.
 
 ### Frontend
 - `VITE_API_URL`: Backend API endpoint
+
+## Performance Optimization
+
+### Lambda Memory Configuration
+
+| Lambda | Memory | Rationale |
+|--------|--------|-----------|
+| Router | 2048MB | CPU-bound PyPDF text extraction benefits from 1 vCPU |
+| Extractor | 2048MB | 30 parallel workers for concurrent Textract API calls |
+| Normalizer | 2048MB | JSON processing and Bedrock API calls |
+| Trigger | 512MB | Simple S3 event handling |
+| API | 512MB | CRUD operations |
+
+### Processing Time Breakdown (20-page Credit Agreement)
+
+| Stage | Time | Description |
+|-------|------|-------------|
+| Router (Classification) | ~10-12s | PyPDF extraction + Claude 3 Haiku |
+| Extractor (Parallel) | ~11-15s | 30-worker parallel Textract calls |
+| Normalizer | ~12-15s | Claude 3.5 Haiku normalization |
+| **Total** | **~35s** | End-to-end processing |
 
 ## License
 

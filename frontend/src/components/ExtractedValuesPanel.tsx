@@ -22,12 +22,17 @@ import type {
   ValidationResult,
   DocumentClassification,
   CreditAgreement,
+  ProcessingCost,
+  ProcessingTime,
 } from '../types';
+import ProcessingMetricsPanel from './ProcessingMetricsPanel';
 
 interface ExtractedValuesPanelProps {
   data: LoanData | null;
   validation?: ValidationResult;
   classification?: DocumentClassification;
+  processingCost?: ProcessingCost;
+  processingTime?: ProcessingTime;
   onFieldClick?: (pageNumber: number, fieldName: string) => void;
   className?: string;
 }
@@ -36,6 +41,8 @@ export default function ExtractedValuesPanel({
   data,
   validation,
   classification,
+  processingCost,
+  processingTime,
   onFieldClick,
   className,
 }: ExtractedValuesPanelProps) {
@@ -105,6 +112,16 @@ export default function ExtractedValuesPanel({
               Confidence: <span className="font-medium">{validation.confidence}</span>
             </p>
           </div>
+        </div>
+      )}
+
+      {/* Processing Metrics */}
+      {(processingCost || processingTime) && (
+        <div className="mx-4 mt-4">
+          <ProcessingMetricsPanel
+            processingCost={processingCost}
+            processingTime={processingTime}
+          />
         </div>
       )}
 
@@ -649,9 +666,21 @@ function CreditAgreementFields({
           </h4>
           <div className="space-y-1 pl-1 border-l-2 border-purple-100">
             <FieldRow label="Borrower" value={data.parties.borrower?.name} />
+            {data.parties.coBorrowers && data.parties.coBorrowers.length > 0 && (
+              <FieldRow label="Co-Borrower(s)" value={data.parties.coBorrowers.map(cb => typeof cb === 'string' ? cb : cb.name).join(', ')} />
+            )}
             <FieldRow label="Administrative Agent" value={data.parties.administrativeAgent} />
             {data.parties.leadArrangers && data.parties.leadArrangers.length > 0 && (
               <FieldRow label="Lead Arrangers" value={data.parties.leadArrangers.join(', ')} />
+            )}
+            {data.parties.swinglineLender && (
+              <FieldRow label="Swingline Lender" value={data.parties.swinglineLender} />
+            )}
+            {data.parties.lcIssuer && (
+              <FieldRow label="L/C Issuer" value={data.parties.lcIssuer} />
+            )}
+            {data.parties.guarantors && data.parties.guarantors.length > 0 && (
+              <FieldRow label="Guarantors" value={data.parties.guarantors.join(', ')} />
             )}
           </div>
         </div>
@@ -675,6 +704,18 @@ function CreditAgreementFields({
             )}
             {data.facilityTerms.swinglineSublimit && (
               <FieldRow label="Swingline Sublimit" value={data.facilityTerms.swinglineSublimit} />
+            )}
+            {data.facilityTerms.termLoanACommitment && (
+              <FieldRow label="Term Loan A Commitment" value={formatCurrency(data.facilityTerms.termLoanACommitment)} />
+            )}
+            {data.facilityTerms.termLoanBCommitment && (
+              <FieldRow label="Term Loan B Commitment" value={formatCurrency(data.facilityTerms.termLoanBCommitment)} />
+            )}
+            {data.facilityTerms.termLoanBondRedemption && (
+              <FieldRow label="Term Loan Bond Redemption" value={formatCurrency(data.facilityTerms.termLoanBondRedemption)} />
+            )}
+            {data.facilityTerms.termCommitment && (
+              <FieldRow label="Total Term Commitment" value={formatCurrency(data.facilityTerms.termCommitment)} />
             )}
           </div>
         </div>

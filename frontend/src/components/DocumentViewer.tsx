@@ -136,6 +136,8 @@ export default function DocumentViewer({
               data={(document.extractedData as import('../types').LoanData) || document.data || null}
               validation={document.validation}
               classification={document.classification}
+              processingCost={document.processingCost}
+              processingTime={document.processingTime}
               onFieldClick={handleFieldClick}
               className="h-full"
             />

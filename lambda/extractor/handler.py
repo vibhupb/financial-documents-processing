@@ -44,335 +44,244 @@ CONFIDENCE_THRESHOLD = float(os.environ.get('CONFIDENCE_THRESHOLD', '85.0'))
 
 # Parallel processing configuration
 # Max workers for concurrent Textract API calls (balances speed vs API throttling)
-# 5 workers provides ~5x speedup while staying within typical Textract rate limits
-MAX_PARALLEL_WORKERS = int(os.environ.get('MAX_PARALLEL_WORKERS', '5'))
+# 30 workers utilizes ~60% of 50 TPS Textract quota (leaves headroom for burst/overhead)
+MAX_PARALLEL_WORKERS = int(os.environ.get('MAX_PARALLEL_WORKERS', '30'))
 
-# Credit Agreement section-specific queries with synonyms for better extraction
-# Based on loan_prompts_map.py terminology and legal document variations
-# Legal documents use varied terminology, so we include alternative phrasings
+# Image rendering DPI - balance between quality and speed
+# 150 DPI is sufficient for OCR while being faster than 200 DPI
+IMAGE_DPI = int(os.environ.get('IMAGE_DPI', '150'))
+
+# COMPREHENSIVE Credit Agreement section-specific queries
+# Optimized for both speed AND extraction quality based on ground truth analysis
+# Key insight: Specific queries get higher confidence than consolidated "or" queries
+# Updated to fix: borrower identification, rate index, effective date, missing facilities
 CREDIT_AGREEMENT_QUERIES = {
     "agreementInfo": [
-        # Document identification (from loan_prompts_map: instrument_type)
-        "What is the document title or type?",
-        "What type of agreement is this?",
-        "What is the name of this credit facility?",
-        "What is the Instrument Type?",
-        "What is the Loan Type?",
-        "What is the Product Type?",
-        # Dates - multiple phrasings (from loan_prompts_map: loan_effective_date, maturity_date)
-        "What is the agreement date?",
-        "What is the effective date?",
-        "What is the closing date?",
-        "What is the date of this agreement?",
-        "What is the Note Date?",
-        "What is the Loan Date?",
-        "What is the Origination Date?",
-        # Maturity variations (from loan_prompts_map: maturity_date extraction_logic)
-        "What is the Maturity Date?",
-        "What is the Due Date?",
-        "What is the Final Repayment date?",
-        "What is the Expiry date?",
+        # Document identification - SPECIFIC queries work better than consolidated
+        "What type of agreement is this?",  # 93% confidence - CRITICAL
+        "What is the document title or type?",  # 98% confidence
+        "What is the Instrument Type or Loan Type?",
+        # Dates - FIX: Add explicit effective date queries
+        "What is the date this agreement is dated as of?",  # NEW: Critical for effective date
+        "What is the agreement date or effective date?",
+        "What is the Effective Date of this agreement?",  # NEW: Direct query
+        "What is the Closing Date?",  # NEW: Alternative name for effective date
+        "What is the Maturity Date?",  # Separate for higher confidence
         "What is the Termination Date?",
-        "When is the Last Installment due?",
-        # Parties - Borrower variations
-        "Who is the Borrower?",
-        "Who is the Company?",
-        "Who is the Credit Party?",
-        "Who is the obligor?",
-        "Who is the Primary Obligor?",
-        # Agent variations
-        "Who is the Administrative Agent?",
-        "Who is the Agent?",
+        # Parties - FIX: Extract ALL joint borrowers (not just one)
+        "Who are all the companies listed as Borrower?",  # NEW: Gets all joint borrowers
+        "List all company names that together are the Borrower",  # NEW: Joint borrower extraction
+        "What companies are named as Borrower in this agreement?",  # NEW: Agreement context
+        "Who is the Borrower?",  # Keep original - may return multiple names
+        "Who are the Borrowers identified in the first paragraph?",  # NEW: First paragraph context
+        "What companies together constitute the Borrower?",  # NEW: Explicitly joint
+        "Who is the Company or Primary Obligor?",
+        "Who is the Ultimate Holdings or Parent Company?",  # NEW: For complex structures
+        "Who is the Intermediate Holdings?",  # NEW: For holding structures
+        "Who is the Administrative Agent?",  # Separate for clarity
         "Who is the Collateral Agent?",
-        # Amendment tracking
-        "What is the amendment number if any?",
+        # Amendment tracking - FIX: More specific to avoid false positives
+        "What is the Amendment Number in the document title?",  # NEW: More specific
+        "Is this document titled as an amendment? What number?",  # NEW: Context aware
         "Is this an amendment and restatement?",
-        "What is the restatement date?",
-        # Currency (from loan_prompts_map: currency)
+        # Currency
         "What is the currency of this loan?",
-        "In what currency is the loan denominated?",
+        "What currency are amounts denominated in?",  # NEW: Alternative phrasing
     ],
     "applicableRates": [
-        # Rate/Margin variations (from loan_prompts_map: spread_rate, base_rate)
+        # Rate Index - FIX: Better SOFR vs Prime detection
+        "What is the Rate Index used (SOFR, LIBOR, Prime)?",  # NEW: Direct question
+        "Is the loan rate based on Term SOFR?",  # NEW: Specific SOFR check
+        "What benchmark rate is used for interest calculation?",  # NEW: Broader check
+        "What is the Reference Rate or Index Rate?",  # NEW: Alternative terms
+        # Rate/Margin
         "What is the Applicable Rate or Applicable Margin?",
-        "What is the interest rate margin?",
-        "What is the spread over the benchmark rate?",
-        "What is the Spread Rate?",
-        "What is the Margin?",
-        "What is the Floating Rate Spread?",
-        "What is the Loan Spread?",
-        "How many basis points is the spread?",
-        # Base Rate (from loan_prompts_map: base_rate)
+        "What is the Spread added to the index rate?",  # NEW: Clearer phrasing
         "What is the Base Rate?",
-        "What is the Index Rate?",
-        "What is the Reference Rate?",
-        # SOFR variations (from loan_prompts_map: rate_index with SOFR codes)
+        # SOFR - specific queries
         "What is the Term SOFR spread or margin?",
-        "What is the SOFR margin?",
-        "What is the Adjusted Term SOFR spread?",
-        "What is the SOFR Rate?",
-        "What is the 30 Day SOFR Average rate?",
-        "What is the 90 Day SOFR Average rate?",
         "What is the Daily Simple SOFR spread?",
-        "What is the CME Term SOFR rate?",
-        # Rate Index identification (from loan_prompts_map: rate_index must_be list)
-        "What is the Rate Index?",
-        "What benchmark rate is used?",
-        "What is the Reference Index?",
-        "What is the Rate Index Name?",
-        # Interest Rate Type (from loan_prompts_map: interest_rate_type)
-        "Is this a Fixed or Variable rate loan?",
-        "What is the Interest Rate Type?",
-        "Is the rate SOFR-based, LIBOR-based, or Prime-based?",
-        # ABR/Prime variations
-        "What is the ABR spread?",
-        "What is the Base Rate spread?",
+        "What is the Adjusted Term SOFR spread?",
+        "What is the SOFR floor rate?",  # NEW: SOFR-specific floor
+        # Rate type - IMPROVED detection
+        "Is the interest rate Fixed or Variable/Floating?",  # NEW: Clearer options
+        "Does this loan use SOFR or Prime as the base rate?",  # NEW: Binary choice
+        # ABR/Prime
+        "What is the ABR spread or Base Rate spread?",
         "What is the Prime Rate margin?",
-        "What is the Alternate Base Rate margin?",
-        "What is the Texas Capital Bank Prime rate?",
-        # Day Count / Year Basis (from loan_prompts_map: year_basis)
-        "What is the Year Basis or Day Count Convention?",
-        "Is interest calculated on Actual/360 or Actual/365?",
-        "What day count convention is used?",
-        "How many days in a year for interest calculation?",
-        # Fees within rates section
+        "What is the Alternate Base Rate?",  # NEW: ABR definition
+        # Day Count
+        "What is the Day Count Convention?",
+        "What year basis is used for interest calculation (360 or 365)?",  # NEW: Specific
+        # Fees within rates
         "What is the commitment fee rate?",
         "What is the unused commitment fee?",
         "What is the LC fee rate?",
-        "What is the letter of credit fee?",
+        "What is the Letter of Credit participation fee?",  # NEW: LC specific
         # Floor
-        "What is the floor rate?",
-        "What is the interest rate floor?",
-        "What is the SOFR floor?",
-        # Pricing tiers
-        "What are the pricing levels or tiers?",
-        "What is the pricing grid?",
-        "What are the applicable margins by tier?",
-        # Index Frequency (from loan_prompts_map: index_frequency)
-        "How often does the rate adjust?",
-        "What is the rate adjustment frequency?",
-        "Is the rate adjusted Monthly, Quarterly, or Annually?",
+        "What is the floor rate or interest rate floor?",
+        "What is the minimum interest rate?",  # NEW: Alternative phrasing
+        # Pricing grid - FIX: Get tiered pricing
+        "What is the pricing grid or applicable margins by tier?",
+        "What are the pricing levels based on availability or usage?",  # NEW: Tiered pricing
+        "What is the Applicable Margin for each Pricing Level?",  # NEW: Level-specific
+        "What spread applies at each tier or level?",  # NEW: Tier extraction
     ],
     "facilityTerms": [
-        # Credit Facility/Commitment Amount (primary focus - from loan_prompts_map)
+        # Total Facility
         "What is the Total Credit Facility amount?",
-        "What is the Credit Commitment amount?",
-        "What is the Facility Amount?",
-        "What is the Total Commitment Amount?",
-        "What is the Aggregate Commitment?",
-        # Revolving Credit - multiple phrasings
-        "What is the Aggregate Maximum Revolving Credit Amount?",
-        "What is the Total Revolving Credit Facility?",
-        "What is the Maximum Credit Amount?",
-        "What is the total revolving commitment?",
-        "What is the Revolving Loan amount?",
-        "What is the Revolving Credit Facility amount?",
-        # Elected Commitment
-        "What is the Aggregate Elected Revolving Credit Commitment?",
-        "What is the Initial Revolving Credit Commitment?",
-        "What is the Revolving Credit Commitment amount?",
-        "What is the Initial Commitment?",
-        # LC variations
-        "What is the LC Commitment?",
-        "What is the Letter of Credit Sublimit?",
-        "What is the LC Facility amount?",
-        "What is the maximum letter of credit amount?",
-        "What is the LC Subfacility?",
+        "What is the Aggregate Commitment amount?",
+        # Revolving
+        "What is the Total Revolving Credit Amount?",
+        "What is the Maximum Revolving Credit Amount?",
+        "What is the Aggregate Maximum Revolving Credit Amount?",  # NEW: Exact term
+        "What is the Revolving Commitment?",
+        "What is the Aggregate Elected Revolving Credit Commitment?",  # NEW: Elected amount
+        # LC - FIX: Better LC sublimit extraction
+        "What is the Letter of Credit Sublimit?",  # NEW: Specific sublimit
+        "What is the LC Commitment?",  # NEW: Separate query
+        "What is the maximum amount for Letters of Credit?",  # NEW: Alternative phrasing
         # Swingline
-        "What is the Swingline Sublimit?",
-        "What is the Swingline Commitment?",
-        "What is the Swing Line Sublimit?",
-        "What is the Swingline Subfacility?",
-        # Term Loan variations
+        "What is the Swingline Sublimit?",  # NEW: Specific sublimit
+        "What is the Swingline Commitment?",  # NEW: Separate query
+        # Term Loan - FIX: Better term loan extraction
         "What is the Term Loan Commitment?",
-        "What is the Term Loan A Commitment?",
-        "What is the Term Loan B Commitment?",
         "What is the Term Facility amount?",
-        "What is the Initial Term Loan amount?",
-        "What is the Term Loan principal amount?",
+        "What is the Term Loan A Commitment amount?",  # NEW: With "amount" suffix
+        "What dollar amount is the Term Loan A Commitment?",  # NEW: Explicit dollar amount
+        "What is the Term Loan B Commitment?",
+        "What is the Term Loan Bond Redemption Commitment?",  # NEW: Bond redemption facility
+        "What is the Term Loan Bond Redemption amount?",  # NEW: Alternative
         # Delayed Draw
-        "What is the Delayed Draw Term Loan amount?",
-        "What is the DDTL Commitment?",
-        # Incremental Facility
-        "What is the Incremental Facility amount?",
-        "What is the Accordion amount?",
-        "What is the maximum incremental commitment?",
-        # Maturity variations (duplicated from agreementInfo for facility context)
-        "What is the Maturity Date?",
-        "What is the Termination Date?",
-        "What is the Revolving Credit Maturity Date?",
-        "When does the facility mature?",
-        "What is the Stated Maturity Date?",
-        # Principal amounts from Schedule
+        "What is the Delayed Draw Term Loan or DDTL Commitment?",
+        # Incremental
+        "What is the Incremental Facility or Accordion amount?",
+        # Maturity - FIX: Get maturity for each facility type
+        "When does the facility mature?",  # 92% confidence - CRITICAL
+        "What is the Maturity Date?",  # 86% confidence
+        "What is the Revolving Credit Maturity Date?",  # NEW: Facility-specific
+        "What is the Term Loan Maturity Date?",  # NEW: Facility-specific
+        "What is the Term Loan A Maturity Date?",  # NEW: Specific term loan
+        "What is the Term Loan Bond Redemption Maturity Date?",  # NEW: Bond redemption
+        # Schedule
         "What amounts are shown in Schedule 1.01?",
-        "What is in the Schedule of Commitments?",
+        "What amounts are shown in Schedule 2.01?",  # NEW: Common schedule number
     ],
     "lenderCommitments": [
-        # Lender identification
-        "What is each Lender's name?",
-        "Who are the Lenders?",
-        "List all Lender names",
-        "Who are the Banks?",
-        "Who are the financial institutions?",
-        # Percentage/Pro Rata
-        "What is each Lender's Applicable Percentage?",
-        "What is each Lender's Pro Rata Share?",
-        "What is each Lender's Ratable Percentage?",
-        "What percentage does each Lender hold?",
-        "What is each Lender's Commitment Percentage?",
-        # Commitment amounts
-        "What is each Lender's Revolving Credit Commitment?",
-        "What is each Lender's Commitment amount?",
-        "What is each Lender's share of the facility?",
-        "What is each Lender's Term Commitment?",
-        "What is each Lender's Term Loan Commitment?",
-        "What is each Lender's Revolving Commitment amount?",
-        # Schedule references
+        # Lender identification - HIGH PERFORMERS
+        "Who are the Lenders?",  # 99% confidence
+        "What is each Lender's name?",  # 100% confidence
+        "List all Lender names",  # 100% confidence
+        "Who are the Banks?",  # 97% confidence
+        # Lead Arranger - NEW: Critical party
+        "Who is the Lead Arranger?",  # NEW: Lead arranger extraction
+        "Who are the Joint Lead Arrangers?",  # NEW: Multiple arrangers
+        "Who is the Bookrunner?",  # NEW: Related party
+        # Swingline Lender - NEW: Critical party
+        "Who is the Swingline Lender?",  # NEW: Swingline lender
+        # L/C Issuer - NEW: Critical party
+        "Who is the L/C Issuer?",  # NEW: LC issuer
+        "Who is the Issuing Bank?",  # NEW: Alternative name
+        "Who is the Letter of Credit Issuer?",  # NEW: Full name
+        # Percentage
+        "What is each Lender's Applicable Percentage?",  # 91% confidence
+        "What percentage commitment does each Lender have?",  # NEW: Alternative
+        # Commitment amounts - HIGH PERFORMERS
+        "What is each Lender's Revolving Credit Commitment?",  # 97% confidence
+        "What is each Lender's Revolving Commitment amount?",  # 93% confidence
+        "What dollar amount is each Lender's Revolving Commitment?",  # NEW: Explicit
+        "What is each Lender's Term Loan Commitment?",  # 99% confidence
+        "What is each Lender's Term Commitment?",  # 96% confidence
+        "What dollar amount is each Lender's Term Loan Commitment?",  # NEW: Explicit
+        "What is each Lender's Term Loan A Commitment?",  # NEW: Specific term loan
+        "What is each Lender's Term Loan Bond Redemption Commitment?",  # NEW: Bond
+        # Aggregates - HIGH PERFORMERS
+        "What is the Aggregate Revolving Commitment?",  # 95% confidence
+        "What is the total commitment amount?",  # 90% confidence
+        # Schedule
         "What commitments are shown in Schedule 1.01?",
-        "What is in the Schedule of Lenders and Commitments?",
-        "What amounts are in the Commitment Schedule?",
-        # Total
-        "What is the total commitment amount?",
-        "What is the aggregate commitment?",
-        "What is the sum of all Lender Commitments?",
-        "What is the Aggregate Revolving Commitment?",
+        "What commitments are shown in Schedule 2.01?",  # NEW: Common schedule
+        "What is in the Schedule of Lenders and Commitments?",  # 99% confidence
     ],
     "covenants": [
-        # Fixed Charge Coverage Ratio
-        "What is the Fixed Charge Coverage Ratio requirement?",
-        "What is the minimum Fixed Charge Coverage Ratio?",
-        "What is the FCCR requirement?",
-        "What Fixed Charge Coverage Ratio must be maintained?",
-        # Leverage Ratio variations
-        "What is the Leverage Ratio requirement?",
+        # Fixed Charge Coverage
+        "What is the Fixed Charge Coverage Ratio (FCCR) requirement?",
+        # Leverage
         "What is the maximum Leverage Ratio?",
-        "What is the Debt to EBITDA ratio requirement?",
+        "What is the Debt to EBITDA requirement?",
         "What is the Total Net Leverage Ratio?",
         "What is the Consolidated Leverage Ratio?",
-        "What is the Total Leverage Ratio?",
-        "What is the Senior Leverage Ratio?",
-        "What is the First Lien Leverage Ratio?",
         # Interest Coverage
         "What is the Interest Coverage Ratio requirement?",
-        "What is the minimum Interest Coverage Ratio?",
         # Liquidity
         "What is the minimum Liquidity requirement?",
         "What is the minimum Cash requirement?",
-        # General financial covenants
-        "What financial covenants are required?",
+        # General covenants
         "What are the financial maintenance covenants?",
-        "What financial tests must be satisfied?",
         "What are the affirmative covenants?",
         "What are the negative covenants?",
-        # Testing period
+        # Testing
         "What is the testing period for covenants?",
-        "How often are covenants tested?",
-        "When are financial covenants measured?",
-        "Are covenants tested quarterly?",
     ],
     "fees": [
-        # Commitment Fee variations (from loan_prompts_map fee types)
+        # Commitment Fee
         "What is the Commitment Fee?",
-        "What is the Unused Commitment Fee?",
-        "What is the Facility Fee?",
-        "What is the unused line fee?",
-        "What is the Ticking Fee?",
-        # LC Fee variations
+        "What is the Unused Fee or Facility Fee?",
+        # LC Fee
         "What is the Letter of Credit Fee?",
         "What is the LC Participation Fee?",
-        "What is the LC Commission?",
-        "What is the LC Issuance Fee?",
         # Fronting Fee
-        "What is the Fronting Fee?",
-        "What is the Issuing Bank Fee?",
-        "What is the LC Fronting Fee?",
+        "What is the Fronting Fee or Issuing Bank Fee?",
         # Agency Fee
-        "What is the Agency Fee?",
-        "What is the Administrative Agent Fee?",
-        "What annual agency fees are payable?",
-        "What is the Agent Fee?",
-        # Arrangement/Upfront Fees
-        "What arrangement fees are required?",
-        "What is the Upfront Fee?",
-        "What is the Closing Fee?",
-        "What are the structuring fees?",
-        "What is the Origination Fee?",
-        # Other fees (from loan_prompts_map: accrual_category must_be list)
+        "What is the Agency Fee or Administrative Agent Fee?",
+        # Upfront Fees
+        "What is the Upfront Fee or Closing Fee?",
+        "What are the arrangement fees?",
+        # Other fees
         "What is the Prepayment Penalty?",
         "What is the Late Charge fee?",
         "What is the Default Interest rate?",
-        "What are the Amendment Fees?",
-        "What is the Syndication Fee?",
     ],
     "definitions": [
         # Rate definitions
         "What is the definition of Applicable Rate?",
         "What is the definition of Applicable Margin?",
-        "How is Applicable Rate determined?",
         "What is the definition of Base Rate?",
-        # EBITDA variations (from loan_prompts_map logic)
+        # EBITDA
         "What is the definition of EBITDA?",
         "What is the definition of Adjusted EBITDA?",
-        "What is the definition of Consolidated EBITDA?",
         "What adjustments are made to EBITDA?",
-        "How is EBITDA calculated?",
         # Borrowing Base
         "What is the definition of Borrowing Base?",
         "How is Borrowing Base calculated?",
-        "What assets are included in Borrowing Base?",
-        "What is the Borrowing Base formula?",
-        # Maturity Date - specific definition
+        # Maturity Date - HIGH PERFORMER
         "What is the definition of Maturity Date?",
-        "How is Maturity Date defined?",
-        "What date is the Maturity Date?",
-        "When is the Maturity Date?",
+        "What date is the Maturity Date?",  # 86% confidence
         # Guarantors
         "Who are the Guarantors?",
-        "Who are the Subsidiary Guarantors?",
-        "What entities provide guarantees?",
         "Who are the Credit Parties?",
-        # Business Day - calculation method (highlighted on page 8)
+        # Business Day
         "What is the definition of Business Day?",
-        "How are Business Day adjustments handled?",
-        "What days are considered Business Days?",
-        "How is Business Day calculated?",
-        # Interest Payment Date and Interest Period (highlighted on page 22)
+        # Interest Period
         "What is the definition of Interest Payment Date?",
-        "When are Interest Payment Dates?",
-        "How is Interest Payment Date calculated?",
         "What is the definition of Interest Period?",
-        "How long is each Interest Period?",
-        "How is Interest Period calculated?",
-        # Lead Arranger (highlighted on page 23)
-        "Who is the Lead Arranger?",
-        "Who is the Joint Lead Arranger?",
-        "Who are the Lead Bookrunners?",
-        "What is the Lead Commitment amount?",
-        # Unused Revolving Credit Commitment (highlighted on page 40)
+        # Lead Arranger
+        "Who is the Lead Arranger or Joint Lead Arranger?",
+        # Unused Commitment - HIGH PERFORMER
         "What is the definition of Unused Revolving Credit Commitment?",
-        "How is Unused Revolving Credit Commitment calculated?",
-        "What is the Unused Commitment?",
-        "How is unused commitment determined?",
-        # Letter of Credit definitions (highlighted on pages 48-49)
+        "How is unused commitment determined?",  # 94% confidence
+        # LC definitions
         "What is the definition of Letter of Credit?",
         "What is the LC Expiration Date?",
-        "What is the Letter of Credit Expiration Date?",
-        "When do Letters of Credit expire?",
-        "What is the definition of LC Commitment?",
-        "What is the maximum LC amount?",
-        # Commitment Fee definition (highlighted on page 59)
+        # Commitment Fee
         "What is the definition of Commitment Fee?",
-        "How is Commitment Fee calculated?",
-        "What is the Unused Commitment Fee Rate?",
-        "How is the Unused Revolving Credit Commitment Fee calculated?",
         # Material Adverse Effect
         "What is the definition of Material Adverse Effect?",
-        "What is the definition of Material Adverse Change?",
     ],
 }
 
 
-def render_pdf_to_image(pdf_bytes: bytes, dpi: int = 200) -> bytes:
+def render_pdf_to_image(pdf_bytes: bytes, dpi: int = None) -> bytes:
     """Render PDF page(s) to a PNG image using PyMuPDF.
 
     Textract works more reliably with images than with PyPDF-manipulated PDFs.
@@ -380,7 +289,7 @@ def render_pdf_to_image(pdf_bytes: bytes, dpi: int = 200) -> bytes:
 
     Args:
         pdf_bytes: Raw bytes of the PDF document (typically a single page)
-        dpi: Resolution for rendering (200 DPI provides good quality/size balance)
+        dpi: Resolution for rendering (default IMAGE_DPI, typically 150 for speed)
 
     Returns:
         PNG image bytes suitable for Textract AnalyzeDocument
@@ -390,6 +299,10 @@ def render_pdf_to_image(pdf_bytes: bytes, dpi: int = 200) -> bytes:
     """
     if not PYMUPDF_AVAILABLE:
         raise RuntimeError("PyMuPDF not available for image rendering")
+
+    # Use configurable DPI for speed/quality balance
+    if dpi is None:
+        dpi = IMAGE_DPI
 
     # Open PDF from bytes
     pdf_doc = fitz.open(stream=pdf_bytes, filetype="pdf")
@@ -417,18 +330,22 @@ def render_pdf_to_image(pdf_bytes: bytes, dpi: int = 200) -> bytes:
         pdf_doc.close()
 
 
-def render_pdf_pages_to_images(pdf_bytes: bytes, dpi: int = 200) -> List[bytes]:
+def render_pdf_pages_to_images(pdf_bytes: bytes, dpi: int = None) -> List[bytes]:
     """Render all pages of a PDF to individual PNG images.
 
     Args:
         pdf_bytes: Raw bytes of the PDF document
-        dpi: Resolution for rendering
+        dpi: Resolution for rendering (default IMAGE_DPI for speed)
 
     Returns:
         List of PNG image bytes, one per page
     """
     if not PYMUPDF_AVAILABLE:
         raise RuntimeError("PyMuPDF not available for image rendering")
+
+    # Use configurable DPI for speed/quality balance
+    if dpi is None:
+        dpi = IMAGE_DPI
 
     pdf_doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     images = []
@@ -836,7 +753,7 @@ def extract_credit_agreement_section(
             try:
                 print(f"Rendering section '{section_name}' to images for Textract...")
                 # Render ALL PDF pages to images for multi-page processing
-                page_images = render_pdf_pages_to_images(section_bytes, dpi=200)
+                page_images = render_pdf_pages_to_images(section_bytes)
                 print(f"Rendered {len(page_images)} page(s) to images for '{section_name}'")
                 results["extractionMethod"] = "image_rendering"
                 results["pagesProcessed"] = len(page_images)
@@ -1718,7 +1635,7 @@ def lambda_handler(event, context):
         if PYMUPDF_AVAILABLE:
             try:
                 print(f"Rendering page {page_number} to image for Textract...")
-                image_bytes = render_pdf_to_image(page_bytes, dpi=200)
+                image_bytes = render_pdf_to_image(page_bytes)
                 used_image_rendering = True
                 print(f"Rendered page {page_number} to image ({len(image_bytes)} bytes)")
             except Exception as render_error:

@@ -112,6 +112,7 @@ financial-documents-processing/
 │   │   ├── components/               # Reusable UI components
 │   │   │   ├── DocumentViewer.tsx    # PDF + extracted data viewer
 │   │   │   ├── ExtractedValuesPanel.tsx  # Formatted data display
+│   │   │   ├── ProcessingMetricsPanel.tsx  # Cost & time breakdown panel
 │   │   │   ├── PDFViewer.tsx         # PDF rendering with react-pdf
 │   │   │   └── StatusBadge.tsx       # Processing status indicator
 │   │   ├── pages/                    # Route pages
@@ -135,7 +136,9 @@ financial-documents-processing/
 ├── tests/                            # Python tests
 ├── scripts/
 │   ├── deploy.sh                     # Full deployment script
+│   ├── cleanup.sh                    # Reset S3 and DynamoDB for testing
 │   ├── setup-dev.sh                  # Development environment setup
+│   ├── generate-architecture-diagram.py  # AWS architecture diagram generator
 │   └── upload-test-doc.sh            # Test document upload
 ├── .vscode/                          # VS Code configuration
 ├── package.json                      # CDK dependencies
@@ -504,35 +507,40 @@ When working on this project, Claude should:
 
 ## Cost Monitoring
 
-### Per-Document Cost Breakdown (300-page Credit Agreement)
+### Per-Document Cost Breakdown (20-page Credit Agreement)
 
 | Stage | Service | Details | Cost |
 |-------|---------|---------|------|
 | **Router** | Claude 3 Haiku | ~20K input + 500 output tokens | ~$0.006 |
-| **Textract** | Tables + Queries | ~15 pages x $0.02/page | ~$0.30 |
-| **Normalizer** | Claude 3.5 Haiku | ~10K input + 4K output tokens | ~$0.03 |
-| **Total** | | | **~$0.34** |
+| **Textract** | Tables + Queries | ~19 pages × $0.02/page | ~$0.38 |
+| **Normalizer** | Claude 3.5 Haiku | ~6K input + 1.4K output tokens | ~$0.013 |
+| **Step Functions** | Standard Workflow | 11 state transitions × $0.000025 | ~$0.0003 |
+| **Lambda** | Compute | 4 invocations + ~50 GB-seconds | ~$0.0008 |
+| **Total** | | | **~$0.40** |
 
-### Model Pricing Reference (per 1K tokens)
+### AWS Service Pricing Reference
 
-| Model | Input | Output | Use Case |
-|-------|-------|--------|----------|
-| Claude 3 Haiku | $0.00025 | $0.00125 | Router |
-| Claude 3.5 Haiku | $0.001 | $0.005 | Normalizer |
-| Textract (Tables + Queries) | $0.02/page | - | Extraction |
+| Service | Pricing | Use Case |
+|---------|---------|----------|
+| Claude 3 Haiku | $0.00025/1K input, $0.00125/1K output | Router |
+| Claude 3.5 Haiku | $0.001/1K input, $0.005/1K output | Normalizer |
+| Textract (Tables + Queries) | $0.02/page | Extraction |
+| Step Functions (Standard) | $0.000025/state transition | Orchestration |
+| Lambda | $0.0000002/invocation + $0.0000166667/GB-sec | Compute |
 
 ### Monthly Cost Estimates
 
 | Volume | Per-Doc Cost | Monthly Cost |
 |--------|-------------|--------------|
-| 100 docs | $0.34 | $34 |
-| 1,000 docs | $0.34 | $340 |
-| 10,000 docs | $0.34 | $3,400 |
+| 100 docs | $0.40 | $40 |
+| 1,000 docs | $0.40 | $400 |
+| 10,000 docs | $0.40 | $4,000 |
 
 ### Key Metrics to Track
 - Bedrock token usage (per model)
 - Textract API calls (AnalyzeDocument)
 - Lambda invocations and duration
+- Step Functions state transitions
 - S3 storage and requests
 - DynamoDB read/write capacity
 - CloudFront requests and data transfer
@@ -544,11 +552,15 @@ When working on this project, Claude should:
 4. Use reserved concurrency for predictable Lambda costs
 5. **Claude 3.5 Haiku** for normalization saves ~70% vs Sonnet 4
 6. Content deduplication prevents reprocessing identical documents
+7. **MAX_PARALLEL_WORKERS=30** for faster Textract processing (utilizes ~60% of 50 TPS quota)
+8. **2GB Lambda memory** for Router/Normalizer/Extractor provides 1 vCPU for CPU-bound operations
 
 ## Version History
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 2.2.0 | 2024-12-29 | Performance optimization: 2GB Lambda memory, 30 parallel workers, ~35s processing time; Add cleanup.sh script; Add ProcessingMetricsPanel component |
+| 2.1.0 | 2024-12-29 | Complete cost tracking: Add Step Functions + Lambda costs |
 | 2.0.0 | 2024-12-25 | Add React dashboard, Review workflow, Credit Agreement support |
 | 1.1.0 | 2024-12-21 | Cost optimization: Switch normalizer from Sonnet 4 to Claude 3.5 Haiku |
 | 1.0.0 | 2024-12-21 | Initial implementation |
