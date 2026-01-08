@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { api } from '../services/api';
-import type { Document, ReviewDocumentResponse, ValidationResult } from '../types';
+import type { Document, ReviewDocumentResponse, ValidationResult, SignatureValidation } from '../types';
 import PDFViewer from '../components/PDFViewer';
 import StatusBadge from '../components/StatusBadge';
 import ProcessingMetricsPanel from '../components/ProcessingMetricsPanel';
@@ -157,6 +157,59 @@ export default function ReviewDocument() {
                 </ul>
               </div>
             )}
+        </div>
+      </div>
+    );
+  }
+
+  function renderSignatureValidation(sigValidation: SignatureValidation | undefined) {
+    if (!sigValidation) return null;
+
+    const statusColors = {
+      SIGNED: { bg: 'bg-green-100', text: 'text-green-800', icon: '✓' },
+      PARTIAL: { bg: 'bg-yellow-100', text: 'text-yellow-800', icon: '?' },
+      UNSIGNED: { bg: 'bg-red-100', text: 'text-red-800', icon: '✗' },
+    };
+
+    const colors = statusColors[sigValidation.validationStatus] || statusColors.UNSIGNED;
+
+    return (
+      <div className="bg-white shadow rounded-lg p-4 mb-4">
+        <h3 className="text-lg font-medium text-gray-900 mb-3">Signature Validation</h3>
+        <div className="space-y-2">
+          <div className="flex items-center">
+            <span
+              className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${colors.bg} ${colors.text}`}
+            >
+              {colors.icon} {sigValidation.validationStatus === 'SIGNED'
+                ? 'Document Signed'
+                : sigValidation.validationStatus === 'PARTIAL'
+                ? 'Low Confidence Signatures'
+                : 'No Signatures Detected'}
+            </span>
+          </div>
+
+          <div className="text-sm text-gray-600 mt-2">
+            {sigValidation.signatureCount > 0 ? (
+              <>
+                <p>
+                  <span className="font-medium">{sigValidation.signatureCount}</span> signature(s) detected:
+                  <span className="text-green-600 ml-2">{sigValidation.highConfidenceCount} high-confidence</span>,
+                  <span className="text-yellow-600 ml-2">{sigValidation.lowConfidenceCount} low-confidence</span>
+                </p>
+                {sigValidation.pagesWithSignatures.length > 0 && (
+                  <p className="mt-1">
+                    Found on page(s): {sigValidation.pagesWithSignatures.slice(0, 5).join(', ')}
+                    {sigValidation.pagesWithSignatures.length > 5 && '...'}
+                  </p>
+                )}
+              </>
+            ) : (
+              <p className="text-red-600">
+                No handwritten signatures detected - document may be unsigned or signatures are unclear.
+              </p>
+            )}
+          </div>
         </div>
       </div>
     );
@@ -506,12 +559,420 @@ export default function ReviewDocument() {
     );
   }
 
+  function renderLoanAgreementData(la: Record<string, unknown>) {
+    const documentInfo = la.documentInfo as Record<string, unknown> | undefined;
+    const loanTerms = la.loanTerms as Record<string, unknown> | undefined;
+    const interestDetails = la.interestDetails as Record<string, unknown> | undefined;
+    const paymentInfo = la.paymentInfo as Record<string, unknown> | undefined;
+    const parties = la.parties as Record<string, unknown> | undefined;
+    const security = la.security as Record<string, unknown> | undefined;
+    const fees = la.fees as Record<string, unknown> | undefined;
+    const prepayment = la.prepayment as Record<string, unknown> | undefined;
+    const covenants = la.covenants as Record<string, unknown> | undefined;
+    const extractedCodes = la._extractedCodes as Record<string, unknown> | undefined;
+
+    return (
+      <div className="space-y-4">
+        {/* Document Information */}
+        {hasNonNullValues(documentInfo) && (
+          <div className="border border-gray-200 rounded-lg p-3">
+            <h4 className="text-sm font-semibold text-indigo-700 mb-2 border-b border-gray-100 pb-1">
+              Document Information
+            </h4>
+            <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+              {documentInfo!.documentType != null && (
+                <>
+                  <dt className="text-gray-500">Document Type</dt>
+                  <dd className="font-medium text-gray-900">{String(documentInfo!.documentType)}</dd>
+                </>
+              )}
+              {documentInfo!.loanNumber != null && (
+                <>
+                  <dt className="text-gray-500">Loan Number</dt>
+                  <dd className="font-medium text-gray-900">{String(documentInfo!.loanNumber)}</dd>
+                </>
+              )}
+              {documentInfo!.agreementDate != null && (
+                <>
+                  <dt className="text-gray-500">Agreement Date</dt>
+                  <dd className="font-medium text-gray-900">{String(documentInfo!.agreementDate)}</dd>
+                </>
+              )}
+              {documentInfo!.effectiveDate != null && (
+                <>
+                  <dt className="text-gray-500">Effective Date</dt>
+                  <dd className="font-medium text-gray-900">{String(documentInfo!.effectiveDate)}</dd>
+                </>
+              )}
+              {documentInfo!.closingDate != null && (
+                <>
+                  <dt className="text-gray-500">Closing Date</dt>
+                  <dd className="font-medium text-gray-900">{String(documentInfo!.closingDate)}</dd>
+                </>
+              )}
+            </dl>
+          </div>
+        )}
+
+        {/* Loan Terms */}
+        {hasNonNullValues(loanTerms) && (
+          <div className="border border-gray-200 rounded-lg p-3">
+            <h4 className="text-sm font-semibold text-indigo-700 mb-2 border-b border-gray-100 pb-1">
+              Loan Terms
+            </h4>
+            <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+              {loanTerms!.loanAmount != null && (
+                <>
+                  <dt className="text-gray-500">Loan Amount</dt>
+                  <dd className="font-medium text-green-700">{formatCurrency(loanTerms!.loanAmount as number)}</dd>
+                </>
+              )}
+              {loanTerms!.creditLimit != null && (
+                <>
+                  <dt className="text-gray-500">Credit Limit</dt>
+                  <dd className="font-medium text-green-700">{formatCurrency(loanTerms!.creditLimit as number)}</dd>
+                </>
+              )}
+              {loanTerms!.interestRate != null && (
+                <>
+                  <dt className="text-gray-500">Interest Rate</dt>
+                  <dd className="font-medium text-gray-900">{formatPercent(loanTerms!.interestRate as number)}</dd>
+                </>
+              )}
+              {loanTerms!.annualPercentageRate != null && (
+                <>
+                  <dt className="text-gray-500">APR</dt>
+                  <dd className="font-medium text-gray-900">{formatPercent(loanTerms!.annualPercentageRate as number)}</dd>
+                </>
+              )}
+              {loanTerms!.isFixedRate != null && (
+                <>
+                  <dt className="text-gray-500">Rate Type</dt>
+                  <dd className="font-medium text-gray-900">{loanTerms!.isFixedRate ? 'Fixed' : 'Variable'}</dd>
+                </>
+              )}
+              {loanTerms!.maturityDate != null && (
+                <>
+                  <dt className="text-gray-500">Maturity Date</dt>
+                  <dd className="font-medium text-gray-900">{String(loanTerms!.maturityDate)}</dd>
+                </>
+              )}
+              {loanTerms!.loanTermMonths != null && (
+                <>
+                  <dt className="text-gray-500">Loan Term</dt>
+                  <dd className="font-medium text-gray-900">{String(loanTerms!.loanTermMonths)} months</dd>
+                </>
+              )}
+            </dl>
+          </div>
+        )}
+
+        {/* Interest Details */}
+        {hasNonNullValues(interestDetails) && (
+          <div className="border border-gray-200 rounded-lg p-3">
+            <h4 className="text-sm font-semibold text-indigo-700 mb-2 border-b border-gray-100 pb-1">
+              Interest Details
+            </h4>
+            <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+              {interestDetails!.rateType != null && (
+                <>
+                  <dt className="text-gray-500">Rate Type</dt>
+                  <dd className="font-medium text-gray-900">{String(interestDetails!.rateType)}</dd>
+                </>
+              )}
+              {interestDetails!.indexRate != null && (
+                <>
+                  <dt className="text-gray-500">Index Rate</dt>
+                  <dd className="font-medium text-gray-900">{String(interestDetails!.indexRate)}</dd>
+                </>
+              )}
+              {interestDetails!.margin != null && (
+                <>
+                  <dt className="text-gray-500">Margin</dt>
+                  <dd className="font-medium text-gray-900">{formatPercent(interestDetails!.margin as number)}</dd>
+                </>
+              )}
+              {interestDetails!.floor != null && (
+                <>
+                  <dt className="text-gray-500">Floor</dt>
+                  <dd className="font-medium text-gray-900">{formatPercent(interestDetails!.floor as number)}</dd>
+                </>
+              )}
+              {interestDetails!.ceiling != null && (
+                <>
+                  <dt className="text-gray-500">Ceiling</dt>
+                  <dd className="font-medium text-gray-900">{formatPercent(interestDetails!.ceiling as number)}</dd>
+                </>
+              )}
+              {interestDetails!.defaultRate != null && (
+                <>
+                  <dt className="text-gray-500">Default Rate</dt>
+                  <dd className="font-medium text-red-700">{formatPercent(interestDetails!.defaultRate as number)}</dd>
+                </>
+              )}
+              {interestDetails!.dayCountBasis != null && (
+                <>
+                  <dt className="text-gray-500">Day Count Basis</dt>
+                  <dd className="font-medium text-gray-900">{String(interestDetails!.dayCountBasis)}</dd>
+                </>
+              )}
+            </dl>
+          </div>
+        )}
+
+        {/* Payment Information */}
+        {hasNonNullValues(paymentInfo) && (
+          <div className="border border-gray-200 rounded-lg p-3">
+            <h4 className="text-sm font-semibold text-indigo-700 mb-2 border-b border-gray-100 pb-1">
+              Payment Information
+            </h4>
+            <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+              {paymentInfo!.monthlyPayment != null && (
+                <>
+                  <dt className="text-gray-500">Monthly Payment</dt>
+                  <dd className="font-medium text-green-700">{formatCurrency(paymentInfo!.monthlyPayment as number)}</dd>
+                </>
+              )}
+              {paymentInfo!.firstPaymentDate != null && (
+                <>
+                  <dt className="text-gray-500">First Payment Date</dt>
+                  <dd className="font-medium text-gray-900">{String(paymentInfo!.firstPaymentDate)}</dd>
+                </>
+              )}
+              {paymentInfo!.paymentDueDay != null && (
+                <>
+                  <dt className="text-gray-500">Payment Due Day</dt>
+                  <dd className="font-medium text-gray-900">{String(paymentInfo!.paymentDueDay)}</dd>
+                </>
+              )}
+              {paymentInfo!.paymentFrequency != null && (
+                <>
+                  <dt className="text-gray-500">Payment Frequency</dt>
+                  <dd className="font-medium text-gray-900">{String(paymentInfo!.paymentFrequency)}</dd>
+                </>
+              )}
+              {paymentInfo!.numberOfPayments != null && (
+                <>
+                  <dt className="text-gray-500"># of Payments</dt>
+                  <dd className="font-medium text-gray-900">{String(paymentInfo!.numberOfPayments)}</dd>
+                </>
+              )}
+              {paymentInfo!.balloonPayment != null && (
+                <>
+                  <dt className="text-gray-500">Balloon Payment</dt>
+                  <dd className="font-medium text-orange-700">{formatCurrency(paymentInfo!.balloonPayment as number)}</dd>
+                </>
+              )}
+            </dl>
+          </div>
+        )}
+
+        {/* Parties */}
+        {hasNonNullValues(parties) && (
+          <div className="border border-gray-200 rounded-lg p-3">
+            <h4 className="text-sm font-semibold text-indigo-700 mb-2 border-b border-gray-100 pb-1">
+              Parties
+            </h4>
+            <dl className="grid grid-cols-1 gap-y-2 text-xs">
+              {(parties!.borrower as Record<string, unknown>)?.name != null && (
+                <div>
+                  <dt className="text-gray-500">Borrower</dt>
+                  <dd className="font-medium text-gray-900">{String((parties!.borrower as Record<string, unknown>).name)}</dd>
+                  {(parties!.borrower as Record<string, unknown>)?.address != null && (
+                    <dd className="text-gray-600 text-xs mt-0.5">{String((parties!.borrower as Record<string, unknown>).address)}</dd>
+                  )}
+                </div>
+              )}
+              {(parties!.lender as Record<string, unknown>)?.name != null && (
+                <div>
+                  <dt className="text-gray-500">Lender</dt>
+                  <dd className="font-medium text-gray-900">{String((parties!.lender as Record<string, unknown>).name)}</dd>
+                  {(parties!.lender as Record<string, unknown>)?.address != null && (
+                    <dd className="text-gray-600 text-xs mt-0.5">{String((parties!.lender as Record<string, unknown>).address)}</dd>
+                  )}
+                </div>
+              )}
+              {(parties!.guarantor as Record<string, unknown>)?.name != null && (
+                <div>
+                  <dt className="text-gray-500">Guarantor</dt>
+                  <dd className="font-medium text-gray-900">{String((parties!.guarantor as Record<string, unknown>).name)}</dd>
+                </div>
+              )}
+            </dl>
+          </div>
+        )}
+
+        {/* Security / Collateral */}
+        {hasNonNullValues(security) && (
+          <div className="border border-gray-200 rounded-lg p-3">
+            <h4 className="text-sm font-semibold text-indigo-700 mb-2 border-b border-gray-100 pb-1">
+              Security / Collateral
+            </h4>
+            <dl className="grid grid-cols-1 gap-y-1 text-xs">
+              {security!.isSecured != null && (
+                <>
+                  <dt className="text-gray-500">Secured</dt>
+                  <dd className="font-medium text-gray-900">{security!.isSecured ? 'Yes' : 'No'}</dd>
+                </>
+              )}
+              {security!.collateralDescription != null && (
+                <>
+                  <dt className="text-gray-500 mt-1">Collateral</dt>
+                  <dd className="font-medium text-gray-900">{String(security!.collateralDescription)}</dd>
+                </>
+              )}
+              {security!.propertyAddress != null && (
+                <>
+                  <dt className="text-gray-500 mt-1">Property Address</dt>
+                  <dd className="font-medium text-gray-900">{String(security!.propertyAddress)}</dd>
+                </>
+              )}
+            </dl>
+          </div>
+        )}
+
+        {/* Fees */}
+        {hasNonNullValues(fees) && (
+          <div className="border border-gray-200 rounded-lg p-3">
+            <h4 className="text-sm font-semibold text-indigo-700 mb-2 border-b border-gray-100 pb-1">
+              Fees
+            </h4>
+            <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+              {fees!.originationFee != null && (
+                <>
+                  <dt className="text-gray-500">Origination Fee</dt>
+                  <dd className="font-medium text-gray-900">{formatCurrency(fees!.originationFee as number)}</dd>
+                </>
+              )}
+              {fees!.latePaymentFee != null && (
+                <>
+                  <dt className="text-gray-500">Late Payment Fee</dt>
+                  <dd className="font-medium text-gray-900">{formatCurrency(fees!.latePaymentFee as number)}</dd>
+                </>
+              )}
+              {fees!.gracePeriodDays != null && (
+                <>
+                  <dt className="text-gray-500">Grace Period</dt>
+                  <dd className="font-medium text-gray-900">{String(fees!.gracePeriodDays)} days</dd>
+                </>
+              )}
+              {fees!.closingCosts != null && (
+                <>
+                  <dt className="text-gray-500">Closing Costs</dt>
+                  <dd className="font-medium text-gray-900">{formatCurrency(fees!.closingCosts as number)}</dd>
+                </>
+              )}
+              {fees!.annualFee != null && (
+                <>
+                  <dt className="text-gray-500">Annual Fee</dt>
+                  <dd className="font-medium text-gray-900">{formatCurrency(fees!.annualFee as number)}</dd>
+                </>
+              )}
+            </dl>
+          </div>
+        )}
+
+        {/* Prepayment */}
+        {hasNonNullValues(prepayment) && (
+          <div className="border border-gray-200 rounded-lg p-3">
+            <h4 className="text-sm font-semibold text-indigo-700 mb-2 border-b border-gray-100 pb-1">
+              Prepayment
+            </h4>
+            <dl className="grid grid-cols-1 gap-y-1 text-xs">
+              {prepayment!.hasPenalty != null && (
+                <>
+                  <dt className="text-gray-500">Prepayment Penalty</dt>
+                  <dd className={`font-medium ${prepayment!.hasPenalty ? 'text-red-700' : 'text-green-700'}`}>
+                    {prepayment!.hasPenalty ? 'Yes' : 'No'}
+                  </dd>
+                </>
+              )}
+              {prepayment!.penaltyTerms != null && (
+                <>
+                  <dt className="text-gray-500 mt-1">Penalty Terms</dt>
+                  <dd className="font-medium text-gray-900">{String(prepayment!.penaltyTerms)}</dd>
+                </>
+              )}
+            </dl>
+          </div>
+        )}
+
+        {/* Covenants */}
+        {hasNonNullValues(covenants) && (
+          <div className="border border-gray-200 rounded-lg p-3">
+            <h4 className="text-sm font-semibold text-indigo-700 mb-2 border-b border-gray-100 pb-1">
+              Financial Covenants
+            </h4>
+            <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+              {covenants!.debtServiceCoverageRatio != null && (
+                <>
+                  <dt className="text-gray-500">DSCR</dt>
+                  <dd className="font-medium text-gray-900">{String(covenants!.debtServiceCoverageRatio)}</dd>
+                </>
+              )}
+              {covenants!.currentRatio != null && (
+                <>
+                  <dt className="text-gray-500">Current Ratio</dt>
+                  <dd className="font-medium text-gray-900">{String(covenants!.currentRatio)}</dd>
+                </>
+              )}
+            </dl>
+            {Array.isArray(covenants!.financialCovenants) && (covenants!.financialCovenants as string[]).length > 0 && (
+              <div className="mt-2">
+                <dt className="text-xs text-gray-500">Other Covenants</dt>
+                <dd className="text-xs font-medium text-gray-900 mt-1">
+                  {(covenants!.financialCovenants as string[]).join('; ')}
+                </dd>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Extracted Codes (System Fields) */}
+        {hasNonNullValues(extractedCodes) && (
+          <div className="border border-gray-200 rounded-lg p-3 bg-gray-50">
+            <h4 className="text-sm font-semibold text-gray-600 mb-2 border-b border-gray-200 pb-1">
+              System Codes
+            </h4>
+            <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+              {extractedCodes!.instrumentType != null && (
+                <>
+                  <dt className="text-gray-500">Instrument Type</dt>
+                  <dd className="font-mono text-gray-700">{String(extractedCodes!.instrumentType)}</dd>
+                </>
+              )}
+              {extractedCodes!.interestRateType != null && (
+                <>
+                  <dt className="text-gray-500">Interest Rate Type</dt>
+                  <dd className="font-mono text-gray-700">{String(extractedCodes!.interestRateType)}</dd>
+                </>
+              )}
+              {extractedCodes!.billingFrequency != null && (
+                <>
+                  <dt className="text-gray-500">Billing Frequency</dt>
+                  <dd className="font-mono text-gray-700">{String(extractedCodes!.billingFrequency)}</dd>
+                </>
+              )}
+              {extractedCodes!.billingType != null && (
+                <>
+                  <dt className="text-gray-500">Billing Type</dt>
+                  <dd className="font-mono text-gray-700">{String(extractedCodes!.billingType)}</dd>
+                </>
+              )}
+            </dl>
+          </div>
+        )}
+      </div>
+    );
+  }
+
   function renderExtractedData(data: Record<string, unknown> | undefined) {
     if (!data) return null;
 
-    // Check if this is Credit Agreement data
+    // Check if this is Credit Agreement or Loan Agreement data
     const creditAgreement = data.creditAgreement as Record<string, unknown> | undefined;
-    const hasFormattedView = !!creditAgreement;
+    const loanAgreement = data.loanAgreement as Record<string, unknown> | undefined;
+    const hasFormattedView = !!creditAgreement || !!loanAgreement;
 
     return (
       <div className="bg-white shadow rounded-lg p-4">
@@ -547,9 +1008,11 @@ export default function ReviewDocument() {
             <pre className="text-xs text-gray-700 whitespace-pre-wrap bg-gray-50 p-3 rounded">
               {JSON.stringify(data, null, 2)}
             </pre>
-          ) : (
-            renderCreditAgreementData(creditAgreement!)
-          )}
+          ) : creditAgreement ? (
+            renderCreditAgreementData(creditAgreement)
+          ) : loanAgreement ? (
+            renderLoanAgreementData(loanAgreement)
+          ) : null}
         </div>
       </div>
     );
@@ -662,6 +1125,8 @@ export default function ReviewDocument() {
                 <dd className="font-medium text-gray-900">
                   {document.documentType === 'CREDIT_AGREEMENT'
                     ? 'Credit Agreement'
+                    : document.documentType === 'LOAN_AGREEMENT'
+                    ? 'Loan Agreement'
                     : 'Loan Package'}
                 </dd>
               </div>
@@ -686,6 +1151,9 @@ export default function ReviewDocument() {
 
           {/* Validation */}
           {renderValidation(document.validation)}
+
+          {/* Signature Validation */}
+          {renderSignatureValidation(document.signatureValidation)}
 
           {/* Extracted Data */}
           {renderExtractedData(document.extractedData as Record<string, unknown>)}

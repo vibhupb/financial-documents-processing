@@ -520,34 +520,33 @@ export default function PDFViewer({
         )}
       </div>
 
-      {/* Page thumbnails (bottom strip) */}
-      {numPages > 0 && (
+      {/* Page quick navigation (simplified - thumbnails removed for performance) */}
+      {numPages > 10 && (
         <div className="flex items-center gap-2 p-2 bg-white border-t border-gray-200 overflow-x-auto">
-          {Array.from({ length: numPages }, (_, index) => {
-            const pageNum = index + 1;
-            return (
-              <button
-                key={pageNum}
-                onClick={() => goToPage(pageNum)}
-                className={clsx(
-                  'flex-shrink-0 w-12 h-16 rounded border-2 transition-all',
-                  currentPage === pageNum
-                    ? 'border-primary-500 shadow-md'
-                    : 'border-gray-200 hover:border-gray-300',
-                  highlightedPage === pageNum && 'ring-2 ring-yellow-400'
-                )}
-              >
-                <Document file={url} loading="">
-                  <Page
-                    pageNumber={pageNum}
-                    scale={0.1}
-                    renderTextLayer={false}
-                    renderAnnotationLayer={false}
-                  />
-                </Document>
-              </button>
-            );
-          })}
+          <span className="text-xs text-gray-500">Go to page:</span>
+          <div className="flex flex-wrap gap-1">
+            {Array.from({ length: Math.min(numPages, 20) }, (_, index) => {
+              const pageNum = index + 1;
+              return (
+                <button
+                  key={pageNum}
+                  onClick={() => goToPage(pageNum)}
+                  className={clsx(
+                    'flex-shrink-0 w-8 h-8 rounded text-xs font-medium transition-all',
+                    currentPage === pageNum
+                      ? 'bg-primary-500 text-white shadow-md'
+                      : 'bg-gray-100 text-gray-700 hover:bg-gray-200',
+                    highlightedPage === pageNum && 'ring-2 ring-yellow-400'
+                  )}
+                >
+                  {pageNum}
+                </button>
+              );
+            })}
+            {numPages > 20 && (
+              <span className="text-xs text-gray-400 self-center ml-1">+{numPages - 20} more</span>
+            )}
+          </div>
         </div>
       )}
     </div>

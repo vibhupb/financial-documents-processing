@@ -135,6 +135,7 @@ export default function DocumentViewer({
             <ExtractedValuesPanel
               data={(document.extractedData as import('../types').LoanData) || document.data || null}
               validation={document.validation}
+              signatureValidation={document.signatureValidation}
               classification={document.classification}
               processingCost={document.processingCost}
               processingTime={document.processingTime}

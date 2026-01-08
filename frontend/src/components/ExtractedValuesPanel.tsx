@@ -11,6 +11,8 @@ import {
   AlertCircle,
   CheckCircle,
   Info,
+  PenTool,
+  XCircle,
 } from 'lucide-react';
 import clsx from 'clsx';
 import type {
@@ -22,14 +24,17 @@ import type {
   ValidationResult,
   DocumentClassification,
   CreditAgreement,
+  LoanAgreementData,
   ProcessingCost,
   ProcessingTime,
+  SignatureValidation,
 } from '../types';
 import ProcessingMetricsPanel from './ProcessingMetricsPanel';
 
 interface ExtractedValuesPanelProps {
   data: LoanData | null;
   validation?: ValidationResult;
+  signatureValidation?: SignatureValidation;
   classification?: DocumentClassification;
   processingCost?: ProcessingCost;
   processingTime?: ProcessingTime;
@@ -40,6 +45,7 @@ interface ExtractedValuesPanelProps {
 export default function ExtractedValuesPanel({
   data,
   validation,
+  signatureValidation,
   classification,
   processingCost,
   processingTime,
@@ -47,7 +53,7 @@ export default function ExtractedValuesPanel({
   className,
 }: ExtractedValuesPanelProps) {
   const [expandedSections, setExpandedSections] = useState<Set<string>>(
-    new Set(['promissoryNote', 'closingDisclosure', 'form1003', 'creditAgreement'])
+    new Set(['promissoryNote', 'closingDisclosure', 'form1003', 'creditAgreement', 'loanAgreement'])
   );
 
   const toggleSection = (section: string) => {
@@ -110,6 +116,63 @@ export default function ExtractedValuesPanel({
             </p>
             <p className="text-xs mt-0.5 text-gray-600">
               Confidence: <span className="font-medium">{validation.confidence}</span>
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* Signature Validation */}
+      {signatureValidation && (
+        <div
+          className={clsx(
+            'mx-4 mt-3 p-3 rounded-lg flex items-start gap-3',
+            signatureValidation.validationStatus === 'SIGNED'
+              ? 'bg-green-50'
+              : signatureValidation.validationStatus === 'PARTIAL'
+                ? 'bg-yellow-50'
+                : 'bg-red-50'
+          )}
+        >
+          {signatureValidation.validationStatus === 'SIGNED' ? (
+            <PenTool className="w-5 h-5 text-green-600 flex-shrink-0" />
+          ) : signatureValidation.validationStatus === 'PARTIAL' ? (
+            <PenTool className="w-5 h-5 text-yellow-600 flex-shrink-0" />
+          ) : (
+            <XCircle className="w-5 h-5 text-red-600 flex-shrink-0" />
+          )}
+          <div className="flex-1">
+            <p
+              className={clsx(
+                'text-sm font-medium',
+                signatureValidation.validationStatus === 'SIGNED'
+                  ? 'text-green-800'
+                  : signatureValidation.validationStatus === 'PARTIAL'
+                    ? 'text-yellow-800'
+                    : 'text-red-800'
+              )}
+            >
+              {signatureValidation.validationStatus === 'SIGNED'
+                ? 'Document Signed'
+                : signatureValidation.validationStatus === 'PARTIAL'
+                  ? 'Low Confidence Signatures'
+                  : 'No Signatures Detected'}
+            </p>
+            <p className="text-xs mt-0.5 text-gray-600">
+              {signatureValidation.signatureCount > 0 ? (
+                <>
+                  {signatureValidation.highConfidenceCount} high-confidence,{' '}
+                  {signatureValidation.lowConfidenceCount} low-confidence
+                  {signatureValidation.pagesWithSignatures.length > 0 && (
+                    <span className="ml-1">
+                      on page{signatureValidation.pagesWithSignatures.length > 1 ? 's' : ''}{' '}
+                      {signatureValidation.pagesWithSignatures.slice(0, 5).join(', ')}
+                      {signatureValidation.pagesWithSignatures.length > 5 && '...'}
+                    </span>
+                  )}
+                </>
+              ) : (
+                'Document may be unsigned - review required'
+              )}
             </p>
           </div>
         </div>
@@ -185,6 +248,19 @@ export default function ExtractedValuesPanel({
             onPageClick={onFieldClick}
           >
             <CreditAgreementFields data={data.creditAgreement} onFieldClick={onFieldClick} />
+          </Section>
+        )}
+
+        {/* Loan Agreement (simple business/personal loans) */}
+        {data.loanAgreement && (
+          <Section
+            title="Loan Agreement"
+            icon={<DollarSign className="w-5 h-5 text-amber-600" />}
+            isExpanded={expandedSections.has('loanAgreement')}
+            onToggle={() => toggleSection('loanAgreement')}
+            onPageClick={onFieldClick}
+          >
+            <LoanAgreementFields data={data.loanAgreement} onFieldClick={onFieldClick} />
           </Section>
         )}
 
@@ -880,6 +956,289 @@ function CreditAgreementFields({
                   <FieldRow label="Test Period" value={data.covenants.fixedChargeCoverageRatio.testPeriod} />
                 )}
               </>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Loan Agreement Fields (simple business/personal loans)
+function LoanAgreementFields({
+  data,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  onFieldClick: _onFieldClick,
+}: {
+  data: LoanAgreementData;
+  onFieldClick?: (pageNumber: number, fieldName: string) => void;
+}) {
+  const formatCurrency = (val: number | undefined | null) =>
+    val != null ? `$${val.toLocaleString()}` : undefined;
+  const formatPercent = (val: number | undefined | null) =>
+    val != null ? `${(val * 100).toFixed(3)}%` : undefined;
+
+  return (
+    <div className="space-y-4">
+      {/* Document Info */}
+      {data.documentInfo && (
+        <div>
+          <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2 flex items-center gap-2">
+            <FileText className="w-3.5 h-3.5" />
+            Document Information
+          </h4>
+          <div className="space-y-1 pl-1 border-l-2 border-amber-100">
+            <FieldRow label="Document Type" value={data.documentInfo.documentType} />
+            {data.documentInfo.loanNumber && (
+              <FieldRow label="Loan Number" value={data.documentInfo.loanNumber} />
+            )}
+            <FieldRow label="Agreement Date" value={data.documentInfo.agreementDate} />
+            <FieldRow label="Effective Date" value={data.documentInfo.effectiveDate} />
+            {data.documentInfo.closingDate && (
+              <FieldRow label="Closing Date" value={data.documentInfo.closingDate} />
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Loan Terms */}
+      {data.loanTerms && (
+        <div>
+          <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2 flex items-center gap-2">
+            <DollarSign className="w-3.5 h-3.5" />
+            Loan Terms
+          </h4>
+          <div className="space-y-1 pl-1 border-l-2 border-amber-100">
+            <FieldRow label="Loan Amount" value={formatCurrency(data.loanTerms.loanAmount)} />
+            {data.loanTerms.creditLimit && (
+              <FieldRow label="Credit Limit" value={formatCurrency(data.loanTerms.creditLimit)} />
+            )}
+            <FieldRow label="Interest Rate" value={formatPercent(data.loanTerms.interestRate)} />
+            {data.loanTerms.annualPercentageRate !== undefined && (
+              <FieldRow label="APR" value={formatPercent(data.loanTerms.annualPercentageRate)} />
+            )}
+            <FieldRow
+              label="Rate Type"
+              value={data.loanTerms.isFixedRate === true ? 'Fixed' : data.loanTerms.isFixedRate === false ? 'Variable' : undefined}
+            />
+            <FieldRow label="Maturity Date" value={data.loanTerms.maturityDate} />
+            {data.loanTerms.loanTermMonths != null && (
+              <FieldRow label="Term (Months)" value={String(data.loanTerms.loanTermMonths)} />
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Interest Details */}
+      {data.interestDetails && (
+        <div>
+          <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2 flex items-center gap-2">
+            <DollarSign className="w-3.5 h-3.5" />
+            Interest Details
+          </h4>
+          <div className="space-y-1 pl-1 border-l-2 border-amber-100">
+            {data.interestDetails.rateType && (
+              <FieldRow label="Rate Type" value={data.interestDetails.rateType} />
+            )}
+            {data.interestDetails.indexRate && (
+              <FieldRow label="Index Rate" value={data.interestDetails.indexRate} />
+            )}
+            {data.interestDetails.margin != null && (
+              <FieldRow label="Margin/Spread" value={formatPercent(data.interestDetails.margin)} />
+            )}
+            {data.interestDetails.floor != null && (
+              <FieldRow label="Floor Rate" value={formatPercent(data.interestDetails.floor)} />
+            )}
+            {data.interestDetails.ceiling != null && (
+              <FieldRow label="Ceiling Rate" value={formatPercent(data.interestDetails.ceiling)} />
+            )}
+            {data.interestDetails.defaultRate != null && (
+              <FieldRow label="Default Rate" value={formatPercent(data.interestDetails.defaultRate)} />
+            )}
+            {data.interestDetails.dayCountBasis && (
+              <FieldRow label="Day Count Basis" value={data.interestDetails.dayCountBasis} />
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Parties */}
+      {data.parties && (
+        <div>
+          <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2 flex items-center gap-2">
+            <User className="w-3.5 h-3.5" />
+            Parties
+          </h4>
+          <div className="space-y-1 pl-1 border-l-2 border-amber-100">
+            {data.parties.borrower?.name && (
+              <FieldRow label="Borrower" value={data.parties.borrower.name} />
+            )}
+            {data.parties.borrower?.address && (
+              <FieldRow label="Borrower Address" value={data.parties.borrower.address} />
+            )}
+            {data.parties.lender?.name && (
+              <FieldRow label="Lender" value={data.parties.lender.name} />
+            )}
+            {data.parties.lender?.address && (
+              <FieldRow label="Lender Address" value={data.parties.lender.address} />
+            )}
+            {data.parties.guarantor?.name && (
+              <FieldRow label="Guarantor" value={data.parties.guarantor.name} />
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Payment Info */}
+      {data.paymentInfo && (
+        <div>
+          <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2 flex items-center gap-2">
+            <FileText className="w-3.5 h-3.5" />
+            Payment Information
+          </h4>
+          <div className="space-y-1 pl-1 border-l-2 border-amber-100">
+            {data.paymentInfo.monthlyPayment != null && (
+              <FieldRow label="Monthly Payment" value={formatCurrency(data.paymentInfo.monthlyPayment)} />
+            )}
+            {data.paymentInfo.firstPaymentDate && (
+              <FieldRow label="First Payment Date" value={data.paymentInfo.firstPaymentDate} />
+            )}
+            {data.paymentInfo.paymentDueDay != null && (
+              <FieldRow label="Payment Due Day" value={String(data.paymentInfo.paymentDueDay)} />
+            )}
+            {data.paymentInfo.paymentFrequency && (
+              <FieldRow label="Payment Frequency" value={data.paymentInfo.paymentFrequency} />
+            )}
+            {data.paymentInfo.numberOfPayments != null && (
+              <FieldRow label="Number of Payments" value={String(data.paymentInfo.numberOfPayments)} />
+            )}
+            {data.paymentInfo.balloonPayment != null && (
+              <FieldRow label="Balloon Payment" value={formatCurrency(data.paymentInfo.balloonPayment)} />
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Security */}
+      {data.security && (
+        <div>
+          <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2 flex items-center gap-2">
+            <Home className="w-3.5 h-3.5" />
+            Security/Collateral
+          </h4>
+          <div className="space-y-1 pl-1 border-l-2 border-amber-100">
+            <FieldRow
+              label="Secured"
+              value={data.security.isSecured === true ? 'Yes' : data.security.isSecured === false ? 'No' : undefined}
+            />
+            {data.security.collateralDescription && (
+              <FieldRow label="Collateral" value={data.security.collateralDescription} />
+            )}
+            {data.security.propertyAddress && (
+              <FieldRow label="Property Address" value={data.security.propertyAddress} />
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Fees */}
+      {data.fees && (
+        <div>
+          <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2 flex items-center gap-2">
+            <DollarSign className="w-3.5 h-3.5" />
+            Fees
+          </h4>
+          <div className="space-y-1 pl-1 border-l-2 border-amber-100">
+            {data.fees.originationFee != null && (
+              <FieldRow label="Origination Fee" value={formatCurrency(data.fees.originationFee)} />
+            )}
+            {data.fees.latePaymentFee != null && (
+              <FieldRow label="Late Payment Fee" value={formatCurrency(data.fees.latePaymentFee)} />
+            )}
+            {data.fees.gracePeriodDays != null && (
+              <FieldRow label="Grace Period (Days)" value={String(data.fees.gracePeriodDays)} />
+            )}
+            {data.fees.closingCosts != null && (
+              <FieldRow label="Closing Costs" value={formatCurrency(data.fees.closingCosts)} />
+            )}
+            {data.fees.annualFee != null && (
+              <FieldRow label="Annual Fee" value={formatCurrency(data.fees.annualFee)} />
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Prepayment */}
+      {data.prepayment && (
+        <div>
+          <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2 flex items-center gap-2">
+            <FileText className="w-3.5 h-3.5" />
+            Prepayment
+          </h4>
+          <div className="space-y-1 pl-1 border-l-2 border-amber-100">
+            <FieldRow
+              label="Has Penalty"
+              value={data.prepayment.hasPenalty === true ? 'Yes' : data.prepayment.hasPenalty === false ? 'No' : undefined}
+            />
+            {data.prepayment.penaltyTerms && (
+              <FieldRow label="Penalty Terms" value={data.prepayment.penaltyTerms} />
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Covenants */}
+      {data.covenants && data.covenants.financialCovenants && data.covenants.financialCovenants.length > 0 && (
+        <div>
+          <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2 flex items-center gap-2">
+            <FileText className="w-3.5 h-3.5" />
+            Financial Covenants
+          </h4>
+          <div className="space-y-1 pl-1 border-l-2 border-amber-100">
+            {data.covenants.financialCovenants.map((covenant, idx) => (
+              <FieldRow key={idx} label={`Covenant ${idx + 1}`} value={covenant} />
+            ))}
+            {data.covenants.debtServiceCoverageRatio != null && (
+              <FieldRow label="DSCR" value={String(data.covenants.debtServiceCoverageRatio)} />
+            )}
+            {data.covenants.currentRatio != null && (
+              <FieldRow label="Current Ratio" value={String(data.covenants.currentRatio)} />
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Extracted System Codes */}
+      {data._extractedCodes && (
+        <div>
+          <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2 flex items-center gap-2">
+            <FileText className="w-3.5 h-3.5" />
+            System Codes
+          </h4>
+          <div className="space-y-1 pl-1 border-l-2 border-amber-100">
+            {data._extractedCodes.instrumentType && (
+              <FieldRow label="Instrument Type" value={data._extractedCodes.instrumentType} />
+            )}
+            {data._extractedCodes.billingType && (
+              <FieldRow label="Billing Type" value={data._extractedCodes.billingType} />
+            )}
+            {data._extractedCodes.billingFrequency && (
+              <FieldRow label="Billing Frequency" value={data._extractedCodes.billingFrequency} />
+            )}
+            {data._extractedCodes.interestRateType && (
+              <FieldRow label="Interest Rate Type" value={data._extractedCodes.interestRateType} />
+            )}
+            {data._extractedCodes.rateIndex && (
+              <FieldRow label="Rate Index" value={data._extractedCodes.rateIndex} />
+            )}
+            {data._extractedCodes.rateCalculationMethod && (
+              <FieldRow label="Rate Calculation" value={data._extractedCodes.rateCalculationMethod} />
+            )}
+            {data._extractedCodes.currency && (
+              <FieldRow label="Currency" value={data._extractedCodes.currency} />
+            )}
+            {data._extractedCodes.prepaymentIndicator && (
+              <FieldRow label="Prepayment" value={data._extractedCodes.prepaymentIndicator} />
             )}
           </div>
         </div>

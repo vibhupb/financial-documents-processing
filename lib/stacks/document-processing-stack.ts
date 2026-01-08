@@ -178,6 +178,7 @@ export class DocumentProcessingStack extends cdk.Stack {
       effect: iam.Effect.ALLOW,
       actions: [
         'textract:AnalyzeDocument',
+        'textract:DetectDocumentText',  // For OCR extraction of scanned documents (HYBRID approach)
         'textract:StartDocumentAnalysis',
         'textract:GetDocumentAnalysis',
       ],
@@ -231,11 +232,79 @@ export class DocumentProcessingStack extends cdk.Stack {
         'pageNumber.$': '$.classification.promissoryNote',
         extractionType: 'QUERIES',
         queries: [
-          'What is the Interest Rate?',
-          'What is the Principal Amount?',
-          'Who is the Borrower?',
-          'What is the Maturity Date?',
+          // =====================================================
+          // CORE LOAN TERMS (from schema: total_loan_facility_amount, maturity_date)
+          // =====================================================
+          'What is the Interest Rate or Annual Percentage Rate (APR)?',
+          'What is the Principal Amount or Loan Amount?',
+          'What is the Total Loan Amount including fees?',
+          'What is the Maturity Date or Final Payment Date?',
           'What is the Monthly Payment Amount?',
+          'What is the First Payment Date?',
+          'What is the Payment Due Day of each month?',
+          'What is the Loan Term (months or years)?',
+
+          // =====================================================
+          // BORROWER INFORMATION (from schema: borrower_names)
+          // =====================================================
+          'Who is the Borrower or Maker of this Note?',
+          'Who is the Co-Borrower or Co-Maker?',
+          'What is the Borrower Address?',
+
+          // =====================================================
+          // LENDER INFORMATION (from schema: agent, lender_type)
+          // =====================================================
+          'Who is the Lender or Payee?',
+          'What is the Lender Address?',
+
+          // =====================================================
+          // INTEREST RATE DETAILS (from schema: interest_rate_type, rate_index, spread_rate, rate_calculation_method)
+          // =====================================================
+          'Is this a Fixed Rate or Variable Rate loan?',
+          'What is the Index Rate used (Prime, SOFR, Term SOFR, Daily SOFR, Fed Funds)?',
+          'What is the Margin or Spread added to Index Rate?',
+          'What is the Interest Rate Floor or Minimum Rate?',
+          'What is the Interest Rate Ceiling or Cap?',
+          'What is the Default Interest Rate or Penalty Rate?',
+          'How is interest calculated (Actual/360, Actual/365, 30/360)?',
+          'What is the Rate Calculation Method or Day Count Basis?',
+
+          // =====================================================
+          // PAYMENT DETAILS (from schema: billing_frequency, billing_type)
+          // =====================================================
+          'What is the Total Number of Payments?',
+          'How many payments remain?',
+          'What is the Balloon Payment Amount?',
+          'What is the Late Payment Fee or Late Charge?',
+          'What is the Grace Period for late payments?',
+          'Is Interest payable In Arrears or In Advance?',
+          'What is the Payment Frequency (monthly, quarterly)?',
+
+          // =====================================================
+          // SECURITY AND COLLATERAL (from schema: collateral_details)
+          // =====================================================
+          'Is this loan Secured or Unsecured?',
+          'What is the Collateral or Security for this loan?',
+          'What is the Property Address if secured by real estate?',
+
+          // =====================================================
+          // PREPAYMENT (from schema: prepayment_penalty)
+          // =====================================================
+          'Is there a Prepayment Penalty?',
+          'What is the Prepayment Penalty Amount or Terms?',
+
+          // =====================================================
+          // DOCUMENT IDENTIFICATION (from schema: instrument, effective_date)
+          // =====================================================
+          'What is the Loan Number or Note Number?',
+          'What is the Date of this Note?',
+          'What is the Effective Date?',
+
+          // =====================================================
+          // LEGAL AND OPERATIONAL (from schema: governing_law, currency)
+          // =====================================================
+          'What is the Governing Law or Jurisdiction?',
+          'What is the Currency of this loan (USD)?',
         ],
       }),
       outputPath: '$.Payload',
@@ -249,7 +318,111 @@ export class DocumentProcessingStack extends cdk.Stack {
         'bucket.$': '$.bucket',
         'key.$': '$.key',
         'pageNumber.$': '$.classification.closingDisclosure',
-        extractionType: 'TABLES',
+        extractionType: 'QUERIES_AND_TABLES',
+        queries: [
+          // =====================================================
+          // LOAN TERMS (Page 1) - from schema: instrument, effective_date
+          // =====================================================
+          'What is the Loan Term in months or years?',
+          'What is the Loan Purpose?',
+          'What is the Loan Product type?',
+          'What is the Loan Type (Conventional, FHA, VA)?',
+          'What is the Loan ID or Loan Number?',
+
+          // =====================================================
+          // LOAN AMOUNT AND INTEREST (from schema: interest_rate_type, rate_index)
+          // =====================================================
+          'What is the Loan Amount?',
+          'What is the Interest Rate?',
+          'What is the Annual Percentage Rate (APR)?',
+          'Is the Interest Rate Adjustable or Fixed?',
+          'Can the Interest Rate Increase?',
+          'What is the Index Rate used (Prime, SOFR)?',
+          'What is the Margin added to Index Rate?',
+          'What is the Interest Rate Floor?',
+          'What is the Interest Rate Ceiling or Cap?',
+
+          // =====================================================
+          // MONTHLY PAYMENT (from schema: billing_frequency, billing_type)
+          // =====================================================
+          'What is the Monthly Principal and Interest Payment?',
+          'What is the Monthly Mortgage Insurance Payment?',
+          'What is the Monthly Escrow Payment?',
+          'What is the Total Monthly Payment?',
+          'Can the Monthly Payment Increase?',
+          'What is the First Payment Date?',
+
+          // =====================================================
+          // PROJECTED PAYMENTS
+          // =====================================================
+          'What is the Estimated Total Monthly Payment?',
+          'What are the Projected Payments for Years 1-7?',
+          'What are the Projected Payments for Years 8-30?',
+
+          // =====================================================
+          // COSTS AT CLOSING (from schema: associated_fees)
+          // =====================================================
+          'What is the Total Closing Costs?',
+          'What is the Cash to Close?',
+          'What are the Total Loan Costs?',
+          'What are the Total Other Costs?',
+          'What is the Total Payoffs and Payments?',
+
+          // =====================================================
+          // LOAN COSTS (Section A, B, C)
+          // =====================================================
+          'What is the Origination Charges total?',
+          'What is the Points or Discount Points amount?',
+          'What is the Services Borrower Did Not Shop For total?',
+          'What is the Services Borrower Did Shop For total?',
+          'What is the Appraisal Fee?',
+          'What is the Credit Report Fee?',
+
+          // =====================================================
+          // OTHER COSTS (Section E, F, G, H)
+          // =====================================================
+          'What are the Total Taxes and Government Fees?',
+          'What is the Recording Fee?',
+          'What is the Transfer Tax?',
+          'What are the Prepaids total?',
+          'What is the Homeowners Insurance Premium?',
+          'What is the Prepaid Interest?',
+          'What are the Initial Escrow Payments?',
+
+          // =====================================================
+          // PROPERTY AND TRANSACTION (from schema: collateral_details)
+          // =====================================================
+          'What is the Property Address?',
+          'What is the Sale Price of Property?',
+          'What is the Appraised Value?',
+
+          // =====================================================
+          // PARTIES (from schema: borrower_names, agent)
+          // =====================================================
+          'Who is the Borrower Name?',
+          'Who is the Co-Borrower Name?',
+          'Who is the Seller Name?',
+          'Who is the Lender Name?',
+          'What is the Lender NMLS ID?',
+          'Who is the Loan Officer?',
+
+          // =====================================================
+          // IMPORTANT DATES (from schema: effective_date, maturity_date)
+          // =====================================================
+          'What is the Closing Date?',
+          'What is the Disbursement Date?',
+          'What is the Settlement Date?',
+          'What is the Maturity Date?',
+
+          // =====================================================
+          // ADDITIONAL DISCLOSURES (from schema: prepayment_penalty)
+          // =====================================================
+          'Is there a Prepayment Penalty?',
+          'Is there a Balloon Payment?',
+          'What is the Total Interest Percentage (TIP)?',
+          'What is the Late Payment Fee?',
+          'What is the Grace Period for late payments?',
+        ],
       }),
       outputPath: '$.Payload',
       retryOnServiceExceptions: true,
@@ -378,6 +551,159 @@ export class DocumentProcessingStack extends cdk.Stack {
       retryOnServiceExceptions: true,
     });
 
+    // Loan Agreement extraction (simple business/personal loans - not syndicated)
+    // Uses comprehensive queries similar to promissory note but for multi-page agreements
+    // loanAgreementSections provides router-identified target pages for intelligent extraction
+    const extractLoanAgreement = new tasks.LambdaInvoke(this, 'ExtractLoanAgreement', {
+      lambdaFunction: extractorLambda,
+      payload: sfn.TaskInput.fromObject({
+        'documentId.$': '$.documentId',
+        'bucket.$': '$.bucket',
+        'key.$': '$.key',
+        'contentHash.$': '$.contentHash',
+        'size.$': '$.size',
+        'uploadedAt.$': '$.uploadedAt',
+        'pageNumber.$': '$.classification.loanAgreement',
+        'loanAgreementSections.$': '$.loanAgreementSections',  // Router-identified target pages
+        'lowQualityPages.$': '$.lowQualityPages',  // Pages with garbled text needing Textract OCR
+        isLoanAgreement: true,  // Marker for normalizer to distinguish from mortgage
+        extractionType: 'QUERIES_AND_TABLES',
+        queries: [
+          // =====================================================
+          // DOCUMENT IDENTIFICATION (from schema: instrument, effective_date)
+          // =====================================================
+          'What type of loan agreement is this?',
+          'What is the Loan Number or Agreement Number?',
+          'What is the Agreement Date or Effective Date?',
+          'What is the Closing Date?',
+          'What is the Instrument or Product Code?',
+
+          // =====================================================
+          // CORE LOAN TERMS (from schema: total_loan_facility_amount, maturity_date)
+          // =====================================================
+          'What is the Loan Amount or Principal Amount?',
+          'What is the Total Credit Limit or Maximum Amount?',
+          'What is the Total Facility Amount or Commitment?',
+          'What is the Maturity Date or Expiration Date?',
+          'What is the Loan Term (months or years)?',
+          'Is this a Revolving Credit Facility or Term Loan?',
+          'What is the Purpose of this loan or Use of Proceeds?',
+
+          // =====================================================
+          // INTEREST RATE DETAILS (from schema: interest_rate_type, rate_index, spread_rate, rate_calculation_method)
+          // =====================================================
+          'What is the Interest Rate?',
+          'Is this a Fixed Rate or Variable/Floating Rate loan?',
+          'What is the Annual Percentage Rate (APR)?',
+          'What is the Index Rate used (Prime, SOFR, Term SOFR, Daily SOFR, Fed Funds)?',
+          'What is the Margin or Spread over the Index Rate?',
+          'What is the Interest Rate Floor or Minimum Rate?',
+          'What is the Interest Rate Ceiling or Cap?',
+          'What is the Default Interest Rate or Penalty Rate?',
+          'How is interest calculated (Actual/360, Actual/365, 30/360)?',
+          'What is the Rate Calculation Method or Day Count Basis?',
+
+          // =====================================================
+          // RATE SETTING (from schema: rate_setting, rate_maturity, index_frequency)
+          // =====================================================
+          'What is the Rate Setting Mechanism or how is the rate determined?',
+          'What is the Rate Reset Frequency or Interest Period (1 Month, 3 Month, Daily)?',
+          'How many Business Days before the Interest Period does the rate get set?',
+
+          // =====================================================
+          // PAYMENT INFORMATION (from schema: billing_frequency, billing_type, next_due_date)
+          // =====================================================
+          'What is the Monthly Payment Amount?',
+          'What is the First Payment Date?',
+          'When are payments due each month?',
+          'What is the Payment Frequency (monthly, quarterly, semi-annually)?',
+          'What is the Total Number of Payments?',
+          'Is there a Balloon Payment? What amount?',
+          'Is Interest payable In Arrears or In Advance?',
+          'What is the Billing Type (Interest Only, Principal and Interest)?',
+
+          // =====================================================
+          // PARTIES (from schema: borrower_names, agent, lender_type)
+          // =====================================================
+          'Who is the Borrower or Company Name?',
+          'What is the Borrower Address?',
+          'Who is the Guarantor or Co-Signer?',
+          'Who is the Lender?',
+          'What is the Lender Address?',
+          'Who is the Administrative Agent (if any)?',
+          'Who is the Collateral Agent (if any)?',
+
+          // =====================================================
+          // SECURITY AND COLLATERAL (from schema: collateral_details)
+          // =====================================================
+          'Is this loan Secured or Unsecured?',
+          'What is the Collateral for this loan?',
+          'What is the Property Address if secured?',
+          'What assets are pledged as Collateral?',
+
+          // =====================================================
+          // FEES AND CHARGES (from schema: associated_fees, commitment_fee)
+          // =====================================================
+          'What is the Origination Fee?',
+          'What is the Late Payment Fee or Late Charge?',
+          'What is the Grace Period for late payments?',
+          'What are the Closing Costs?',
+          'Are there any Annual Fees or Facility Fees?',
+          'What is the Commitment Fee or Unused Fee rate?',
+          'What is the Late Charge Grace Days?',
+
+          // =====================================================
+          // PREPAYMENT (from schema: prepayment_penalty)
+          // =====================================================
+          'Is there a Prepayment Penalty?',
+          'What are the Prepayment Terms or Make-Whole provisions?',
+
+          // =====================================================
+          // FINANCIAL COVENANTS (from schema: financial_covenants with type, value, testing_frequency)
+          // =====================================================
+          'What are the Financial Covenants required?',
+          'What is the required Debt Service Coverage Ratio (DSCR)?',
+          'What is the required Current Ratio?',
+          'What is the Minimum Liquidity Requirement?',
+          'What is the Maximum Leverage Ratio or Debt to Equity?',
+          'What is the Covenant Testing Frequency (monthly, quarterly)?',
+          'What are the Negative Covenants or Restrictions?',
+
+          // =====================================================
+          // REPAYMENT TERMS (from schema: repayment schedules, billing)
+          // =====================================================
+          'What is the Repayment Schedule?',
+          'Are there Principal Reductions or Amortization required?',
+          'Is there an Interest Only Period? How long?',
+
+          // =====================================================
+          // DEFAULT AND REMEDIES (from schema: events_of_default)
+          // =====================================================
+          'What constitutes an Event of Default?',
+          'What are the Remedies upon Default?',
+
+          // =====================================================
+          // LEGAL AND OPERATIONAL (from schema: governing_law, currency, calendar)
+          // =====================================================
+          'What is the Governing Law or Jurisdiction?',
+          'What is the Currency of this loan (USD, EUR, GBP)?',
+          'What Business Day Calendar is used (New York, London)?',
+          'What are the Reporting Requirements or Financial Statements required?',
+          'Is this loan Assignable or Transferable?',
+        ],
+      }),
+      outputPath: '$.Payload',
+      retryOnServiceExceptions: true,
+    });
+
+    // Parallel extraction for Loan Agreement documents (simple business loans)
+    const parallelLoanAgreementExtraction = new sfn.Parallel(this, 'ParallelLoanAgreementExtraction', {
+      resultPath: '$.extractions',
+    });
+
+    // Loan Agreement extraction uses comprehensive queries
+    parallelLoanAgreementExtraction.branch(extractLoanAgreement);
+
     // Parallel extraction for mortgage documents
     const parallelMortgageExtraction = new sfn.Parallel(this, 'ParallelMortgageExtraction', {
       resultPath: '$.extractions',
@@ -432,15 +758,26 @@ export class DocumentProcessingStack extends cdk.Stack {
     // Credit Agreement path: parallel section extraction -> normalize
     parallelCreditAgreementExtraction.next(normalizeData);
 
+    // Loan Agreement path: comprehensive loan extraction -> normalize
+    parallelLoanAgreementExtraction.next(normalizeData);
+
     // Mortgage document path: parallel extraction -> normalize
     parallelMortgageExtraction.next(normalizeData);
 
     // Build the state machine with document type routing
+    // Priority: Credit Agreement (complex syndicated) > Loan Agreement (simple) > Mortgage/Other
+    // Note: Loan Agreement routing now checks for loanAgreementSections (not just classification)
+    // to ensure intelligent page selection is available. Documents classified before this change
+    // will need to be reprocessed to get loanAgreementSections.
     const definition = classifyDocument.next(
       documentTypeChoice
         .when(
           sfn.Condition.isPresent('$.creditAgreementSections'),
           parallelCreditAgreementExtraction
+        )
+        .when(
+          sfn.Condition.isPresent('$.loanAgreementSections'),
+          parallelLoanAgreementExtraction
         )
         .otherwise(parallelMortgageExtraction)
     );
@@ -453,6 +790,9 @@ export class DocumentProcessingStack extends cdk.Stack {
       resultPath: '$.error',
     });
     parallelCreditAgreementExtraction.addCatch(handleError, {
+      resultPath: '$.error',
+    });
+    parallelLoanAgreementExtraction.addCatch(handleError, {
       resultPath: '$.error',
     });
     parallelMortgageExtraction.addCatch(handleError, {

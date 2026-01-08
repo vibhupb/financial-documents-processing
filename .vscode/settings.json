@@ -37,5 +37,6 @@
   "explorer.fileNesting.patterns": {
     "package.json": "package-lock.json, yarn.lock, .npmrc",
     "tsconfig.json": "tsconfig.*.json"
-  }
+  },
+  "python-envs.defaultEnvManager": "ms-python.python:system"
 }

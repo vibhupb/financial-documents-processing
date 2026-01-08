@@ -51,6 +51,12 @@ MAX_PARALLEL_WORKERS = int(os.environ.get('MAX_PARALLEL_WORKERS', '30'))
 # 150 DPI is sufficient for OCR while being faster than 200 DPI
 IMAGE_DPI = int(os.environ.get('IMAGE_DPI', '150'))
 
+# Step Functions payload limit is 256KB. We need to truncate rawText to prevent DataLimitExceeded errors.
+# Leave ~100KB for other data (tables, queries, metadata), so cap rawText at 150KB.
+# The normalizer uses MAX_LOAN_AGREEMENT_RAW_TEXT = 50000, but we can be more generous at extractor level
+# since Step Functions combines multiple extraction results in parallel state.
+MAX_RAW_TEXT_CHARS = int(os.environ.get('MAX_RAW_TEXT_CHARS', '80000'))  # ~80KB max for rawText
+
 # COMPREHENSIVE Credit Agreement section-specific queries
 # Optimized for both speed AND extraction quality based on ground truth analysis
 # Key insight: Specific queries get higher confidence than consolidated "or" queries
@@ -1043,6 +1049,159 @@ def extract_text_from_pages(pdf_stream: io.BytesIO, page_numbers: List[int]) -> 
         return ""
 
 
+def extract_raw_text_ocr(
+    bucket: str,
+    key: str,
+    image_bytes: Optional[bytes] = None,
+) -> Dict[str, Any]:
+    """Use Textract DetectDocumentText for raw OCR extraction.
+
+    This is the HYBRID APPROACH for scanned documents:
+    - Textract handles the OCR (visual text extraction)
+    - Claude LLM handles the intelligent data extraction
+
+    Args:
+        bucket: S3 bucket name
+        key: S3 key of the document
+        image_bytes: Optional image bytes for direct inline extraction (preferred)
+
+    Returns:
+        Dict with raw text, lines, and confidence metadata
+    """
+    try:
+        # Prefer image bytes if available (more reliable than PyPDF mini-PDFs)
+        if image_bytes:
+            response = textract_client.detect_document_text(
+                Document={'Bytes': image_bytes}
+            )
+        else:
+            response = textract_client.detect_document_text(
+                Document={
+                    'S3Object': {
+                        'Bucket': bucket,
+                        'Name': key
+                    }
+                }
+            )
+
+        # Extract text from blocks
+        lines = []
+        words = []
+        total_confidence = 0
+        confidence_count = 0
+
+        for block in response.get('Blocks', []):
+            if block['BlockType'] == 'LINE':
+                text = block.get('Text', '')
+                confidence = block.get('Confidence', 0)
+                lines.append({
+                    'text': text,
+                    'confidence': confidence,
+                })
+                total_confidence += confidence
+                confidence_count += 1
+            elif block['BlockType'] == 'WORD':
+                words.append({
+                    'text': block.get('Text', ''),
+                    'confidence': block.get('Confidence', 0),
+                })
+
+        # Combine lines into full text
+        full_text = '\n'.join([line['text'] for line in lines])
+        avg_confidence = total_confidence / confidence_count if confidence_count > 0 else 0
+
+        return {
+            'rawText': full_text,
+            'lineCount': len(lines),
+            'wordCount': len(words),
+            'averageConfidence': avg_confidence,
+            'lines': lines,
+            '_extractionMetadata': {
+                'method': 'textract_detect_document_text',
+                'totalLines': len(lines),
+                'totalWords': len(words),
+                'avgConfidence': avg_confidence,
+            }
+        }
+
+    except ClientError as e:
+        error_code = e.response.get('Error', {}).get('Code', 'Unknown')
+        error_msg = e.response.get('Error', {}).get('Message', str(e))
+        print(f"Textract DetectDocumentText error ({error_code}): {error_msg}")
+        return {"error": error_code, "errorMessage": error_msg, "rawText": "", "lineCount": 0}
+    except Exception as e:
+        print(f"Textract OCR extraction error: {str(e)}")
+        return {"error": str(e), "rawText": "", "lineCount": 0}
+
+
+def extract_raw_text_ocr_parallel(
+    page_images: List[bytes],
+    bucket: str,
+) -> str:
+    """Extract raw OCR text from multiple pages in parallel.
+
+    Uses ThreadPoolExecutor to run Textract DetectDocumentText calls concurrently.
+    Combines all page text into a single document.
+
+    Args:
+        page_images: List of PNG image bytes, one per page
+        bucket: S3 bucket name (for API signature, not used with image bytes)
+
+    Returns:
+        Combined raw text from all pages
+    """
+    all_page_texts = {}
+    pages_processed = 0
+    pages_failed = 0
+
+    def process_single_page(args):
+        page_idx, image_bytes = args
+        try:
+            result = extract_raw_text_ocr(bucket, "", image_bytes=image_bytes)
+            return (page_idx, result)
+        except Exception as e:
+            print(f"Error processing page {page_idx + 1} OCR: {str(e)}")
+            return (page_idx, {"error": str(e), "rawText": ""})
+
+    # Prepare arguments for parallel processing
+    task_args = [(idx, img) for idx, img in enumerate(page_images)]
+
+    print(f"  Starting parallel OCR processing for {len(page_images)} pages with {MAX_PARALLEL_WORKERS} workers...")
+    start_time = time.time()
+
+    with ThreadPoolExecutor(max_workers=MAX_PARALLEL_WORKERS) as executor:
+        futures = {executor.submit(process_single_page, args): args[0] for args in task_args}
+
+        for future in as_completed(futures):
+            page_idx = futures[future]
+            try:
+                result_page_idx, page_result = future.result()
+
+                if page_result.get("error"):
+                    print(f"  Page {result_page_idx + 1}: OCR failed - {page_result.get('error')}")
+                    pages_failed += 1
+                    continue
+
+                pages_processed += 1
+                raw_text = page_result.get('rawText', '')
+                if raw_text:
+                    all_page_texts[result_page_idx] = f"--- PAGE {result_page_idx + 1} ---\n{raw_text}"
+
+            except Exception as e:
+                print(f"  Page {page_idx + 1}: future error - {str(e)}")
+                pages_failed += 1
+
+    # Combine all pages in order
+    combined_text = ""
+    for page_idx in sorted(all_page_texts.keys()):
+        combined_text += all_page_texts[page_idx] + "\n\n"
+
+    elapsed = time.time() - start_time
+    print(f"  Parallel OCR processing completed in {elapsed:.2f}s ({pages_processed} succeeded, {pages_failed} failed)")
+
+    return combined_text.strip()
+
+
 def extract_with_queries(
     bucket: str,
     key: str,
@@ -1518,6 +1677,404 @@ def extract_forms(
     }
 
 
+def extract_loan_agreement_multi_page(
+    bucket: str,
+    key: str,
+    document_id: str,
+    start_page: int,
+    queries: List[str],
+    extraction_type: str,
+    content_hash: Optional[str],
+    file_size: Optional[int],
+    uploaded_at: Optional[str],
+    target_pages: Optional[List[int]] = None,
+    router_token_usage: Optional[Dict[str, int]] = None,
+    low_quality_pages: Optional[List[int]] = None,
+) -> Dict[str, Any]:
+    """Extract data from multiple pages of a Loan Agreement using HYBRID approach.
+
+    HYBRID EXTRACTION STRATEGY:
+    1. First try PyPDF text extraction (fast, free, works for native PDFs)
+    2. If minimal text (scanned document), use Textract OCR for raw text
+    3. If router identified low-quality pages (garbled text from font encoding),
+       use Textract OCR specifically for those pages
+    4. Pass raw text to normalizer where Claude LLM will extract structured data
+
+    This approach works for BOTH native text PDFs AND scanned/image-based PDFs,
+    AND handles PDFs with mixed quality (some pages readable, some garbled).
+    The Claude LLM in the normalizer uses detailed extraction prompts to find:
+    - Loan amount, interest rate, maturity date
+    - Parties, payment terms, fees
+    - Covenants, collateral, prepayment terms
+
+    Args:
+        bucket: S3 bucket name
+        key: S3 key of the document
+        document_id: Unique document identifier
+        start_page: Starting page number (usually 1) - fallback if target_pages not provided
+        queries: List of natural language queries (used as fallback for native PDFs)
+        extraction_type: QUERIES, TABLES, or QUERIES_AND_TABLES
+        content_hash: Document content hash for pass-through
+        file_size: Document size for pass-through
+        uploaded_at: Upload timestamp for pass-through
+        target_pages: Optional list of specific pages to extract (from router section identification)
+        low_quality_pages: Optional list of pages with garbled text that need Textract OCR
+
+    Returns:
+        Dict with extraction results including raw text for LLM processing
+    """
+    # Configuration
+    LOAN_AGREEMENT_FALLBACK_MAX_PAGES = 15  # Fallback if router doesn't provide sections
+    MIN_TEXT_CHARS_FOR_NATIVE = 500  # Threshold to detect scanned vs native PDF
+
+    print(f"Starting Loan Agreement HYBRID extraction for {document_id}")
+    start_time = time.time()
+
+    try:
+        # 1. Download full PDF
+        s3_response = s3_client.get_object(Bucket=bucket, Key=key)
+        pdf_stream = io.BytesIO(s3_response['Body'].read())
+
+        # 2. Determine total pages and pages to extract
+        reader = PdfReader(pdf_stream)
+        total_pages = len(reader.pages)
+
+        # Use router-provided target pages if available, otherwise fall back to page range
+        if target_pages:
+            # Use intelligent page selection from router
+            pages_to_extract = sorted([p for p in target_pages if 1 <= p <= total_pages])
+            if pages_to_extract:
+                # end_page is used later for signature detection to check if we need additional pages
+                end_page = max(pages_to_extract)
+                print(f"Using router-provided target pages: {pages_to_extract}")
+            else:
+                # All target pages were out of range - fall back to default extraction
+                print(f"Warning: All target pages {target_pages} out of range for {total_pages}-page document")
+                end_page = min(start_page + LOAN_AGREEMENT_FALLBACK_MAX_PAGES - 1, total_pages)
+                pages_to_extract = list(range(start_page, end_page + 1))
+                print(f"Falling back to pages {start_page}-{end_page}")
+        else:
+            # Fallback: extract pages starting from start_page
+            end_page = min(start_page + LOAN_AGREEMENT_FALLBACK_MAX_PAGES - 1, total_pages)
+            pages_to_extract = list(range(start_page, end_page + 1))
+            print(f"No target pages from router - using fallback: pages {start_page}-{end_page}")
+
+        print(f"Loan Agreement: {total_pages} total pages, extracting pages {pages_to_extract}")
+
+        # 3. IDENTIFY PAGES THAT NEED TEXTRACT OCR
+        # Low-quality pages have garbled text from font encoding issues
+        # These need Textract OCR even if other pages are readable via PyPDF
+        low_quality_pages_to_ocr = []
+        if low_quality_pages:
+            # Filter to only pages we're actually extracting
+            low_quality_pages_to_ocr = [p for p in low_quality_pages if p in pages_to_extract]
+            if low_quality_pages_to_ocr:
+                print(f"Router identified {len(low_quality_pages_to_ocr)} low-quality pages needing OCR: {low_quality_pages_to_ocr}")
+
+        # Separate pages into readable (PyPDF) and low-quality (Textract OCR)
+        readable_pages = [p for p in pages_to_extract if p not in low_quality_pages_to_ocr]
+        print(f"Page breakdown: {len(readable_pages)} readable (PyPDF), {len(low_quality_pages_to_ocr)} low-quality (Textract OCR)")
+
+        # 4. EXTRACT TEXT FROM READABLE PAGES USING PYPDF (fast, free)
+        pypdf_text = ""
+        if readable_pages:
+            print(f"Attempting PyPDF text extraction for readable pages {readable_pages}...")
+            pdf_stream.seek(0)
+            pypdf_text = extract_text_from_pages(pdf_stream, readable_pages)
+            pypdf_text_length = len(pypdf_text.strip())
+            print(f"PyPDF extracted {pypdf_text_length} characters from readable pages")
+        else:
+            pypdf_text_length = 0
+            print("No readable pages - will rely entirely on Textract OCR")
+
+        # 5. DETERMINE IF WE NEED TEXTRACT OCR
+        # Use Textract OCR if: (a) scanned document OR (b) has low-quality pages
+        is_scanned_document = pypdf_text_length < MIN_TEXT_CHARS_FOR_NATIVE and not low_quality_pages_to_ocr
+        needs_ocr_for_low_quality = len(low_quality_pages_to_ocr) > 0
+
+        results = {}
+        extraction_method = "pypdf"
+        ocr_text = ""
+        page_images = []  # Initialize for signature detection later
+
+        if is_scanned_document:
+            # FULLY SCANNED DOCUMENT: Use Textract OCR for all pages
+            print(f"Document appears to be scanned (only {pypdf_text_length} chars from PyPDF)")
+            print("Switching to Textract OCR for raw text extraction...")
+            extraction_method = "textract_ocr"
+
+            # Extract pages as a multi-page PDF for rendering
+            pdf_stream.seek(0)
+            section_bytes = extract_multiple_pages(pdf_stream, pages_to_extract)
+
+            # Render pages to images for Textract
+            page_images = []
+            if PYMUPDF_AVAILABLE:
+                try:
+                    print(f"Rendering {len(pages_to_extract)} pages to images for OCR...")
+                    page_images = render_pdf_pages_to_images(section_bytes)
+                    print(f"Rendered {len(page_images)} page images")
+                except Exception as render_error:
+                    print(f"Image rendering failed: {render_error}")
+                    page_images = []
+
+            if page_images:
+                # Use parallel Textract OCR
+                print(f"Running Textract OCR on {len(page_images)} pages...")
+                ocr_text = extract_raw_text_ocr_parallel(page_images, bucket)
+                ocr_text_length = len(ocr_text.strip())
+                print(f"Textract OCR extracted {ocr_text_length} characters")
+
+                results['rawText'] = ocr_text
+                results['extractionMethod'] = 'textract_ocr'
+                results['ocrTextLength'] = ocr_text_length
+
+                # Also try table extraction for payment schedules
+                if extraction_type in ['TABLES', 'QUERIES_AND_TABLES']:
+                    print(f"Running table extraction across {len(page_images)} pages...")
+                    all_tables, _ = process_pages_tables_parallel(page_images, bucket)
+                    results['tables'] = {'tables': all_tables, 'tableCount': len(all_tables)}
+                    print(f"Table extraction complete: {len(all_tables)} tables found")
+
+            else:
+                # Fallback if image rendering fails
+                print("Image rendering failed, using PyPDF text as fallback")
+                results['rawText'] = pypdf_text
+                results['extractionMethod'] = 'pypdf_fallback'
+                extraction_method = "pypdf_fallback"
+
+        elif needs_ocr_for_low_quality:
+            # MIXED QUALITY DOCUMENT: PyPDF for readable pages, Textract OCR for low-quality pages
+            print(f"Mixed quality document: using PyPDF for {len(readable_pages)} pages, Textract OCR for {len(low_quality_pages_to_ocr)} pages")
+            extraction_method = "hybrid_pypdf_ocr"
+
+            # Extract low-quality pages for Textract OCR
+            pdf_stream.seek(0)
+            low_quality_section_bytes = extract_multiple_pages(pdf_stream, low_quality_pages_to_ocr)
+
+            # Render low-quality pages to images for Textract
+            low_quality_images = []
+            if PYMUPDF_AVAILABLE:
+                try:
+                    print(f"Rendering {len(low_quality_pages_to_ocr)} low-quality pages to images for OCR...")
+                    low_quality_images = render_pdf_pages_to_images(low_quality_section_bytes)
+                    print(f"Rendered {len(low_quality_images)} low-quality page images")
+                except Exception as render_error:
+                    print(f"Image rendering failed for low-quality pages: {render_error}")
+                    low_quality_images = []
+
+            if low_quality_images:
+                # Use parallel Textract OCR for low-quality pages
+                print(f"Running Textract OCR on {len(low_quality_images)} low-quality pages...")
+                ocr_text = extract_raw_text_ocr_parallel(low_quality_images, bucket)
+                ocr_text_length = len(ocr_text.strip())
+                print(f"Textract OCR extracted {ocr_text_length} characters from low-quality pages")
+
+                # COMBINE PyPDF text (readable pages) + OCR text (low-quality pages)
+                # Add clear separation so normalizer can see all content
+                combined_text = ""
+                if pypdf_text.strip():
+                    combined_text += f"=== TEXT FROM READABLE PAGES (PyPDF) ===\n{pypdf_text.strip()}\n\n"
+                if ocr_text.strip():
+                    combined_text += f"=== TEXT FROM OCR PAGES (Textract) ===\n{ocr_text.strip()}"
+
+                results['rawText'] = combined_text.strip()
+                results['extractionMethod'] = 'hybrid_pypdf_ocr'
+                results['pypdfTextLength'] = pypdf_text_length
+                results['ocrTextLength'] = ocr_text_length
+                results['readablePages'] = readable_pages
+                results['ocrPages'] = low_quality_pages_to_ocr
+
+                # Set page_images for signature detection (use low-quality images we already rendered)
+                page_images = low_quality_images
+
+                print(f"Combined text: {len(combined_text)} total chars ({pypdf_text_length} PyPDF + {ocr_text_length} OCR)")
+
+                # Also try table extraction for payment schedules (on low-quality pages)
+                if extraction_type in ['TABLES', 'QUERIES_AND_TABLES']:
+                    print(f"Running table extraction across {len(low_quality_images)} OCR pages...")
+                    all_tables, _ = process_pages_tables_parallel(low_quality_images, bucket)
+                    results['tables'] = {'tables': all_tables, 'tableCount': len(all_tables)}
+                    print(f"Table extraction complete: {len(all_tables)} tables found")
+
+            else:
+                # Fallback if image rendering fails - use PyPDF text only
+                print("Image rendering failed for low-quality pages, using PyPDF text only")
+                results['rawText'] = pypdf_text
+                results['extractionMethod'] = 'pypdf_partial'
+                extraction_method = "pypdf_partial"
+
+        else:
+            # NATIVE TEXT PDF: Use PyPDF text
+            print(f"Document is native text PDF ({pypdf_text_length} chars)")
+            results['rawText'] = pypdf_text
+            results['extractionMethod'] = 'pypdf'
+
+            # For native PDFs, also try Textract queries as supplemental extraction
+            # This provides structured answers that can validate LLM extraction
+            pdf_stream.seek(0)
+            section_bytes = extract_multiple_pages(pdf_stream, pages_to_extract)
+
+            page_images = []
+            if PYMUPDF_AVAILABLE:
+                try:
+                    page_images = render_pdf_pages_to_images(section_bytes)
+                except Exception:
+                    pass
+
+            if page_images and queries and extraction_type in ['QUERIES', 'QUERIES_AND_TABLES']:
+                print(f"Running supplemental Textract queries ({len(queries)} queries)...")
+                if len(page_images) > 1:
+                    all_query_results = process_pages_queries_parallel(page_images, queries, bucket)
+                else:
+                    all_query_results = extract_with_queries(bucket, "", queries, image_bytes=page_images[0])
+
+                query_metadata = all_query_results.pop('_extractionMetadata', {}) if all_query_results else {}
+                results['queries'] = all_query_results
+                results['_queryMetadata'] = query_metadata
+
+                answered_count = len([k for k in all_query_results.keys() if not k.startswith('_') and not k.startswith('error')])
+                print(f"Supplemental query extraction: {answered_count} queries answered")
+
+            # Also try table extraction
+            if page_images and extraction_type in ['TABLES', 'QUERIES_AND_TABLES']:
+                print(f"Running table extraction...")
+                if len(page_images) > 1:
+                    all_tables, _ = process_pages_tables_parallel(page_images, bucket)
+                    results['tables'] = {'tables': all_tables, 'tableCount': len(all_tables)}
+                else:
+                    table_results = extract_tables(bucket, "", image_bytes=page_images[0])
+                    results['tables'] = table_results
+
+        # Ensure tables key exists
+        if 'tables' not in results:
+            results['tables'] = {'tables': [], 'tableCount': 0}
+
+        # 5. SIGNATURE DETECTION (critical for legal document validation)
+        # Loan Agreements require signature validation for legal enforceability
+        # IMPORTANT: Signatures are often on the LAST pages, so we must check those too
+        signatures_result = {'signatures': [], 'signatureCount': 0, 'hasSignatures': False}
+
+        # Collect all page images for signature detection
+        # Include both content pages AND last pages (where signatures typically appear)
+        signature_page_images = list(page_images) if page_images else []
+        signature_page_numbers = list(pages_to_extract)
+
+        # Check if we need to render additional LAST pages for signature detection
+        SIGNATURE_LAST_PAGES = 3  # Check last 3 pages for signatures
+        last_pages_to_check = []
+        if total_pages > end_page:
+            # There are pages beyond our content extraction range
+            last_page_start = max(end_page + 1, total_pages - SIGNATURE_LAST_PAGES + 1)
+            last_pages_to_check = list(range(last_page_start, total_pages + 1))
+            print(f"Document has {total_pages} pages, adding last pages {last_pages_to_check} for signature detection")
+
+            if PYMUPDF_AVAILABLE:
+                try:
+                    # Extract and render the last pages for signature detection
+                    pdf_stream.seek(0)
+                    last_section_bytes = extract_multiple_pages(pdf_stream, last_pages_to_check)
+                    last_page_images = render_pdf_pages_to_images(last_section_bytes)
+
+                    if last_page_images:
+                        # Add to signature detection pages
+                        signature_page_images.extend(last_page_images)
+                        signature_page_numbers.extend(last_pages_to_check)
+                        print(f"Rendered {len(last_page_images)} additional last page(s) for signature detection")
+                except Exception as last_page_error:
+                    print(f"Warning: Could not render last pages for signature detection: {last_page_error}")
+
+        if signature_page_images:
+            print(f"Running signature detection across {len(signature_page_images)} page(s) (pages {signature_page_numbers})...")
+            try:
+                if len(signature_page_images) > 1:
+                    all_signatures = process_pages_signatures_parallel(signature_page_images, bucket)
+
+                    # Remap page numbers: process_pages_signatures_parallel uses image indices (1-based)
+                    # but our images might be from non-contiguous pages (e.g., 1-10 AND 13-15)
+                    # So sourcePage=1 -> signature_page_numbers[0], sourcePage=2 -> signature_page_numbers[1], etc.
+                    for sig in all_signatures:
+                        img_idx = sig.get('sourcePage', 1) - 1  # Convert 1-based to 0-based index
+                        if 0 <= img_idx < len(signature_page_numbers):
+                            sig['sourcePage'] = signature_page_numbers[img_idx]
+
+                    signatures_result = {
+                        'signatures': all_signatures,
+                        'signatureCount': len(all_signatures),
+                        'hasSignatures': len(all_signatures) > 0,
+                    }
+                else:
+                    sig_results = extract_signatures(bucket, "", image_bytes=signature_page_images[0])
+                    if not sig_results.get('error'):
+                        # Add source page number
+                        for sig in sig_results.get('signatures', []):
+                            sig['sourcePage'] = signature_page_numbers[0] if signature_page_numbers else 1
+                        signatures_result = sig_results
+                print(f"Signature detection: found {signatures_result.get('signatureCount', 0)} signature(s)")
+            except Exception as sig_error:
+                print(f"Signature detection failed: {sig_error}")
+
+        results['signatures'] = signatures_result
+
+        # Build combined metadata
+        results['_extractionMetadata'] = {
+            'queries': results.pop('_queryMetadata', {}),
+            'tables': results['tables'].get('_extractionMetadata', {}),
+            'signatures': signatures_result.get('_extractionMetadata', {}),
+            'extractionMethod': extraction_method,
+            'isScannedDocument': is_scanned_document,
+            'pypdfTextLength': pypdf_text_length,
+        }
+
+        # 6. Calculate processing time
+        processing_time = time.time() - start_time
+        print(f"Loan Agreement HYBRID extraction completed in {processing_time:.2f}s (method: {extraction_method})")
+
+        # 7. CRITICAL: Truncate rawText to prevent Step Functions DataLimitExceeded error
+        # Step Functions has 256KB payload limit; with many pages, rawText can exceed this
+        raw_text = results.get('rawText', '')
+        original_raw_text_length = len(raw_text)
+        if original_raw_text_length > MAX_RAW_TEXT_CHARS:
+            truncated_chars = original_raw_text_length - MAX_RAW_TEXT_CHARS
+            results['rawText'] = raw_text[:MAX_RAW_TEXT_CHARS] + f"\n\n... [TRUNCATED: {truncated_chars} chars omitted to fit Step Functions payload limit]"
+            print(f"WARNING: Truncated rawText from {original_raw_text_length} to {MAX_RAW_TEXT_CHARS} chars (-{truncated_chars})")
+            results['rawTextTruncated'] = True
+            results['originalRawTextLength'] = original_raw_text_length
+        else:
+            results['rawTextTruncated'] = False
+
+        return {
+            'documentId': document_id,
+            'contentHash': content_hash,
+            'size': file_size,
+            'key': key,
+            'uploadedAt': uploaded_at,
+            'extractionType': extraction_type,
+            'pageNumber': start_page,
+            'pagesProcessed': len(pages_to_extract),
+            'pageRange': pages_to_extract,
+            'status': 'EXTRACTED',
+            'results': results,
+            'usedImageRendering': PYMUPDF_AVAILABLE,
+            'isLoanAgreement': True,
+            'isScannedDocument': is_scanned_document,
+            'extractionMethod': extraction_method,
+            'processingTimeSeconds': round(processing_time, 2),
+            'routerTokenUsage': router_token_usage,  # Pass through for cost calculation
+            'metadata': {
+                'sourceKey': key,
+                'sourcePage': start_page,
+                'totalPagesInDocument': total_pages,
+                'pagesExtracted': len(pages_to_extract),
+                'extractionApproach': 'hybrid_ocr_llm' if is_scanned_document else 'native_text_llm',
+            },
+        }
+
+    except Exception as e:
+        print(f"Error in Loan Agreement HYBRID extraction: {str(e)}")
+        raise
+
+
 def lambda_handler(event, context):
     """Main Lambda handler for targeted document extraction.
 
@@ -1543,6 +2100,9 @@ def lambda_handler(event, context):
     content_hash = event.get('contentHash')
     file_size = event.get('size')
 
+    # CRITICAL: Pass through REAL router token usage for accurate cost calculation
+    router_token_usage = event.get('routerTokenUsage')
+
     # Check if this is Credit Agreement section extraction
     credit_agreement_section = event.get('creditAgreementSection')
     section_pages = event.get('sectionPages', [])
@@ -1562,6 +2122,7 @@ def lambda_handler(event, context):
                 'status': 'SKIPPED',
                 'reason': f"No pages identified for section '{credit_agreement_section}'",
                 'results': None,
+                'routerTokenUsage': router_token_usage,  # Pass through for cost calculation
             }
 
         try:
@@ -1584,6 +2145,7 @@ def lambda_handler(event, context):
             result['contentHash'] = content_hash
             result['size'] = file_size
             result['key'] = key
+            result['routerTokenUsage'] = router_token_usage  # Pass through for cost calculation
             result['metadata'] = {
                 'sourceKey': key,
                 'sectionName': credit_agreement_section,
@@ -1600,6 +2162,8 @@ def lambda_handler(event, context):
     page_number = event.get('pageNumber')
     extraction_type = event.get('extractionType', 'QUERIES')
     queries = event.get('queries', [])
+    is_loan_agreement = event.get('isLoanAgreement', False)  # Marker for loan agreement docs
+    uploaded_at = event.get('uploadedAt')
 
     # Handle null page number (document type not found)
     if page_number is None:
@@ -1614,7 +2178,54 @@ def lambda_handler(event, context):
             'status': 'SKIPPED',
             'reason': 'Document type not found in classification',
             'results': None,
+            'routerTokenUsage': router_token_usage,  # Pass through for cost calculation
         }
+
+    # LOAN AGREEMENT MULTI-PAGE EXTRACTION
+    # Use router-provided section page ranges for intelligent extraction
+    # Falls back to first N pages if router didn't provide sections
+    if is_loan_agreement:
+        print(f"Loan Agreement detected - using multi-page extraction mode")
+
+        # Extract target pages from router-provided loanAgreementSections
+        loan_agreement_sections = event.get('loanAgreementSections', {})
+        sections = loan_agreement_sections.get('sections', {})
+
+        target_pages = None
+        if sections:
+            # Collect all unique pages from all sections
+            all_section_pages = set()
+            for section_name, page_list in sections.items():
+                if isinstance(page_list, list):
+                    all_section_pages.update(page_list)
+                    print(f"  Section '{section_name}': pages {page_list}")
+
+            if all_section_pages:
+                target_pages = sorted(list(all_section_pages))
+                print(f"Loan Agreement: Router identified {len(target_pages)} target pages: {target_pages}")
+        else:
+            print("Loan Agreement: No sections from router - will use fallback page range")
+
+        # Extract low-quality pages from router output (top-level field)
+        # These pages have garbled text (font encoding issues) and need Textract OCR
+        low_quality_pages = event.get('lowQualityPages', [])
+        if low_quality_pages:
+            print(f"Loan Agreement: Router identified {len(low_quality_pages)} low-quality pages needing OCR: {low_quality_pages}")
+
+        return extract_loan_agreement_multi_page(
+            bucket=bucket,
+            key=key,
+            document_id=document_id,
+            start_page=page_number,
+            queries=queries,
+            extraction_type=extraction_type,
+            content_hash=content_hash,
+            file_size=file_size,
+            uploaded_at=uploaded_at,
+            target_pages=target_pages,
+            router_token_usage=router_token_usage,  # Pass through for cost calculation
+            low_quality_pages=low_quality_pages,  # Pages needing Textract OCR
+        )
 
     print(f"Extracting page {page_number} from s3://{bucket}/{key} using {extraction_type}")
 
@@ -1673,25 +2284,89 @@ def lambda_handler(event, context):
             else:
                 results = extract_forms(bucket, temp_key)
 
+        elif extraction_type == 'QUERIES_AND_TABLES':
+            # Combined extraction for documents that need both queries and tables
+            # (e.g., Closing Disclosure which has structured tables AND specific fields)
+            if not queries:
+                raise ValueError("QUERIES_AND_TABLES extraction requires a list of queries")
+            print(f"Running combined Textract Queries + Tables extraction...")
+
+            # Run queries extraction
+            if image_bytes:
+                query_results = extract_with_queries(bucket, "", queries, image_bytes=image_bytes)
+            else:
+                query_results = extract_with_queries(bucket, temp_key, queries)
+
+            # Run tables extraction
+            if image_bytes:
+                table_results = extract_tables(bucket, "", image_bytes=image_bytes)
+            else:
+                table_results = extract_tables(bucket, temp_key)
+
+            # Combine results
+            # Note: extract_with_queries returns a flat dict where keys are query texts
+            # and values are {answer, confidence, ...} dicts, plus _extractionMetadata
+            # extract_tables returns {'tables': [...], 'tableCount': N, ...}
+            query_metadata = query_results.pop('_extractionMetadata', {}) if query_results else {}
+            table_metadata = table_results.get('_extractionMetadata', {}) if table_results else {}
+
+            results = {
+                'queries': query_results if query_results else {},  # Dict of query_text -> result
+                'tables': table_results if table_results else {'tables': [], 'tableCount': 0},
+                '_extractionMetadata': {
+                    'queries': query_metadata,
+                    'tables': table_metadata,
+                },
+            }
+            query_count = len([k for k in results['queries'].keys() if not k.startswith('_')])
+            table_count = results['tables'].get('tableCount', 0)
+            print(f"Combined extraction: {query_count} queries, {table_count} tables")
+
         else:
             raise ValueError(f"Unknown extraction type: {extraction_type}")
 
-        # 6. Clean up temp file if we created one
+        # 6. SIGNATURE DETECTION (critical for legal document validation)
+        # All financial documents (promissory notes, etc.) require signature validation
+        signatures_result = {'signatures': [], 'signatureCount': 0, 'hasSignatures': False}
+        print("Running signature detection for document validation...")
+        try:
+            if image_bytes:
+                sig_results = extract_signatures(bucket, "", image_bytes=image_bytes)
+            else:
+                sig_results = extract_signatures(bucket, temp_key)
+
+            if not sig_results.get('error'):
+                signatures_result = sig_results
+                print(f"Signature detection: found {signatures_result.get('signatureCount', 0)} signature(s)")
+            else:
+                print(f"Signature detection warning: {sig_results.get('error')}")
+        except Exception as sig_error:
+            print(f"Signature detection failed: {sig_error}")
+
+        # Add signatures to results
+        if results is None:
+            results = {}
+        results['signatures'] = signatures_result
+
+        # 7. Clean up temp file if we created one
         if temp_key:
             s3_client.delete_object(Bucket=bucket, Key=temp_key)
             print("Cleaned up temp file")
 
-        # 7. Return results
+        # 8. Return results
         return {
             'documentId': document_id,
             'contentHash': content_hash,
             'size': file_size,
             'key': key,
+            'uploadedAt': uploaded_at,
             'extractionType': extraction_type,
             'pageNumber': page_number,
             'status': 'EXTRACTED',
             'results': results,
             'usedImageRendering': used_image_rendering,
+            'isLoanAgreement': is_loan_agreement,  # Pass through marker for normalizer
+            'routerTokenUsage': router_token_usage,  # Pass through for cost calculation
             'metadata': {
                 'sourceKey': key,
                 'sourcePage': page_number,

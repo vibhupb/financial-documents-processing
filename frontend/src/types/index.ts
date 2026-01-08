@@ -1,6 +1,6 @@
 export interface Document {
   documentId: string;
-  documentType: 'LOAN_PACKAGE' | 'CREDIT_AGREEMENT';
+  documentType: 'LOAN_PACKAGE' | 'CREDIT_AGREEMENT' | 'LOAN_AGREEMENT';
   status: ProcessingStatus;
   reviewStatus?: ReviewStatus;
   createdAt: string;
@@ -11,6 +11,7 @@ export interface Document {
   extractedData?: LoanData | CreditAgreementData;
   data?: LoanData;
   validation?: ValidationResult;
+  signatureValidation?: SignatureValidation;
   classification?: DocumentClassification;
   reviewedBy?: string;
   reviewedAt?: string;
@@ -25,29 +26,34 @@ export interface Document {
 export interface ProcessingCost {
   totalCost: number;
   currency: string;
+  allCostsReal?: boolean; // True only if ALL cost components are from real measurements
   breakdown: {
     router: {
       model: string;
       inputTokens: number;
       outputTokens: number;
       cost: number;
+      isReal?: boolean; // True = from Bedrock API, False = estimated
     };
     textract: {
       pages: number;
       costPerPage: number;
       cost: number;
+      isReal?: boolean; // Always true - counted from extractions
     };
     normalizer: {
       model: string;
       inputTokens: number;
       outputTokens: number;
       cost: number;
+      isReal?: boolean; // Always true - from Bedrock API in normalizer Lambda
     };
     // Optional AWS infrastructure costs
     stepFunctions?: {
       stateTransitions: number;
       costPerTransition: number;
       cost: number;
+      isReal?: boolean; // True - deterministic based on workflow path
     };
     lambda?: {
       invocations: number;
@@ -57,6 +63,7 @@ export interface ProcessingCost {
       invocationCost: number;
       computeCost: number;
       cost: number;
+      isReal?: boolean; // False - duration is estimated
     };
   };
 }
@@ -64,23 +71,52 @@ export interface ProcessingCost {
 // Processing time breakdown for a document
 export interface ProcessingTime {
   totalSeconds: number;
+  totalSecondsIsReal?: boolean; // True if measured from uploadedAt to completedAt
   startedAt?: string;
   completedAt: string;
+  note?: string; // Explains which values are real vs estimated
   breakdown: {
     router: {
       estimatedSeconds: number;
       description: string;
+      isEstimated?: boolean; // True - phase breakdown is approximated
     };
     textract: {
       estimatedSeconds: number;
       pages: number;
       description: string;
+      isEstimated?: boolean; // True - phase breakdown is approximated
     };
     normalizer: {
       estimatedSeconds: number;
       description: string;
+      isEstimated?: boolean; // True - phase breakdown is approximated
     };
   };
+}
+
+// Signature validation for all document types
+export type SignatureValidationStatus = 'SIGNED' | 'UNSIGNED' | 'PARTIAL';
+
+export interface SignatureValidation {
+  hasSignatures: boolean;
+  signatureCount: number;
+  highConfidenceCount: number;
+  lowConfidenceCount: number;
+  pagesWithSignatures: number[];
+  validationStatus: SignatureValidationStatus;
+  signatures: Array<{
+    confidence: number;
+    meetsThreshold: boolean;
+    boundingBox?: {
+      left: number;
+      top: number;
+      width: number;
+      height: number;
+    };
+    sourcePage?: number;
+    sourceSection?: string;
+  }>;
 }
 
 export type ProcessingStatus =
@@ -124,6 +160,7 @@ export interface LoanData {
   closingDisclosure?: ClosingDisclosureData;
   form1003?: Form1003Data;
   creditAgreement?: CreditAgreement;
+  loanAgreement?: LoanAgreementData;
 }
 
 export interface PromissoryNoteData {
@@ -171,6 +208,97 @@ export interface Form1003Data {
     position?: ExtractedField<string>;
     yearsEmployed?: ExtractedField<number>;
     monthlyIncome?: ExtractedField<number>;
+  };
+}
+
+// Loan Agreement (simple business/personal loans)
+export interface LoanAgreementData {
+  documentInfo?: {
+    documentType?: string;
+    loanNumber?: string;
+    agreementDate?: string;
+    effectiveDate?: string;
+    closingDate?: string;
+  };
+  loanTerms?: {
+    loanAmount?: number;
+    creditLimit?: number;
+    interestRate?: number;
+    annualPercentageRate?: number;
+    isFixedRate?: boolean;
+    maturityDate?: string;
+    loanTermMonths?: number;
+  };
+  interestDetails?: {
+    rateType?: string;
+    indexRate?: string;
+    margin?: number;
+    floor?: number;
+    ceiling?: number;
+    defaultRate?: number;
+    dayCountBasis?: string;
+  };
+  paymentInfo?: {
+    monthlyPayment?: number;
+    firstPaymentDate?: string;
+    paymentDueDay?: number;
+    paymentFrequency?: string;
+    numberOfPayments?: number;
+    balloonPayment?: number;
+  };
+  parties?: {
+    borrower?: {
+      name?: string;
+      address?: string;
+    };
+    guarantor?: {
+      name?: string;
+      address?: string;
+    };
+    lender?: {
+      name?: string;
+      address?: string;
+    };
+  };
+  security?: {
+    isSecured?: boolean;
+    collateralDescription?: string;
+    propertyAddress?: string;
+  };
+  fees?: {
+    originationFee?: number;
+    latePaymentFee?: number;
+    gracePeriodDays?: number;
+    closingCosts?: number;
+    annualFee?: number;
+  };
+  prepayment?: {
+    hasPenalty?: boolean;
+    penaltyTerms?: string;
+  };
+  covenants?: {
+    financialCovenants?: string[];
+    debtServiceCoverageRatio?: number;
+    currentRatio?: number;
+  };
+  repayment?: {
+    schedule?: string;
+    principalReductions?: string;
+    interestOnlyPeriod?: string;
+  };
+  default?: {
+    eventsOfDefault?: string[];
+    remedies?: string[];
+  };
+  _extractedCodes?: {
+    instrumentType?: string;
+    interestRateType?: string;
+    rateIndex?: string;
+    rateCalculationMethod?: string;
+    billingType?: string;
+    billingFrequency?: string;
+    prepaymentIndicator?: string;
+    currency?: string;
   };
 }
 
