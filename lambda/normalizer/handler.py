@@ -2316,30 +2316,70 @@ def lambda_handler(event, context):
         # 3. Calculate Textract pages from extractions
         # Different document types report page counts differently:
         # - Credit Agreement sections: pageCount field
-        # - Loan Agreement (HYBRID): pagesProcessed + extractionMethod
+        # - Loan Agreement (HYBRID): varies by extractionMethod
+        #   - textract_ocr: ALL pages processed with Textract OCR
+        #   - hybrid_pypdf_ocr: ONLY low-quality pages processed with Textract OCR
+        #   - pypdf: May use Textract queries for supplemental extraction
         # - Mortgage docs: single pageNumber
         textract_pages = 0
         for ext in extractions:
             if isinstance(ext, dict):
                 # LOAN_AGREEMENT (HYBRID extraction): check extractionMethod
-                # Only count pages if Textract OCR was used (pypdf is free)
                 if ext.get('isLoanAgreement'):
                     extraction_method = ext.get('extractionMethod', '')
+                    results = ext.get('results', {}) or {}
+
                     if extraction_method == 'textract_ocr':
-                        # Textract OCR was used - count actual pages processed
+                        # Textract OCR was used for ALL pages - fully scanned document
                         pages_processed = ext.get('pagesProcessed', 0)
                         if pages_processed:
                             textract_pages += pages_processed
-                            print(f"Loan Agreement Textract OCR: {pages_processed} pages")
+                            print(f"Loan Agreement Textract OCR (scanned): {pages_processed} pages")
                         else:
                             # Fallback to metadata if pagesProcessed not at top level
                             metadata = ext.get('metadata', {})
                             pages_extracted = metadata.get('pagesExtracted', 1)
                             textract_pages += pages_extracted
                             print(f"Loan Agreement Textract OCR (from metadata): {pages_extracted} pages")
+
+                    elif extraction_method == 'hybrid_pypdf_ocr':
+                        # Hybrid mode: Textract OCR was used ONLY for low-quality pages
+                        # PyPDF was used for readable pages (free)
+                        ocr_pages = results.get('ocrPages', [])
+                        if ocr_pages:
+                            textract_pages += len(ocr_pages)
+                            print(f"Loan Agreement Hybrid OCR: {len(ocr_pages)} pages (OCR'd: {ocr_pages})")
+                        else:
+                            # Fallback: check ocrTextLength as indicator Textract was used
+                            if results.get('ocrTextLength', 0) > 0:
+                                # Can't determine exact page count, estimate 1
+                                textract_pages += 1
+                                print(f"Loan Agreement Hybrid OCR: estimated 1 page (ocrTextLength={results.get('ocrTextLength')})")
+
+                    elif extraction_method == 'pypdf':
+                        # Native text PDF - check if Textract queries were used as supplemental
+                        queries = results.get('queries', {})
+                        if queries and isinstance(queries, dict):
+                            # Textract queries were run for supplemental extraction
+                            # Count pages that were processed (from pageRange)
+                            page_range = ext.get('pageRange', [])
+                            if page_range:
+                                textract_pages += len(page_range)
+                                print(f"Loan Agreement PyPDF + Textract queries: {len(page_range)} pages")
+                            else:
+                                # Fallback to pagesProcessed
+                                pages_processed = ext.get('pagesProcessed', 0)
+                                if pages_processed:
+                                    textract_pages += pages_processed
+                                    print(f"Loan Agreement PyPDF + Textract queries: {pages_processed} pages")
+                        else:
+                            # Pure PyPDF extraction - no Textract cost
+                            print(f"Loan Agreement used {extraction_method} - no Textract cost")
+
                     else:
-                        # PyPDF extraction - no Textract cost
+                        # Other methods (pypdf_fallback, pypdf_partial) - no Textract cost
                         print(f"Loan Agreement used {extraction_method} - no Textract cost")
+
                 # Credit Agreement sections have pageCount
                 elif ext.get('pageCount'):
                     textract_pages += ext['pageCount']
