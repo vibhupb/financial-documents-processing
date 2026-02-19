@@ -5,6 +5,7 @@ import type { Document, ReviewDocumentResponse, ValidationResult, SignatureValid
 import PDFViewer from '../components/PDFViewer';
 import StatusBadge from '../components/StatusBadge';
 import ProcessingMetricsPanel from '../components/ProcessingMetricsPanel';
+import BSAProfileFields from '../components/BSAProfileFields';
 
 export default function ReviewDocument() {
   const { documentId } = useParams<{ documentId: string }>();
@@ -969,10 +970,11 @@ export default function ReviewDocument() {
   function renderExtractedData(data: Record<string, unknown> | undefined) {
     if (!data) return null;
 
-    // Check if this is Credit Agreement or Loan Agreement data
+    // Check document type for formatted rendering
     const creditAgreement = data.creditAgreement as Record<string, unknown> | undefined;
     const loanAgreement = data.loanAgreement as Record<string, unknown> | undefined;
-    const hasFormattedView = !!creditAgreement || !!loanAgreement;
+    const bsaProfile = data.bsaProfile as Record<string, unknown> | undefined;
+    const hasFormattedView = !!creditAgreement || !!loanAgreement || !!bsaProfile;
 
     return (
       <div className="bg-white shadow rounded-lg p-4">
@@ -1008,6 +1010,8 @@ export default function ReviewDocument() {
             <pre className="text-xs text-gray-700 whitespace-pre-wrap bg-gray-50 p-3 rounded">
               {JSON.stringify(data, null, 2)}
             </pre>
+          ) : bsaProfile ? (
+            <BSAProfileFields data={bsaProfile} />
           ) : creditAgreement ? (
             renderCreditAgreementData(creditAgreement)
           ) : loanAgreement ? (
