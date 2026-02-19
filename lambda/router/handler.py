@@ -2075,6 +2075,14 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                     extraction_plan = build_extraction_plan(
                         plugin, section_result, page_snippets
                     )
+                    # Inject document-level fields into each plan item
+                    # (Map state itemSelector passes these to ExtractSection Lambda)
+                    for item in extraction_plan:
+                        item["documentId"] = document_id
+                        item["bucket"] = bucket
+                        item["key"] = key
+                        item["contentHash"] = content_hash
+                        item["size"] = file_size
                     result["extractionPlan"] = extraction_plan
                     result["pluginId"] = plugin_id
                     result["metadata"]["pluginId"] = plugin_id
