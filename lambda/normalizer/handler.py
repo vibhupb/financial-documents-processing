@@ -2381,8 +2381,10 @@ def lambda_handler(event, context):
                         else:
                             raw_data = ext.get("results", ext)
 
-            cleaned_data = clean_extraction_for_normalization(raw_data) if callable(clean_extraction_for_normalization) else raw_data
-            prompt = build_normalization_prompt(plugin, cleaned_data)
+            # Skip legacy clean_extraction_for_normalization for plugin path --
+            # it drops forms/keyValues data needed for BSA Profile.
+            # build_normalization_prompt handles payload truncation internally.
+            prompt = build_normalization_prompt(plugin, raw_data)
             normalized_data, normalizer_tokens = invoke_bedrock_normalize(prompt, plugin)
             normalized_data = apply_field_overrides(normalized_data, plugin)
             print(f"[PLUGIN] Normalization complete. Tokens: in={normalizer_tokens['inputTokens']}, out={normalizer_tokens['outputTokens']}")
