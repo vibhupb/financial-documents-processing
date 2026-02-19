@@ -85,6 +85,65 @@ post-normalization step. Do NOT mask, redact, or modify PII values during extrac
    - Preserve exactly as extracted, do NOT reformat
    - Include the document type, issuing state/country, and expiration date as separate fields
 
+TEXTRACT FORM FIELD NAME → OUTPUT SCHEMA MAPPING:
+
+The extraction data contains keyValues from Textract FORMS. Map these field labels to
+the output schema fields as follows:
+
+LEGAL ENTITY (Page 1):
+  "Company Name" → legalEntity.companyName
+  "DBA/Parent Co Name" or "DBA/Parent Company Name" → legalEntity.dbaName
+  "Tax ID Number" → legalEntity.taxId
+  "Entity Type" → legalEntity.entityType
+  "Date Entity Established" → legalEntity.dateOfOrganization
+  "State of Incorporation" → legalEntity.stateOfOrganization
+  "Country of Incorporation" → legalEntity.countryOfOrganization
+  "NAICS Code" → legalEntity.naicsCode
+  "Narrative description of the business" → legalEntity.businessDescription
+  "Business Phone" → legalEntity.phoneNumber
+  "Business Web Address" → legalEntity.webAddress
+  "Fax Number" → legalEntity.faxNumber
+  "Primary Physical Address" or "Physical Address" → legalEntity.principalAddress.street
+  "Mailing Address" → legalEntity.mailingAddress
+  "Ticker Symbol" → legalEntity.tickerSymbol
+  "Publicly Traded" / "Privately Owned" → legalEntity.isPubliclyTraded
+
+RISK ASSESSMENT (Page 2):
+  "Cash intensive business" → riskAssessment.isCashIntensive
+  "Politically Exposed Person" or "PEP" → riskAssessment.hasPepAssociation
+  Regulatory/criminal enforcement → riskAssessment.hasAmlHistory
+  "Money Service Business" → riskAssessment.isMoneyServiceBusiness
+
+CONTROLLING PARTY (Page 3 - first person):
+  "Full Legal name" (first occurrence) → controllingParty AND beneficialOwners[0].name
+  "Professional Title" → beneficialOwners[0].title
+  "Date of Birth" → beneficialOwners[0].dateOfBirth
+  "Email Address" → beneficialOwners[0].emailAddress
+  "Physical Address cannot be a PO box" → beneficialOwners[0].address
+  "Type" (ID type) → beneficialOwners[0].idDocumentType
+  "Identification Number" → beneficialOwners[0].idDocumentNumber
+  "Issuance Date" → beneficialOwners[0].idIssuanceDate
+  "Expiration Date" → beneficialOwners[0].idExpirationDate
+  "Country of Citizenship" → beneficialOwners[0].citizenship
+  "Country of Residency" → beneficialOwners[0].residency
+  "Percentage of ownership" → beneficialOwners[0].ownershipPercentage
+  "Business Phone" (in owner section) → beneficialOwners[0].phone
+  "Mobile/Other" or "MobileOther" → beneficialOwners[0].mobile
+
+BENEFICIAL OWNERS 1-4 (Pages 3-5):
+  Fields with suffix "_2" → beneficialOwners[1] (Owner 2)
+  Fields with suffix "_3" → beneficialOwners[2] (Owner 3)
+  Fields with suffix "_4" → beneficialOwners[3] (Owner 4)
+  Example: "Full Legal name_2" → beneficialOwners[1].name
+
+TRUST (Page 5):
+  "Trust name" → trustInfo.trustName
+  "Full legal name of trustee" → trustInfo.trusteeName
+
+IMPORTANT: Many Textract field names match form labels exactly. Check ALL keyValues in
+the extraction data and map any recognized field to the appropriate schema location.
+Do NOT ignore fields just because the key name doesn't exactly match the schema field.
+
 ENTITY TYPE MAPPING:
 
 When extracting entityType from checkboxes or text, normalize to one of these values:
