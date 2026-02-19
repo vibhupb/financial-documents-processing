@@ -1,63 +1,73 @@
 #!/bin/bash
 # Local testing script for Lambda functions
 
-set -e
+source "$(dirname "$0")/common.sh"
 
-echo "========================================"
-echo "Local Testing - Financial Doc Processing"
-echo "========================================"
+print_banner "Local Testing"
+
+cd "$PROJECT_ROOT"
 
 # Test Router Lambda
-echo ""
-echo "Testing Router Lambda..."
+info "Testing Router Lambda..."
 cd lambda/router
-python -c "
+uv run python -c "
 import sys
 sys.path.insert(0, '../layers/pypdf/python')
+sys.path.insert(0, '../layers/plugins/python')
 try:
     import handler
-    print('Router Lambda syntax OK')
+    print('  Router Lambda syntax OK')
 except ImportError as e:
-    print(f'Note: {e} - run layer build first')
+    print(f'  Note: {e} - run layer build first')
 "
-cd ../..
+cd "$PROJECT_ROOT"
 
 # Test Extractor Lambda
-echo ""
-echo "Testing Extractor Lambda..."
+info "Testing Extractor Lambda..."
 cd lambda/extractor
-python -c "
+uv run python -c "
 import sys
 sys.path.insert(0, '../layers/pypdf/python')
+sys.path.insert(0, '../layers/plugins/python')
 try:
     import handler
-    print('Extractor Lambda syntax OK')
+    print('  Extractor Lambda syntax OK')
 except ImportError as e:
-    print(f'Note: {e} - run layer build first')
+    print(f'  Note: {e} - run layer build first')
 "
-cd ../..
+cd "$PROJECT_ROOT"
 
 # Test Normalizer Lambda
-echo ""
-echo "Testing Normalizer Lambda..."
+info "Testing Normalizer Lambda..."
 cd lambda/normalizer
-python -c "
+uv run python -c "
+import sys
+sys.path.insert(0, '../layers/plugins/python')
 import handler
-print('Normalizer Lambda syntax OK')
+print('  Normalizer Lambda syntax OK')
 "
-cd ../..
+cd "$PROJECT_ROOT"
 
 # Test Trigger Lambda
-echo ""
-echo "Testing Trigger Lambda..."
+info "Testing Trigger Lambda..."
 cd lambda/trigger
-python -c "
+uv run python -c "
 import handler
-print('Trigger Lambda syntax OK')
+print('  Trigger Lambda syntax OK')
 "
-cd ../..
+cd "$PROJECT_ROOT"
+
+# Test Plugin Registry
+info "Testing Plugin Registry..."
+uv run python -c "
+import sys
+sys.path.insert(0, 'lambda/layers/plugins/python')
+from document_plugins.registry import get_all_plugins
+plugins = get_all_plugins()
+print(f'  Plugin registry OK: {len(plugins)} plugins discovered')
+for pid in sorted(plugins.keys()):
+    print(f'    - {pid}: {plugins[pid].get(\"name\", \"unnamed\")}')
+"
 
 echo ""
-echo "========================================"
-echo "All Lambda syntax checks passed!"
-echo "========================================"
+success "All Lambda syntax checks passed!"

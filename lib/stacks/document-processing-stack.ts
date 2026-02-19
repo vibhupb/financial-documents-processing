@@ -10,6 +10,8 @@ import * as logs from 'aws-cdk-lib/aws-logs';
 import * as apigateway from 'aws-cdk-lib/aws-apigateway';
 import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
 import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
+import * as kms from 'aws-cdk-lib/aws-kms';
+import * as cognito from 'aws-cdk-lib/aws-cognito';
 import { Construct } from 'constructs';
 import * as path from 'path';
 
@@ -55,6 +57,11 @@ export class DocumentProcessingStack extends cdk.Stack {
         {
           id: 'CleanupTempFiles',
           prefix: 'temp/',
+          expiration: cdk.Duration.days(1),
+        },
+        {
+          id: 'CleanupExtractionIntermediates',
+          prefix: 'extractions/',
           expiration: cdk.Duration.days(1),
         },
       ],
@@ -118,6 +125,13 @@ export class DocumentProcessingStack extends cdk.Stack {
       description: 'PyPDF library for PDF text extraction',
     });
 
+    // Plugins Layer for document type configurations
+    const pluginsLayer = new lambda.LayerVersion(this, 'PluginsLayer', {
+      code: lambda.Code.fromAsset(path.join(__dirname, '../../lambda/layers/plugins')),
+      compatibleRuntimes: [lambda.Runtime.PYTHON_3_13],
+      description: 'Document type plugin configurations (classification, extraction, normalization)',
+    });
+
     // ==========================================
     // Layer 2: Router Lambda (Classification)
     // ==========================================
@@ -127,13 +141,14 @@ export class DocumentProcessingStack extends cdk.Stack {
       runtime: lambda.Runtime.PYTHON_3_13,
       handler: 'handler.lambda_handler',
       code: lambda.Code.fromAsset(path.join(__dirname, '../../lambda/router')),
-      layers: [pypdfLayer],
+      layers: [pypdfLayer, pluginsLayer],
       memorySize: 2048,  // 2GB = 1 vCPU - faster PyPDF text extraction (CPU-bound)
       timeout: cdk.Duration.minutes(5),
       environment: {
         BUCKET_NAME: documentBucket.bucketName,
         TABLE_NAME: documentTable.tableName,  // For status updates
         BEDROCK_MODEL_ID: 'us.anthropic.claude-3-haiku-20240307-v1:0',
+        ROUTER_OUTPUT_FORMAT: 'dual',  // Emit both legacy keys AND extractionPlan
       },
       tracing: lambda.Tracing.ACTIVE,
     });
@@ -156,7 +171,7 @@ export class DocumentProcessingStack extends cdk.Stack {
       runtime: lambda.Runtime.PYTHON_3_13,
       handler: 'handler.lambda_handler',
       code: lambda.Code.fromAsset(path.join(__dirname, '../../lambda/extractor')),
-      layers: [pypdfLayer],
+      layers: [pypdfLayer, pluginsLayer],
       memorySize: 2048,  // 2GB provides 2x CPU for faster PDF rendering with 30 parallel workers
       timeout: cdk.Duration.minutes(10),  // Increased for large sections
       environment: {
@@ -194,6 +209,7 @@ export class DocumentProcessingStack extends cdk.Stack {
       runtime: lambda.Runtime.PYTHON_3_13,
       handler: 'handler.lambda_handler',
       code: lambda.Code.fromAsset(path.join(__dirname, '../../lambda/normalizer')),
+      layers: [pluginsLayer],
       memorySize: 2048,  // 2GB = 1 vCPU - faster JSON parsing and processing
       timeout: cdk.Duration.minutes(5),  // Haiku is fast
       environment: {
@@ -747,12 +763,74 @@ export class DocumentProcessingStack extends cdk.Stack {
     });
 
     // ==========================================
-    // Document Type Routing (Choice State)
+    // Plugin-Driven Map State (Phase 3)
     // ==========================================
 
-    // Choice state to route based on primary document type
-    const documentTypeChoice = new sfn.Choice(this, 'DocumentTypeChoice', {
-      comment: 'Route based on the primary document type detected by the router',
+    // Per-iteration failure handler for Map state
+    const sectionExtractionFailed = new sfn.Pass(this, 'SectionExtractionFailed', {
+      result: sfn.Result.fromObject({
+        status: 'SECTION_FAILED',
+        error: 'Extraction failed for this section',
+      }),
+    });
+
+    // Inner LambdaInvoke for each Map iteration
+    const extractSection = new tasks.LambdaInvoke(this, 'ExtractSection', {
+      lambdaFunction: extractorLambda,
+      payload: sfn.TaskInput.fromObject({
+        'documentId.$': '$.sectionConfig.documentId',
+        'bucket.$': '$.sectionConfig.bucket',
+        'key.$': '$.sectionConfig.key',
+        'contentHash.$': '$.sectionConfig.contentHash',
+        'size.$': '$.sectionConfig.size',
+        'sectionConfig.$': '$.sectionConfig',
+        'pluginId.$': '$.sectionConfig.pluginId',
+      }),
+      outputPath: '$.Payload',
+      retryOnServiceExceptions: false,
+    });
+
+    // Explicit retry for Textract throttling
+    extractSection.addRetry({
+      errors: [
+        'ThrottlingException',
+        'ProvisionedThroughputExceededException',
+        'LimitExceededException',
+        'Lambda.TooManyRequestsException',
+      ],
+      interval: cdk.Duration.seconds(2),
+      maxAttempts: 3,
+      backoffRate: 2.0,
+    });
+
+    // Per-iteration catch
+    extractSection.addCatch(sectionExtractionFailed, {
+      resultPath: '$.sectionError',
+    });
+
+    // Map state iterates over extraction plan from router
+    const mapExtraction = new sfn.Map(this, 'MapExtraction', {
+      comment: 'Plugin-driven: iterate over extraction plan sections from router',
+      maxConcurrency: 10,
+      itemsPath: '$.extractionPlan',
+      itemSelector: {
+        'sectionConfig.$': '$$.Map.Item.Value',
+      },
+      resultPath: '$.extractions',
+    });
+
+    mapExtraction.itemProcessor(extractSection);
+
+    // Map extraction -> normalize
+    mapExtraction.next(normalizeData);
+
+    // ==========================================
+    // Document Type Routing (Blue/Green)
+    // ==========================================
+
+    // Legacy choice state (retained for blue/green transition)
+    const legacyDocumentTypeChoice = new sfn.Choice(this, 'LegacyDocumentTypeChoice', {
+      comment: 'Legacy routing based on classification output (Parallel branches)',
     });
 
     // Credit Agreement path: parallel section extraction -> normalize
@@ -764,23 +842,30 @@ export class DocumentProcessingStack extends cdk.Stack {
     // Mortgage document path: parallel extraction -> normalize
     parallelMortgageExtraction.next(normalizeData);
 
-    // Build the state machine with document type routing
-    // Priority: Credit Agreement (complex syndicated) > Loan Agreement (simple) > Mortgage/Other
-    // Note: Loan Agreement routing now checks for loanAgreementSections (not just classification)
-    // to ensure intelligent page selection is available. Documents classified before this change
-    // will need to be reprocessed to get loanAgreementSections.
-    const definition = classifyDocument.next(
-      documentTypeChoice
-        .when(
-          sfn.Condition.isPresent('$.creditAgreementSections'),
-          parallelCreditAgreementExtraction
-        )
-        .when(
-          sfn.Condition.isPresent('$.loanAgreementSections'),
-          parallelLoanAgreementExtraction
-        )
-        .otherwise(parallelMortgageExtraction)
-    );
+    legacyDocumentTypeChoice
+      .when(
+        sfn.Condition.isPresent('$.creditAgreementSections'),
+        parallelCreditAgreementExtraction
+      )
+      .when(
+        sfn.Condition.isPresent('$.loanAgreementSections'),
+        parallelLoanAgreementExtraction
+      )
+      .otherwise(parallelMortgageExtraction);
+
+    // Primary choice: extractionPlan present -> Map; otherwise -> legacy
+    const extractionRouteChoice = new sfn.Choice(this, 'ExtractionRouteChoice', {
+      comment: 'Blue/green: use plugin Map if router emits extractionPlan, else legacy Parallel',
+    });
+
+    extractionRouteChoice
+      .when(
+        sfn.Condition.isPresent('$.extractionPlan'),
+        mapExtraction
+      )
+      .otherwise(legacyDocumentTypeChoice);
+
+    const definition = classifyDocument.next(extractionRouteChoice);
 
     // Normalize leads to processing complete
     normalizeData.next(processingComplete);
@@ -796,6 +881,9 @@ export class DocumentProcessingStack extends cdk.Stack {
       resultPath: '$.error',
     });
     parallelMortgageExtraction.addCatch(handleError, {
+      resultPath: '$.error',
+    });
+    mapExtraction.addCatch(handleError, {
       resultPath: '$.error',
     });
     normalizeData.addCatch(handleError, {
@@ -815,7 +903,7 @@ export class DocumentProcessingStack extends cdk.Stack {
           retention: logs.RetentionDays.ONE_MONTH,
           removalPolicy: cdk.RemovalPolicy.DESTROY,
         }),
-        level: sfn.LogLevel.ALL,
+        level: sfn.LogLevel.ERROR,  // Prevent PII from financial documents appearing in CloudWatch
       },
     });
 
@@ -1015,8 +1103,126 @@ function handler(event) {
     });
 
     // ==========================================
+    // Phase 6: Security & Compliance
+    // ==========================================
+
+    // KMS key for PII field-level encryption
+    const piiEncryptionKey = new kms.Key(this, 'PIIEncryptionKey', {
+      alias: 'financial-docs-pii-encryption',
+      description: 'Encrypts PII fields in financial document extractions',
+      enableKeyRotation: true,
+      pendingWindow: cdk.Duration.days(30),
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+    });
+
+    // Cognito User Pool for API authentication
+    const userPool = new cognito.UserPool(this, 'FinancialDocsUserPool', {
+      userPoolName: 'financial-docs-users',
+      selfSignUpEnabled: false,
+      signInAliases: { email: true },
+      standardAttributes: {
+        email: { required: true, mutable: false },
+      },
+      passwordPolicy: {
+        minLength: 12,
+        requireLowercase: true,
+        requireUppercase: true,
+        requireDigits: true,
+        requireSymbols: true,
+      },
+      accountRecovery: cognito.AccountRecovery.EMAIL_ONLY,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+    });
+
+    // RBAC Groups
+    new cognito.CfnUserPoolGroup(this, 'AdminsGroup', {
+      userPoolId: userPool.userPoolId,
+      groupName: 'Admins',
+      description: 'Full access: view decrypted PII, approve/reject, manage users',
+    });
+
+    new cognito.CfnUserPoolGroup(this, 'ReviewersGroup', {
+      userPoolId: userPool.userPoolId,
+      groupName: 'Reviewers',
+      description: 'Review access: view decrypted PII, approve/reject documents',
+    });
+
+    new cognito.CfnUserPoolGroup(this, 'ViewersGroup', {
+      userPoolId: userPool.userPoolId,
+      groupName: 'Viewers',
+      description: 'Read-only access: view masked PII only',
+    });
+
+    // App client for React frontend
+    const userPoolClient = new cognito.UserPoolClient(this, 'FinancialDocsAppClient', {
+      userPool,
+      userPoolClientName: 'financial-docs-dashboard',
+      generateSecret: false,
+      authFlows: { userSrp: true },
+      preventUserExistenceErrors: true,
+      accessTokenValidity: cdk.Duration.hours(1),
+      idTokenValidity: cdk.Duration.hours(1),
+      refreshTokenValidity: cdk.Duration.days(30),
+    });
+
+    // PII audit table (7-year retention for BSA/FinCEN compliance)
+    const piiAuditTable = new dynamodb.Table(this, 'PIIAuditTable', {
+      tableName: 'financial-documents-pii-audit',
+      partitionKey: { name: 'documentId', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'accessTimestamp', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      pointInTimeRecovery: true,
+      encryption: dynamodb.TableEncryption.CUSTOMER_MANAGED,
+      encryptionKey: piiEncryptionKey,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+      timeToLiveAttribute: 'ttl',
+    });
+
+    piiAuditTable.addGlobalSecondaryIndex({
+      indexName: 'AccessorIndex',
+      partitionKey: { name: 'accessorId', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'accessTimestamp', type: dynamodb.AttributeType.STRING },
+      projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    // Cognito authorizer (provisioned, NOT attached to methods yet)
+    const cognitoAuthorizer = new apigateway.CognitoUserPoolsAuthorizer(this, 'CognitoAuthorizer', {
+      authorizerName: 'financial-docs-cognito-auth',
+      cognitoUserPools: [userPool],
+    });
+
+    // KMS grants
+    piiEncryptionKey.grantEncryptDecrypt(normalizerLambda);
+    piiEncryptionKey.grantEncryptDecrypt(apiLambda);
+    piiAuditTable.grantWriteData(apiLambda);
+
+    // ==========================================
     // Outputs
     // ==========================================
+
+    new cdk.CfnOutput(this, 'UserPoolId', {
+      value: userPool.userPoolId,
+      description: 'Cognito User Pool ID',
+      exportName: 'FinancialDocUserPoolId',
+    });
+
+    new cdk.CfnOutput(this, 'UserPoolClientId', {
+      value: userPoolClient.userPoolClientId,
+      description: 'Cognito App Client ID',
+      exportName: 'FinancialDocUserPoolClientId',
+    });
+
+    new cdk.CfnOutput(this, 'PIIEncryptionKeyArn', {
+      value: piiEncryptionKey.keyArn,
+      description: 'KMS key ARN for PII encryption',
+      exportName: 'FinancialDocPIIKeyArn',
+    });
+
+    new cdk.CfnOutput(this, 'PIIAuditTableName', {
+      value: piiAuditTable.tableName,
+      description: 'PII access audit table',
+      exportName: 'FinancialDocPIIAuditTable',
+    });
 
     new cdk.CfnOutput(this, 'DocumentBucketName', {
       value: documentBucket.bucketName,

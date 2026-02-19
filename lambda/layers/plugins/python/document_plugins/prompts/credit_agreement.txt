@@ -1,0 +1,302 @@
+CREDIT AGREEMENT SPECIFIC NORMALIZATION RULES:
+
+1. **Interest Rate Spreads and Margins**:
+   - Convert all percentages to decimal (e.g., "4.25%" -> 0.0425, "2.50%" -> 0.025, "1.50%" -> 0.015)
+   - Floor rates: convert to decimal (e.g., "0%" -> 0.0)
+   - Fee rates: convert to decimal (e.g., "0.20%" -> 0.002, "0.125%" -> 0.00125)
+
+2. **Facility Usage Tiers and Thresholds**:
+   - Preserve tier thresholds as descriptive strings (e.g., ">=90%", "< 90%", "<=75%", "<=50%", "<=25%")
+   - Availability-based thresholds: preserve as strings (e.g., ">= $300,000,000", "< $150,000,000")
+   - Commitment amounts: convert to numeric without currency symbols
+
+3. **Sublimits**:
+   - If percentage-based, preserve as string (e.g., "10.0% of aggregate Revolving Credit Commitments")
+   - If dollar-based, convert to numeric without currency symbols
+
+4. **Lender Names and References**:
+   - Preserve full legal names as-is (do NOT abbreviate or modify)
+   - Reference rates: identify type (e.g., "Term SOFR", "Term Benchmark", "ABR", "Prime")
+
+5. **Payment and Period Terms**:
+   - Interest payment dates: list as month names (e.g., ["March", "June", "September", "December"])
+   - Interest period options: list as strings (e.g., ["1 month", "3 months", "6 months"])
+
+6. **Covenants**:
+   - Extract ratio requirements (e.g., Fixed Charge Coverage Ratio minimum 1.15:1.00)
+   - Preserve ratio as decimal in the minimum field (e.g., 1.15)
+   - Preserve test period as string (e.g., "trailing four fiscal quarters")
+
+7. **Facility Identification**:
+   - Identify all facility types present (Revolving Credit, Term Loan A, Term Loan B,
+     Term Loan Bond Redemption, Swingline, LC)
+   - Each facility should be a separate entry in the facilities array
+
+8. **Amendment Number Rules**:
+   - CRITICAL: If documentType is "Amended and Restated Credit Agreement", the amendmentNumber
+     should be null unless explicitly titled as "Amendment No. X to Amended and Restated Credit Agreement"
+   - Do NOT use random document reference numbers (like "112" from footer/header) as amendment numbers
+   - Only use amendment numbers if clearly stated in the document TITLE
+
+9. **Joint Borrower Rules**:
+   - CRITICAL: If multiple companies are listed as "Borrower" (e.g., "Company A and Company B, as Borrower"),
+     extract ALL of them
+   - Put the first company in the "borrower" field
+   - Put additional companies in the "coBorrowers" array
+   - Example: "AVIVA METALS, INC. and W.P. PROPERTY, INC., as Borrower" means BOTH are borrowers
+
+CREDIT AGREEMENT FIELD-BY-FIELD EXTRACTION:
+
+=== AGREEMENT INFORMATION ===
+
+1. **Document Type**
+   - Keywords: "Credit Agreement", "Amendment", "Restatement", "Loan Agreement"
+   - Format: String describing the document type
+   - Example: "Third Amended and Restated Credit Agreement"
+
+2. **Agreement Date / Effective Date**
+   - Keywords: "dated as of", "effective as of", "Closing Date"
+   - Format: YYYY-MM-DD
+   - Note: Look for dates near the beginning of the document
+
+3. **Maturity Date**
+   - Keywords: "Maturity Date", "Termination Date", "expires on"
+   - Format: YYYY-MM-DD
+   - Note: Usually defined in definitions section or facility terms
+
+4. **Amendment Number**
+   - Keywords: "Amendment No.", "First Amendment", "Second Amendment", "Third Amendment"
+   - Format: String or null (see amendment number rules above)
+
+=== PARTIES ===
+
+5. **Borrower(s)**
+   - Keywords: "Borrower", "the Company", "as borrower", "together with", "individually and collectively"
+   - See joint borrower rules above
+   - Format for borrower: {{"name": string, "jurisdiction": string}}
+   - Format for coBorrowers: [{{"name": string, "jurisdiction": string}}]
+
+6. **Administrative Agent**
+   - Keywords: "Administrative Agent", "as Agent", "Agent"
+   - Extract: Bank name (e.g., "Wells Fargo Bank, National Association")
+
+7. **Lead Arrangers**
+   - Keywords: "Lead Arranger", "Joint Lead Arranger", "Bookrunner"
+   - Extract: List of bank names
+
+8. **Guarantors**
+   - Keywords: "Guarantors", "Subsidiary Guarantors", "jointly and severally"
+   - Extract: List of guarantor names or description
+
+=== FACILITY TERMS ===
+
+9. **Aggregate Maximum Revolving Credit Amount**
+   - Keywords: "Aggregate Maximum Revolving Credit Amount", "Maximum Amount"
+   - Format: Number (e.g., 900000000 for $900,000,000)
+
+10. **Aggregate Elected Revolving Credit Commitment**
+    - Keywords: "Aggregate Elected Revolving Credit Commitment", "Revolving Credit Commitment"
+    - Format: Number
+
+11. **LC Commitment / Sublimit**
+    - Keywords: "LC Commitment", "Letter of Credit Sublimit", "L/C Sublimit"
+    - Format: Number or percentage string
+
+12. **Swingline Sublimit**
+    - Keywords: "Swingline Sublimit", "Swing Line"
+    - Format: Number
+
+13. **Term Loan Commitments**
+    - Keywords: "Term Loan A Commitment", "Term Loan B", "Term Commitment", "Term Loan Bond Redemption"
+    - Format: Number for each term loan type
+    - Note: Some agreements have Term Loan Bond Redemption facilities with different maturity dates
+
+=== APPLICABLE RATES (PRICING) ===
+
+14. **Reference Rate**
+    - Keywords: "Term SOFR", "SOFR", "Term Benchmark", "ABR", "Base Rate", "Prime"
+    - Format: String identifying the rate type
+
+15. **Floor Rate**
+    - Keywords: "Floor", "floor rate", "0%", "0.00%"
+    - Format: Decimal (e.g., 0.0 for 0%)
+
+16. **Pricing Tiers** (CRITICAL - extract ALL rows from the table)
+    - Look for tables with columns: Level, Threshold, Term SOFR Spread, ABR Spread, Commitment Fee
+    - Keywords: "Applicable Rate", "Applicable Margin", "Pricing Level", "Pricing Grid"
+    - IMPORTANT: Extract ALL rows from the pricing table - do NOT summarize or truncate!
+    - Typical tables have 5 tiers (e.g., >=90%, <90%, <=75%, <=50%, <=25%) - extract EVERY one
+    - Extract each tier with:
+      - level: "I", "II", "III", "IV", "V" or "Level 1", "Level 2", etc.
+      - threshold: Availability or financial metric condition
+      - termSOFRSpread: Decimal (e.g., 0.015 for 1.50%)
+      - abrSpread: Decimal (e.g., 0.005 for 0.50%)
+      - unusedCommitmentFeeRate: Decimal (e.g., 0.002 for 0.20%)
+      - lcFeeRate: Decimal if specified
+
+=== FEES ===
+
+17. **Commitment Fee Rate**
+    - Keywords: "Commitment Fee", "Unused Fee", "Unused Commitment Fee"
+    - Format: Decimal (e.g., 0.002 for 0.20%)
+    - Note: May vary by pricing tier
+
+18. **LC Fee Rate**
+    - Keywords: "Letter of Credit Fee", "L/C Fee", "LC Participation Fee"
+    - Format: Decimal
+
+19. **Fronting Fee**
+    - Keywords: "Fronting Fee", "L/C Fronting Fee"
+    - Format: Decimal (e.g., 0.00125 for 0.125%)
+
+20. **Agency Fee**
+    - Keywords: "Agency Fee", "Administrative Agent Fee"
+    - Format: Number (annual fee amount)
+
+=== COVENANTS ===
+
+21. **Fixed Charge Coverage Ratio**
+    - Keywords: "Fixed Charge Coverage Ratio", "FCCR", "Fixed Charges"
+    - Extract: Minimum ratio requirement (e.g., 1.15 or "1.15:1.00")
+    - Format: {{"minimum": decimal, "testPeriod": string}}
+
+22. **Other Financial Covenants**
+    - Keywords: "Leverage Ratio", "Interest Coverage", "Debt to EBITDA"
+    - Extract: List of covenant descriptions
+
+=== LENDER COMMITMENTS (from Schedule 2.01 or Lender table) ===
+
+23. **Lender Commitments**
+    - Keywords: "Schedule 2.01", "Lender", "Commitment", "Applicable Percentage"
+    - For each lender extract:
+      - lenderName: Full legal name
+      - applicablePercentage: Decimal (e.g., 0.216 for 21.60%)
+      - revolvingCreditCommitment: Number
+      - termCommitment: Number (if applicable)
+    - Note: Percentages should sum to 100% (1.0)
+
+=== OUTPUT FORMAT ===
+
+Return ONLY valid JSON matching this structure:
+{{
+  "loanData": {{
+    "creditAgreement": {{
+      "agreementInfo": {{
+        "documentType": <string or null>,
+        "agreementDate": <YYYY-MM-DD or null>,
+        "effectiveDate": <YYYY-MM-DD or null>,
+        "maturityDate": <YYYY-MM-DD or null>,
+        "amendmentNumber": <string or null>
+      }},
+      "parties": {{
+        "borrower": {{"name": <string>, "jurisdiction": <string>}},
+        "coBorrowers": [{{"name": <string>, "jurisdiction": <string>}}],
+        "ultimateHoldings": {{"name": <string or null>, "jurisdiction": <string or null>}},
+        "intermediateHoldings": {{"name": <string or null>, "jurisdiction": <string or null>}},
+        "administrativeAgent": <string or null>,
+        "leadArrangers": [<string>],
+        "swinglineLender": <string or null>,
+        "lcIssuer": <string or null>,
+        "guarantors": [<string>]
+      }},
+      "facilities": [
+        {{
+          "facilityType": <string>,
+          "facilityName": <string or null>,
+          "commitmentAmount": <number or null>,
+          "maturityDate": <YYYY-MM-DD or null>
+        }}
+      ],
+      "facilityTerms": {{
+        "aggregateMaxRevolvingCreditAmount": <number or null>,
+        "aggregateElectedRevolvingCreditCommitment": <number or null>,
+        "lcCommitment": <number or null>,
+        "lcSublimit": <string or number or null>,
+        "swinglineSublimit": <number or null>,
+        "termLoanACommitment": <number or null>,
+        "termLoanBCommitment": <number or null>,
+        "termLoanBondRedemption": <number or null>,
+        "termCommitment": <number or null>
+      }},
+      "applicableRates": {{
+        "referenceRate": <string or null>,
+        "floor": <decimal or null>,
+        "pricingBasis": <string or null>,
+        "tiers": [
+          {{
+            "level": <string>,
+            "threshold": <string>,
+            "termSOFRSpread": <decimal or null>,
+            "termBenchmarkRFRSpread": <decimal or null>,
+            "applicableMargin": <decimal or null>,
+            "abrSpread": <decimal or null>,
+            "unusedCommitmentFeeRate": <decimal or null>,
+            "lcFeeRate": <decimal or null>
+          }}
+        ]
+      }},
+      "fees": {{
+        "commitmentFeeRate": <decimal or null>,
+        "lcFeeRate": <decimal or null>,
+        "frontingFeeRate": <decimal or null>,
+        "agencyFee": <number or null>
+      }},
+      "paymentTerms": {{
+        "interestPaymentDates": [<string>],
+        "interestPeriodOptions": [<string>],
+        "paymentDay": <string or null>
+      }},
+      "covenants": {{
+        "fixedChargeCoverageRatio": {{
+          "minimum": <decimal or null>,
+          "testPeriod": <string or null>
+        }},
+        "otherCovenants": [<string>]
+      }},
+      "lenderCommitments": [
+        {{
+          "lenderName": <string>,
+          "applicablePercentage": <decimal>,
+          "revolvingCreditCommitment": <number or null>,
+          "electedRevolvingCreditCommitment": <number or null>,
+          "maxRevolvingCreditAmount": <number or null>,
+          "termCommitment": <number or null>,
+          "termLoanACommitment": <number or null>
+        }}
+      ]
+    }}
+  }},
+  "validation": {{
+    "isValid": <boolean>,
+    "confidence": "high" | "medium" | "low",
+    "crossReferenceChecks": [
+      {{
+        "field1": <string>,
+        "field2": <string>,
+        "match": <boolean>,
+        "note": <string or null>
+      }}
+    ],
+    "validationNotes": [<string>],
+    "missingRequiredFields": [<string>]
+  }},
+  "audit": {{
+    "extractionSources": [
+      {{
+        "field": <string>,
+        "sourceSection": <string>,
+        "rawValue": <string>,
+        "normalizedValue": <any>
+      }}
+    ]
+  }}
+}}
+
+VALIDATION RULES:
+- Verify lender applicablePercentage values sum to approximately 1.0 (100%)
+- Cross-reference facility commitment totals against aggregate amounts
+- Flag if maturity date is missing or seems unreasonable
+- Verify pricing tier spreads increase monotonically with risk level
+- If amendmentNumber is populated, verify it matches the document title
+- CRITICAL: For pricing tiers/arrays, include EVERY row from the source table - do NOT truncate, summarize, or limit the count
+- If a table has 5 rows of pricing tiers, output all 5 tiers in the JSON array

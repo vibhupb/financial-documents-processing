@@ -1,5 +1,9 @@
 """Extraction field definitions for each document type.
 
+DEPRECATED: Use document_plugins per-section configs instead. Queries and
+extraction fields now live in plugin SectionConfig.queries and
+SectionConfig.extraction_fields. See lambda/layers/plugins/python/document_plugins/types/.
+
 This module defines the specific fields to extract from each document type,
 including field metadata, validation rules, and Textract query configurations.
 """

@@ -1,0 +1,247 @@
+BSA PROFILE SPECIFIC NORMALIZATION RULES:
+
+This is a BSA Profile / Customer Due Diligence (CDD) form used for Bank Secrecy Act
+compliance and Know Your Customer (KYC) requirements. The form typically spans 5 pages:
+- Page 1: Legal Entity Information (company name, Tax ID, entity type, NAICS, addresses)
+- Page 2: Risk Assessment (AML, PEP, fraud, cash intensive, sector flags)
+- Pages 3-5: Beneficial Ownership / Controlling Party (up to 4 owners + trust info)
+
+CHECKBOX / RADIO BUTTON INTERPRETATION RULES:
+
+Textract returns checkboxes and radio buttons as SELECTION_ELEMENT blocks with
+SelectionStatus of "SELECTED" or "NOT_SELECTED" and an associated confidence score.
+
+1. **Confidence Thresholds**:
+   - Confidence >= 90%: HIGH confidence -- accept value as-is, no flag needed
+   - Confidence 75-89%: MEDIUM confidence -- accept value, add note in validationNotes:
+     "Medium confidence ({confidence}%) for {fieldName} -- verify during review"
+   - Confidence < 75%: LOW confidence -- still return the value but flag for mandatory
+     human review: "Low confidence ({confidence}%) for {fieldName} -- manual verification required"
+
+2. **Mutually Exclusive Radio Groups** (Entity Type, Risk Rating, ID Document Type):
+   - Only ONE value in a radio group should be true
+   - If MULTIPLE are marked "SELECTED": use the one with highest confidence, add validation
+     note: "Multiple selections detected for {groupName} -- used highest confidence value"
+   - If NONE are checked (all "NOT_SELECTED"): return null with validation note:
+     "No selection detected for {groupName} -- requires manual review"
+   - If BOTH checked in a Yes/No pair: return true (conservative for compliance), add
+     validation note: "Both Yes and No checked for {fieldName} -- defaulted to true"
+
+3. **Yes/No Checkbox Pairs** (Risk Assessment booleans):
+   - "SELECTED" on Yes box = true
+   - "SELECTED" on No box = false
+   - Neither checked = null with validation note
+   - Both checked = true with validation note (conservative for compliance)
+
+4. **Cross-Reference with Text Labels**:
+   - Always cross-reference SELECTION_ELEMENT results with surrounding text labels
+   - If checkbox status conflicts with adjacent text (e.g., checkbox says SELECTED but
+     label text says "No"), prefer the SELECTION_ELEMENT status (visual evidence) and
+     add validation note about the potential conflict
+
+BENEFICIAL OWNERS ARRAY RULES:
+
+1. Extract up to 4 beneficial owners from pages 3-5
+2. Each owner is a separate object in the beneficialOwners array
+3. SKIP completely empty owner sections (where ALL fields are blank/null)
+4. Include an owner if ANY field is filled (even just a name with nothing else)
+5. ownershipPercentage: return as number (e.g., 25, not "25%")
+6. The first entry may be labeled "Controlling Party" -- still include in the array
+   with controlPerson set to true
+7. Repeating field labels ("Full Name" appears up to 4 times): match each occurrence
+   to the correct owner by page position / section order
+8. For partially filled sections: extract whatever is present, use null for missing
+   fields within that owner
+
+RISK ASSESSMENT RULES:
+
+1. Page 2 contains a risk assessment matrix with Yes/No checkboxes in a table/grid layout
+2. Map each checkbox pair to the corresponding boolean field in riskAssessment
+3. The overallRiskRating field should be one of: "LOW", "MEDIUM", "HIGH", "PROHIBITED"
+4. If risk rating is determined by a checkbox group, apply the mutually exclusive radio
+   group rules above
+5. The requiresEdd (Enhanced Due Diligence) flag is often linked to HIGH risk rating;
+   verify the checkbox independently rather than inferring from risk level
+
+PII HANDLING NOTES:
+
+PII fields are extracted as-is during normalization. Encryption is handled by a separate
+post-normalization step. Do NOT mask, redact, or modify PII values during extraction.
+
+1. **SSN / Social Security Number**:
+   - Preserve as extracted in XXX-XX-XXXX format
+   - If extracted without dashes (e.g., "123456789"), normalize to "123-45-6789"
+   - If partially illegible, extract what is readable and add validation note
+
+2. **Tax ID / EIN**:
+   - Preserve as extracted in XX-XXXXXXX format
+   - If extracted without dash (e.g., "123456789"), normalize to "12-3456789"
+
+3. **Date of Birth**:
+   - Normalize to YYYY-MM-DD format (consistent with all date handling)
+   - If only partial date visible, extract what is readable and use null for the full field
+
+4. **Government ID Numbers** (driver's license, passport, state ID):
+   - Preserve exactly as extracted, do NOT reformat
+   - Include the document type, issuing state/country, and expiration date as separate fields
+
+ENTITY TYPE MAPPING:
+
+When extracting entityType from checkboxes or text, normalize to one of these values:
+- "Corporation"
+- "LLC" (Limited Liability Company)
+- "Partnership" (General or Limited)
+- "Sole Proprietorship"
+- "Trust"
+- "Non-Profit / Tax-Exempt Organization"
+- "Government Entity"
+- "Other" (with description in a separate field if available)
+
+=== OUTPUT FORMAT ===
+
+Return ONLY valid JSON matching this structure:
+{{
+  "loanData": {{
+    "bsaProfile": {{
+      "legalEntity": {{
+        "companyName": <string or null>,
+        "dbaName": <string or null>,
+        "taxId": <string or null>,
+        "taxIdType": <string or null>,
+        "entityType": <string or null>,
+        "stateOfOrganization": <string or null>,
+        "countryOfOrganization": <string or null>,
+        "dateOfOrganization": <YYYY-MM-DD or null>,
+        "naicsCode": <string or null>,
+        "naicsDescription": <string or null>,
+        "businessDescription": <string or null>,
+        "principalAddress": {{
+          "street": <string or null>,
+          "city": <string or null>,
+          "state": <string or null>,
+          "zipCode": <string or null>,
+          "country": <string or null>
+        }},
+        "phoneNumber": <string or null>,
+        "emailAddress": <string or null>,
+        "isPubliclyTraded": <boolean or null>,
+        "stockExchange": <string or null>,
+        "tickerSymbol": <string or null>,
+        "isExemptEntity": <boolean or null>,
+        "exemptionType": <string or null>
+      }},
+      "riskAssessment": {{
+        "overallRiskRating": <"LOW" | "MEDIUM" | "HIGH" | "PROHIBITED" or null>,
+        "hasAmlHistory": <boolean or null>,
+        "hasPepAssociation": <boolean or null>,
+        "hasFraudHistory": <boolean or null>,
+        "hasSarHistory": <boolean or null>,
+        "isOnOfacList": <boolean or null>,
+        "isCashIntensive": <boolean or null>,
+        "isMoneyServiceBusiness": <boolean or null>,
+        "isThirdPartyPaymentProcessor": <boolean or null>,
+        "industryRiskFlags": [<string>],
+        "requiresEdd": <boolean or null>,
+        "eddReason": <string or null>,
+        "riskNotes": <string or null>
+      }},
+      "beneficialOwners": [
+        {{
+          "fullName": <string or null>,
+          "dateOfBirth": <YYYY-MM-DD or null>,
+          "ssn": <string or null>,
+          "address": {{
+            "street": <string or null>,
+            "city": <string or null>,
+            "state": <string or null>,
+            "zipCode": <string or null>,
+            "country": <string or null>
+          }},
+          "citizenship": <string or null>,
+          "identificationDocType": <string or null>,
+          "identificationDocNumber": <string or null>,
+          "identificationDocState": <string or null>,
+          "identificationDocExpiration": <YYYY-MM-DD or null>,
+          "ownershipPercentage": <number or null>,
+          "isPep": <boolean or null>,
+          "controlPerson": <boolean or null>
+        }}
+      ],
+      "trustInfo": {{
+        "trustName": <string or null>,
+        "trustType": <string or null>,
+        "trusteeName": <string or null>,
+        "dateEstablished": <YYYY-MM-DD or null>,
+        "stateOfFormation": <string or null>,
+        "trustTaxId": <string or null>
+      }},
+      "certificationInfo": {{
+        "signatoryName": <string or null>,
+        "signatoryTitle": <string or null>,
+        "certificationDate": <YYYY-MM-DD or null>,
+        "signatureStatus": <"SIGNED" | "ELECTRONIC" | "UNSIGNED" or null>
+      }}
+    }}
+  }},
+  "validation": {{
+    "isValid": <boolean>,
+    "confidence": "high" | "medium" | "low",
+    "crossReferenceChecks": [
+      {{
+        "field1": <string>,
+        "field2": <string>,
+        "match": <boolean>,
+        "note": <string or null>
+      }}
+    ],
+    "validationNotes": [<string>],
+    "missingRequiredFields": [<string>]
+  }},
+  "audit": {{
+    "extractionSources": [
+      {{
+        "field": <string>,
+        "sourcePage": <number>,
+        "rawValue": <string>,
+        "normalizedValue": <any>,
+        "confidence": <number or null>
+      }}
+    ]
+  }}
+}}
+
+VALIDATION RULES:
+
+1. **Ownership Percentage Sum**:
+   - Sum of all beneficialOwners[].ownershipPercentage should be approximately 100%
+   - If sum deviates by more than 5% from 100, add validation note:
+     "Beneficial ownership percentages sum to {sum}% -- expected ~100%"
+   - If no ownership percentages are present, note in validationNotes
+
+2. **Entity Type Consistency**:
+   - If entityType is "Trust", trustInfo section should be populated
+   - If entityType is "Corporation" and isPubliclyTraded is true, stockExchange should be populated
+   - Flag inconsistencies in crossReferenceChecks
+
+3. **Required Fields for Compliance**:
+   - companyName, taxId, entityType are critical fields -- flag if missing
+   - Each beneficial owner should have at minimum: fullName and ownershipPercentage
+   - certificationInfo.signatoryName and certificationDate are required for form validity
+   - Add any missing critical fields to missingRequiredFields array
+
+4. **Beneficial Owner Completeness**:
+   - At least one beneficial owner should be present (controlling party)
+   - Each owner with ownershipPercentage >= 25% should have full identification
+     (SSN or government ID, address, date of birth)
+   - Flag owners with >= 25% ownership but missing identification fields
+
+5. **Risk Assessment Completeness**:
+   - overallRiskRating should always have a value if page 2 is present
+   - If any risk flag (hasAmlHistory, hasPepAssociation, etc.) is true but
+     overallRiskRating is "LOW", add validation note about potential inconsistency
+
+6. **Checkbox Confidence Audit**:
+   - Track confidence scores for all checkbox/selection fields in the audit trail
+   - Flag any field where confidence was below 75% in validationNotes
+   - For the audit.extractionSources array, include the confidence score for
+     every boolean field derived from a SELECTION_ELEMENT

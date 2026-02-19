@@ -28,6 +28,140 @@ TABLE_NAME = os.environ.get('TABLE_NAME')
 BEDROCK_MODEL_ID = os.environ.get('BEDROCK_MODEL_ID', 'us.anthropic.claude-3-5-haiku-20241022-v1:0')
 
 
+# ==========================================
+# Plugin-Driven Normalization Functions
+# ==========================================
+
+
+def build_normalization_prompt(
+    plugin: Dict[str, Any],
+    raw_extraction_data: Dict[str, Any],
+) -> str:
+    """Assemble normalization prompt from plugin config and template files.
+
+    4-layer architecture: preamble -> schema fields -> plugin template -> footer
+    """
+    from pathlib import Path
+
+    normalization_config = plugin.get("normalization", {})
+    template_name = normalization_config.get("prompt_template", plugin["plugin_id"])
+
+    prompts_dir = Path("/opt/python/document_plugins/prompts")
+    if not prompts_dir.exists():
+        # Local development fallback
+        prompts_dir = Path(__file__).resolve().parent.parent / "layers" / "plugins" / "python" / "document_plugins" / "prompts"
+
+    preamble = (prompts_dir / "common_preamble.txt").read_text()
+    footer = (prompts_dir / "common_footer.txt").read_text()
+
+    plugin_template = ""
+    template_path = prompts_dir / f"{template_name}.txt"
+    if template_path.exists():
+        plugin_template = template_path.read_text()
+
+    # Inject extraction data into preamble placeholder
+    extraction_json = json.dumps(raw_extraction_data, indent=2, cls=DecimalEncoder)
+    MAX_EXTRACTION_CHARS = 200000
+    if len(extraction_json) > MAX_EXTRACTION_CHARS:
+        extraction_json = extraction_json[:MAX_EXTRACTION_CHARS] + "\n... [TRUNCATED]"
+
+    prompt = preamble.replace("{extraction_data}", extraction_json)
+    if plugin_template:
+        prompt += "\n\n" + plugin_template
+    prompt += "\n\n" + footer
+
+    print(f"Built normalization prompt: {len(prompt)} chars")
+    return prompt
+
+
+def invoke_bedrock_normalize(
+    prompt: str,
+    plugin: Dict[str, Any],
+) -> tuple:
+    """Invoke Bedrock and return (parsed_data, token_usage)."""
+    normalization_config = plugin.get("normalization", {})
+    model_id = normalization_config.get("llm_model", BEDROCK_MODEL_ID)
+    max_tokens = normalization_config.get("max_tokens", 8192)
+    temperature = normalization_config.get("temperature", 0.0)
+
+    response = bedrock_client.invoke_model(
+        modelId=model_id,
+        contentType="application/json",
+        accept="application/json",
+        body=json.dumps({
+            "anthropic_version": "bedrock-2023-05-31",
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "messages": [
+                {"role": "user", "content": prompt},
+                {"role": "assistant", "content": "{"},
+            ],
+        }),
+    )
+
+    response_body = json.loads(response["body"].read())
+    content = response_body["content"][0].get("text", "")
+    usage = response_body.get("usage", {})
+    token_usage = {
+        "inputTokens": usage.get("input_tokens", 0),
+        "outputTokens": usage.get("output_tokens", 0),
+    }
+
+    content = "{" + content
+    if "```json" in content:
+        content = content.split("```json")[1].split("```")[0]
+    elif "```" in content:
+        content = content.split("```")[1].split("```")[0]
+
+    try:
+        normalized_data = json.loads(content.strip())
+    except json.JSONDecodeError as e:
+        print(f"JSON parse error: {e}, raw={content[:500]}")
+        normalized_data = {
+            "loanData": {},
+            "validation": {
+                "isValid": False, "confidence": "low",
+                "validationNotes": [f"LLM response parse failure: {e}"],
+                "missingRequiredFields": ["all"],
+            },
+            "audit": {"extractionSources": []},
+        }
+
+    return normalized_data, token_usage
+
+
+def apply_field_overrides(result: Dict[str, Any], plugin: Dict[str, Any]) -> Dict[str, Any]:
+    """Apply default values for null coded fields from plugin config."""
+    overrides = plugin.get("normalization", {}).get("field_overrides", {})
+    if not overrides:
+        return result
+
+    changes = []
+    for dot_path, default_value in overrides.items():
+        parts = dot_path.split(".")
+        parent = result
+        for part in parts[:-1]:
+            if not isinstance(parent, dict):
+                break
+            if part not in parent:
+                parent[part] = {}
+            parent = parent[part]
+        else:
+            leaf = parts[-1]
+            if isinstance(parent, dict):
+                current = parent.get(leaf)
+                if current is None or current == "":
+                    parent[leaf] = default_value
+                    changes.append(f"{dot_path} -> {default_value}")
+
+    if changes:
+        validation = result.setdefault("validation", {"isValid": True, "confidence": "medium", "validationNotes": []})
+        validation.setdefault("validationNotes", []).append(
+            f"Applied {len(changes)} field override(s): {', '.join(changes)}"
+        )
+    return result
+
+
 class DecimalEncoder(json.JSONEncoder):
     """JSON encoder that handles Decimal types for DynamoDB."""
     def default(self, obj):
@@ -2220,6 +2354,103 @@ def lambda_handler(event, context):
     if not document_id:
         raise ValueError("Could not find documentId in event")
 
+    # ============================================================
+    # Plugin-driven normalization path
+    # ============================================================
+    plugin_id = event.get("pluginId")
+    if plugin_id:
+        print(f"[PLUGIN] Using plugin path for plugin_id='{plugin_id}'")
+        try:
+            from document_plugins.registry import get_plugin
+            plugin = get_plugin(plugin_id)
+        except (ImportError, KeyError) as e:
+            print(f"[PLUGIN] Plugin load failed: {e}, falling back to legacy path")
+            plugin_id = None  # Fall through to legacy
+
+    if plugin_id:
+        try:
+            # Build prompt from plugin templates
+            raw_data = {"sections": {}}
+            extractions_list = event.get("extractions", [event])
+            if isinstance(extractions_list, list):
+                for ext in extractions_list:
+                    if isinstance(ext, dict):
+                        section = ext.get("section") or ext.get("creditAgreementSection")
+                        if section:
+                            raw_data["sections"][section] = ext.get("results", ext)
+                        else:
+                            raw_data = ext.get("results", ext)
+
+            cleaned_data = clean_extraction_for_normalization(raw_data) if callable(clean_extraction_for_normalization) else raw_data
+            prompt = build_normalization_prompt(plugin, cleaned_data)
+            normalized_data, normalizer_tokens = invoke_bedrock_normalize(prompt, plugin)
+            normalized_data = apply_field_overrides(normalized_data, plugin)
+            print(f"[PLUGIN] Normalization complete. Tokens: in={normalizer_tokens['inputTokens']}, out={normalizer_tokens['outputTokens']}")
+
+            # Signature validation (shared)
+            signature_validation = extract_signature_validation(
+                extractions_list if isinstance(extractions_list, list) else [extractions_list]
+            )
+            normalized_data["signatureValidation"] = signature_validation
+
+            # Cost calculation
+            textract_pages = 0
+            for ext in (extractions_list if isinstance(extractions_list, list) else [extractions_list]):
+                if isinstance(ext, dict):
+                    textract_pages += ext.get("pageCount", 0) or (1 if ext.get("status") == "EXTRACTED" else 0)
+
+            router_tokens = event.get("routerTokenUsage")
+            processing_cost = calculate_processing_cost(
+                normalizer_tokens=normalizer_tokens,
+                textract_pages=textract_pages,
+                router_tokens=router_tokens,
+                is_credit_agreement=(plugin_id == "credit_agreement"),
+                lambda_memory_mb=2048,
+                estimated_duration_ms=30000 + (textract_pages * 1000),
+            )
+            processing_time = calculate_processing_time(
+                uploaded_at=uploaded_at, textract_pages=textract_pages,
+            )
+
+            # Store results
+            document_type = plugin_id.upper()
+            store_to_dynamodb(
+                document_id=document_id,
+                normalized_data=normalized_data,
+                content_hash=content_hash,
+                original_key=original_key,
+                file_size=file_size,
+                document_type=document_type,
+                processing_cost=processing_cost,
+                processing_time=processing_time,
+                signature_validation=signature_validation,
+            )
+            audit_key = store_audit_to_s3(
+                bucket, document_id,
+                extractions_list if isinstance(extractions_list, list) else [extractions_list],
+                normalized_data,
+            )
+
+            return {
+                "documentId": document_id,
+                "contentHash": content_hash,
+                "documentType": document_type,
+                "pluginId": plugin_id,
+                "status": "COMPLETED",
+                "reviewStatus": "PENDING_REVIEW",
+                "validation": normalized_data.get("validation", {}),
+                "signatureValidation": signature_validation,
+                "processingCost": processing_cost,
+                "processingTime": processing_time,
+                "storage": {"dynamodbTable": TABLE_NAME, "auditS3Key": audit_key},
+            }
+        except Exception as plugin_err:
+            print(f"[PLUGIN] Error in plugin path: {plugin_err}")
+            raise
+
+    # ============================================================
+    # [LEGACY] Original hardcoded normalization path
+    # ============================================================
     print(f"Processing {len(extractions)} extractions for document: {document_id}")
     print(f"Content hash: {content_hash[:16] if content_hash else 'N/A'}...")
     print(f"Upload timestamp: {uploaded_at if uploaded_at else 'N/A'}")

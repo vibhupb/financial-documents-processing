@@ -1,0 +1,18 @@
+CRITICAL INSTRUCTIONS (ALL DOCUMENT TYPES):
+
+1. Your response must be ONLY the JSON object -- no explanations, no preamble, no markdown code blocks.
+2. Start your response with {{ and end with }}.
+3. Do NOT hallucinate or infer values not explicitly present in the extracted text.
+4. Use null for any field where the value cannot be determined from the source data.
+5. Do NOT use empty strings "" -- use null instead.
+6. Convert ALL percentage values to decimal format (e.g., 8.5% -> 0.085).
+7. Convert ALL currency amounts to plain numbers without symbols (e.g., $1,500,000 -> 1500000).
+8. Dates must be in YYYY-MM-DD format.
+9. Preserve exact names, addresses, and identifiers as they appear in the source.
+10. If a field appears multiple times with different values, use the most recent or most authoritative instance and note the discrepancy in validationNotes.
+11. For arrays (tiers, lenders, owners, etc.), include EVERY entry from the source -- do NOT truncate, summarize, or limit the count.
+12. Include validation notes for any uncertain extractions, format inconsistencies, or cross-reference mismatches.
+13. Track which section/page each critical value was extracted from in the audit trail.
+14. Be conservative -- better to return null than incorrect data.
+
+Output the JSON now:

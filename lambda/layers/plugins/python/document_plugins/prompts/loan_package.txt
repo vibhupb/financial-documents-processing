@@ -1,0 +1,382 @@
+LOAN PACKAGE SPECIFIC NORMALIZATION RULES:
+
+1. **Credit Agreement Specific Rules** (if creditAgreement section present):
+   - Interest rate spreads/margins: convert percentages to decimal (e.g., "4.25%" -> 0.0425, "2.50%" -> 0.025)
+   - Floor rates: convert to decimal (e.g., "0%" -> 0.0)
+   - Facility usage tiers: preserve as strings (e.g., ">=90%", "< 90%", "<=75%")
+   - Availability-based tiers: preserve thresholds as strings (e.g., ">= $20,000,000", "< $10,000,000")
+   - Commitment amounts: convert to numeric without currency symbols
+   - Sublimits: if percentage-based, preserve as string (e.g., "10.0% of aggregate Revolving Credit Commitments")
+   - Lender names: preserve full legal names as-is
+   - Reference rates: identify type (e.g., "Term SOFR", "Term Benchmark", "ABR", "Prime")
+   - Interest payment dates: list as month names (e.g., ["March", "June", "September", "December"])
+   - Interest period options: list as strings (e.g., ["1 month", "3 months", "6 months"])
+   - Covenants: extract ratio requirements (e.g., Fixed Charge Coverage Ratio minimum 1.15:1.00)
+   - Fee rates: convert to decimal (e.g., "0.20%" -> 0.002, "0.125%" -> 0.00125)
+   - Facility types: identify all facilities (Revolving Credit, Term Loan A, Term Loan Bond Redemption, Swingline, LC)
+
+2. **Loan Agreement Specific Rules** (if loanAgreement section present):
+   - Loan amounts and credit limits: convert to numeric without currency symbols
+   - Interest rates: convert percentages to decimal (e.g., "8.5%" -> 0.085)
+   - Fixed vs Variable: identify "Fixed Rate", "Variable Rate", "Floating Rate", "Adjustable Rate"
+   - Index rates: identify type (e.g., "Prime Rate", "SOFR", "Wall Street Journal Prime")
+   - Margin/Spread: convert to decimal (e.g., "Prime + 2.0%" means margin = 0.02)
+   - Day count basis: preserve as string (e.g., "360-day year", "365-day year", "Actual/360")
+   - Payment frequency: normalize to standard terms ("Monthly", "Quarterly", "Semi-Annual", "Annual")
+   - Grace periods: extract as number of days
+   - Financial covenants: list all covenant requirements found
+   - Collateral: describe the security interest or collateral pledged
+
+3. **Loan Agreement Coded Field Extraction**:
+   For each coded field, extract the raw code value and map to the corresponding field:
+
+   a. **Instrument Type** (instrumentType / documentType)
+      - "TERM:TERM LOAN" - if "term loan" found
+      - "LINE:LINE OF CREDIT" - if "line of credit" or "revolving" found
+      - "ABL:ASSET BASED LENDING" - if "asset based" found
+      - "RLOC:REVOLVING LINE OF CREDIT" - if "revolving line" found
+      - Default: "TERM:TERM LOAN" if not specified
+
+   b. **Interest Rate Type** (interestRateType / rateType)
+      - "FIX:FIXED RATE LOAN" - interest rate does not change
+      - "PRM:PRIME RATE LOAN" - based on Prime Rate
+      - "SOF:SOFR" - based on SOFR
+      - "LIB:LIBOR RATE LOAN" - based on LIBOR (legacy)
+      - "INT:INDEXED LOAN" - based on an index
+      - IMPORTANT: If "Prime Rate" or "Prime" is mentioned, use "PRM:PRIME RATE LOAN"
+
+   c. **Rate Index** (rateIndex / indexRate)
+      - "WALLST:WALL STREET JOURNAL PRIME" - WSJ Prime Rate
+      - "SOFR:SOFR RATE" - Secured Overnight Financing Rate
+      - "WFPRIM:WELLS FARGO BANK PRIME" - Wells Fargo Prime
+      - "FHLB:FHLB RATE" - Federal Home Loan Bank Rate
+      - "FED:FEDERAL FUNDS RATE" - Fed Funds Rate
+      - If Prime Rate is mentioned, default to "WALLST:WALL STREET JOURNAL PRIME"
+
+   d. **Rate Calculation Method** (rateCalculationMethod / dayCountBasis)
+      - "360ACTUAL:ACTUAL DAYS / 360 DAY YEAR"
+      - "365ACTUAL:ACTUAL DAYS / 365 DAY YEAR"
+      - "360360:360 DAYS / 360 DAY YEAR"
+      - Default: "360ACTUAL:ACTUAL DAYS / 360 DAY YEAR"
+
+   e. **Billing Type** (billingType)
+      - "A:INTEREST ONLY" - interest-only payments, principal due at maturity
+      - "D:PRINCIPAL AMOUNT PLUS INTEREST" - specified principal + accrued interest
+      - "F:PAYMENT AMOUNT INCLUDING INTEREST" - fixed total payment (amortizing)
+      - "G:PRINCIPAL PLUS INTEREST REMAINDER" - principal + remaining interest
+      - For LINE OF CREDIT or REVOLVING: default "A:INTEREST ONLY"
+      - For TERM LOAN with payments: default "F:PAYMENT AMOUNT INCLUDING INTEREST"
+      - IMPORTANT: Must always provide a value
+
+   f. **Billing Frequency** (billingFrequency / paymentFrequency)
+      - "A:WEEKLY", "C:MONTHLY", "E:QUARTERLY", "G:SEMI-ANNUAL", "I:ANNUAL", "X:ON DEMAND"
+      - Default: "C:MONTHLY" (most loans are monthly)
+      - IMPORTANT: Must always provide a value
+
+   g. **Prepayment Indicator** (prepaymentIndicator)
+      - "Y:YES" - prepayment allowed with no penalty
+      - "N:NO" - prepayment not allowed
+      - "P:PENALTY" - prepayment allowed with penalty
+
+DEFAULT VALUE RULES (IMPORTANT - must apply these):
+- For fields with a "Default:" specified above, you MUST use the default if no explicit value is found
+- billingFrequency/paymentFrequency: ALWAYS provide a value. Use "C:MONTHLY" if not stated.
+- billingType: ALWAYS provide a value based on loan type (see rules above)
+- currency: Default to "USD:US DOLLAR"
+- rateCalculationMethod/dayCountBasis: Default to "360ACTUAL:ACTUAL DAYS / 360 DAY YEAR"
+- interestRateType: If "Prime" is mentioned, use "PRM:PRIME RATE LOAN"
+- rateIndex: If Prime Rate is mentioned, use "WALLST:WALL STREET JOURNAL PRIME"
+
+WHEN TO USE NULL:
+- For specific values like interestRate (number), maturityDate (date) where no data exists
+- For party names/addresses when not specified
+- For amounts when not explicitly stated
+- NEVER use null for coded fields (billingType, billingFrequency) - use defaults instead
+
+CROSS-REFERENCE RULES:
+- Cross-reference interest rates between Promissory Note and Closing Disclosure; flag any discrepancies
+- Cross-reference loan amounts between Promissory Note and Closing Disclosure; flag any discrepancies
+- Cross-reference borrower names across all sub-documents for consistency
+- If the same field appears in multiple sub-documents with different values, use the most authoritative
+  instance (Promissory Note > Closing Disclosure > Form 1003) and note the discrepancy
+- Cross-reference monthly payment amounts between Promissory Note and Closing Disclosure
+
+=== OUTPUT FORMAT ===
+
+Return ONLY valid JSON matching this structure:
+{{
+  "loanData": {{
+    "promissoryNote": {{
+      "loanNumber": <string or null>,
+      "noteDate": <YYYY-MM-DD or null>,
+      "effectiveDate": <YYYY-MM-DD or null>,
+      "interestRate": <decimal or null>,
+      "annualPercentageRate": <decimal or null>,
+      "principalAmount": <number or null>,
+      "totalLoanAmount": <number or null>,
+      "borrowerName": <string or null>,
+      "borrowerAddress": <string or null>,
+      "coBorrowerName": <string or null>,
+      "lenderName": <string or null>,
+      "lenderAddress": <string or null>,
+      "maturityDate": <YYYY-MM-DD or null>,
+      "monthlyPayment": <number or null>,
+      "firstPaymentDate": <YYYY-MM-DD or null>,
+      "paymentDueDay": <number or null>,
+      "totalPayments": <number or null>,
+      "isFixedRate": <boolean or null>,
+      "indexRate": <string or null>,
+      "margin": <decimal or null>,
+      "rateFloor": <decimal or null>,
+      "rateCeiling": <decimal or null>,
+      "defaultRate": <decimal or null>,
+      "balloonPayment": <number or null>,
+      "latePaymentFee": <number or null>,
+      "gracePeriodDays": <number or null>,
+      "isSecured": <boolean or null>,
+      "collateral": <string or null>,
+      "propertyAddress": <string or null>,
+      "hasPrepaymentPenalty": <boolean or null>,
+      "prepaymentTerms": <string or null>
+    }},
+    "closingDisclosure": {{
+      "loanAmount": <number or null>,
+      "interestRate": <decimal or null>,
+      "monthlyPrincipalAndInterest": <number or null>,
+      "estimatedTotalMonthlyPayment": <number or null>,
+      "closingCosts": <number or null>,
+      "cashToClose": <number or null>,
+      "fees": [
+        {{
+          "name": <string>,
+          "amount": <number>
+        }}
+      ]
+    }},
+    "form1003": {{
+      "borrowerInfo": {{
+        "name": <string or null>,
+        "ssn": <string or null>,
+        "dateOfBirth": <YYYY-MM-DD or null>,
+        "phone": <string or null>,
+        "email": <string or null>
+      }},
+      "propertyAddress": {{
+        "street": <string or null>,
+        "city": <string or null>,
+        "state": <string or null>,
+        "zipCode": <string or null>
+      }},
+      "employmentInfo": {{
+        "employerName": <string or null>,
+        "position": <string or null>,
+        "yearsEmployed": <number or null>,
+        "monthlyIncome": <number or null>
+      }}
+    }},
+    "loanAgreement": {{
+      "documentInfo": {{
+        "documentType": <string or null>,
+        "loanNumber": <string or null>,
+        "agreementDate": <YYYY-MM-DD or null>,
+        "effectiveDate": <YYYY-MM-DD or null>,
+        "closingDate": <YYYY-MM-DD or null>
+      }},
+      "loanTerms": {{
+        "loanAmount": <number or null>,
+        "creditLimit": <number or null>,
+        "interestRate": <decimal or null>,
+        "annualPercentageRate": <decimal or null>,
+        "isFixedRate": <boolean or null>,
+        "maturityDate": <YYYY-MM-DD or null>,
+        "loanTermMonths": <number or null>
+      }},
+      "interestDetails": {{
+        "rateType": <string or null>,
+        "indexRate": <string or null>,
+        "margin": <decimal or null>,
+        "floor": <decimal or null>,
+        "ceiling": <decimal or null>,
+        "defaultRate": <decimal or null>,
+        "dayCountBasis": <string or null>
+      }},
+      "paymentInfo": {{
+        "monthlyPayment": <number or null>,
+        "firstPaymentDate": <YYYY-MM-DD or null>,
+        "paymentDueDay": <number or null>,
+        "paymentFrequency": <string or null>,
+        "numberOfPayments": <number or null>,
+        "balloonPayment": <number or null>
+      }},
+      "parties": {{
+        "borrower": {{
+          "name": <string or null>,
+          "address": <string or null>
+        }},
+        "guarantor": {{
+          "name": <string or null>,
+          "address": <string or null>
+        }},
+        "lender": {{
+          "name": <string or null>,
+          "address": <string or null>
+        }}
+      }},
+      "security": {{
+        "isSecured": <boolean or null>,
+        "collateralDescription": <string or null>,
+        "propertyAddress": <string or null>
+      }},
+      "fees": {{
+        "originationFee": <number or null>,
+        "latePaymentFee": <number or null>,
+        "gracePeriodDays": <number or null>,
+        "closingCosts": <number or null>,
+        "annualFee": <number or null>
+      }},
+      "prepayment": {{
+        "hasPenalty": <boolean or null>,
+        "penaltyTerms": <string or null>
+      }},
+      "covenants": {{
+        "financialCovenants": [<string>],
+        "debtServiceCoverageRatio": <decimal or null>,
+        "currentRatio": <decimal or null>
+      }},
+      "repayment": {{
+        "schedule": <string or null>,
+        "principalReductions": <string or null>,
+        "interestOnlyPeriod": <string or null>
+      }},
+      "default": {{
+        "eventsOfDefault": [<string>],
+        "remedies": [<string>]
+      }},
+      "_extractedCodes": {{
+        "instrumentType": <string - raw code like "TERM:TERM LOAN">,
+        "interestRateType": <string - raw code like "PRM:PRIME RATE LOAN">,
+        "rateIndex": <string - raw code like "WALLST:WALL STREET JOURNAL PRIME">,
+        "rateCalculationMethod": <string - raw code like "360ACTUAL:ACTUAL DAYS / 360 DAY YEAR">,
+        "billingType": <string - raw code like "F:PAYMENT AMOUNT INCLUDING INTEREST">,
+        "billingFrequency": <string - raw code like "C:MONTHLY">,
+        "prepaymentIndicator": <string - raw code like "Y:YES">
+      }}
+    }},
+    "creditAgreement": {{
+      "agreementInfo": {{
+        "documentType": <string or null>,
+        "agreementDate": <YYYY-MM-DD or null>,
+        "effectiveDate": <YYYY-MM-DD or null>,
+        "maturityDate": <YYYY-MM-DD or null>,
+        "amendmentNumber": <string or null>
+      }},
+      "parties": {{
+        "borrower": {{"name": <string or null>, "jurisdiction": <string or null>}},
+        "coBorrowers": [{{"name": <string or null>, "jurisdiction": <string or null>}}],
+        "ultimateHoldings": {{"name": <string or null>, "jurisdiction": <string or null>}},
+        "intermediateHoldings": {{"name": <string or null>, "jurisdiction": <string or null>}},
+        "administrativeAgent": <string or null>,
+        "leadArrangers": [<string>],
+        "swinglineLender": <string or null>,
+        "lcIssuer": <string or null>,
+        "guarantors": [<string>]
+      }},
+      "facilities": [
+        {{
+          "facilityType": <string>,
+          "facilityName": <string or null>,
+          "commitmentAmount": <number or null>,
+          "maturityDate": <YYYY-MM-DD or null>
+        }}
+      ],
+      "facilityTerms": {{
+        "aggregateMaxRevolvingCreditAmount": <number or null>,
+        "aggregateElectedRevolvingCreditCommitment": <number or null>,
+        "lcCommitment": <number or null>,
+        "lcSublimit": <number or null>,
+        "swinglineSublimit": <string or null>,
+        "termLoanACommitment": <number or null>,
+        "termCommitment": <number or null>
+      }},
+      "applicableRates": {{
+        "referenceRate": <string or null>,
+        "floor": <decimal or null>,
+        "pricingBasis": <string or null>,
+        "tiers": [
+          {{
+            "level": <string or null>,
+            "threshold": <string>,
+            "termBenchmarkRFRSpread": <decimal or null>,
+            "termSOFRSpread": <decimal or null>,
+            "applicableMargin": <decimal or null>,
+            "abrSpread": <decimal or null>,
+            "unusedCommitmentFeeRate": <decimal or null>,
+            "lcFeeRate": <decimal or null>
+          }}
+        ]
+      }},
+      "fees": {{
+        "commitmentFeeRate": <decimal or null>,
+        "lcFeeRate": <decimal or null>,
+        "frontingFeeRate": <decimal or null>,
+        "agencyFee": <number or null>
+      }},
+      "paymentTerms": {{
+        "interestPaymentDates": [<string>],
+        "interestPeriodOptions": [<string>],
+        "paymentDay": <string or null>
+      }},
+      "covenants": {{
+        "fixedChargeCoverageRatio": {{
+          "minimum": <decimal or null>,
+          "testPeriod": <string or null>
+        }},
+        "otherCovenants": [<string>]
+      }},
+      "lenderCommitments": [
+        {{
+          "lenderName": <string>,
+          "applicablePercentage": <decimal or null>,
+          "termCommitment": <number or null>,
+          "termLoanACommitment": <number or null>,
+          "revolvingCreditCommitment": <number or null>,
+          "electedRevolvingCreditCommitment": <number or null>,
+          "maxRevolvingCreditAmount": <number or null>
+        }}
+      ]
+    }}
+  }},
+  "validation": {{
+    "isValid": <boolean>,
+    "confidence": "high" | "medium" | "low",
+    "crossReferenceChecks": [
+      {{
+        "field1": <string>,
+        "field2": <string>,
+        "match": <boolean>,
+        "note": <string or null>
+      }}
+    ],
+    "validationNotes": [<string>],
+    "missingRequiredFields": [<string>]
+  }},
+  "audit": {{
+    "extractionSources": [
+      {{
+        "field": <string>,
+        "sourceDocument": <string>,
+        "sourcePage": <number>,
+        "rawValue": <string>,
+        "normalizedValue": <any>
+      }}
+    ]
+  }}
+}}
+
+VALIDATION RULES:
+- Cross-reference interest rates and loan amounts between Promissory Note and Closing Disclosure
+- Flag any discrepancies between sub-documents in the crossReferenceChecks array
+- Include the _extractedCodes section with raw code values for system compatibility
+- Track extraction sources in the audit trail, noting which sub-document each value came from
+- Include audit trail showing original values and normalized values
+- Be conservative: better to return null than incorrect data

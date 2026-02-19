@@ -1,27 +1,17 @@
 #!/bin/bash
 # cleanup.sh - Reset S3 and DynamoDB for fresh testing/demo
 #
-# Usage: ./scripts/cleanup.sh [--keep-source]
+# Usage: ./scripts/cleanup.sh [--keep-source] [--force] [--dry-run]
 #   --keep-source: Keep the original PDFs in ingest/, only clean processed data
-#
-# This script will:
-# 1. Delete all items from DynamoDB table
-# 2. Clean S3 bucket (temp/, audit/, processed/ folders)
-# 3. Optionally clean ingest/ folder (unless --keep-source)
+#   --force:       Skip confirmation prompt
+#   --dry-run:     Show what would be deleted without deleting
 
-set -e
+source "$(dirname "$0")/common.sh"
 
-# Configuration
-BUCKET_NAME="financial-docs-211125568838-us-west-2"
-TABLE_NAME="financial-documents"
-REGION="us-west-2"
-
-# Colors for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+# Configuration (derived from environment)
+BUCKET_NAME=$(get_bucket_name)
+TABLE_NAME=$(get_table_name)
+REGION="$AWS_REGION"
 
 # Parse arguments
 KEEP_SOURCE=false
@@ -29,35 +19,25 @@ for arg in "$@"; do
     case $arg in
         --keep-source)
             KEEP_SOURCE=true
-            shift
             ;;
     esac
 done
 
-echo -e "${BLUE}╔══════════════════════════════════════════════════════════════╗${NC}"
-echo -e "${BLUE}║           Financial Documents Processing - Cleanup           ║${NC}"
-echo -e "${BLUE}╚══════════════════════════════════════════════════════════════╝${NC}"
-echo ""
+print_banner "Cleanup"
 
 # Confirmation prompt
-echo -e "${YELLOW}⚠️  WARNING: This will delete all processed documents!${NC}"
+warning "This will delete all processed documents!"
 echo ""
-echo "  Bucket: $BUCKET_NAME"
-echo "  Table:  $TABLE_NAME"
-echo "  Region: $REGION"
+info "Bucket: $BUCKET_NAME"
+info "Table:  $TABLE_NAME"
+info "Region: $REGION"
 if [ "$KEEP_SOURCE" = true ]; then
     echo -e "  Mode:   ${GREEN}Keep source PDFs${NC} (only clean processed data)"
 else
     echo -e "  Mode:   ${RED}Full cleanup${NC} (delete everything including source PDFs)"
 fi
-echo ""
-read -p "Are you sure you want to continue? (y/N) " -n 1 -r
-echo ""
 
-if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-    echo -e "${YELLOW}Cleanup cancelled.${NC}"
-    exit 0
-fi
+confirm_action "Are you sure you want to continue?"
 
 echo ""
 
