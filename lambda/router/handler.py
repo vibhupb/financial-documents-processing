@@ -1748,12 +1748,33 @@ def classify_pages_with_bedrock(
     )
 
     # Build document type descriptions for the prompt
+    # Merge hardcoded DOCUMENT_TYPES with plugin registry types
     doc_type_descriptions = []
+    known_type_ids = set()
+
+    # First: add plugin-registered types (authoritative source)
+    try:
+        from document_plugins.registry import get_all_plugins
+        for plugin_id, plugin_config in get_all_plugins().items():
+            cls = plugin_config.get("classification", {})
+            keywords = ", ".join(cls.get("keywords", [])[:5])
+            name = plugin_config.get("name", plugin_id)
+            desc = plugin_config.get("description", "")[:100]
+            doc_type_descriptions.append(
+                f"- **{plugin_id}**: {name}\n  Description: {desc}\n  Keywords: {keywords}"
+            )
+            known_type_ids.add(plugin_id)
+    except (ImportError, Exception) as e:
+        print(f"Warning: Plugin registry not available for classification: {e}")
+
+    # Then: add legacy types not covered by plugins
     for type_id, type_info in DOCUMENT_TYPES.items():
-        keywords = ", ".join(type_info["keywords"][:5])
-        doc_type_descriptions.append(
-            f"- **{type_id}**: {type_info['name']}\n  Keywords: {keywords}"
-        )
+        if type_id not in known_type_ids:
+            keywords = ", ".join(type_info["keywords"][:5])
+            doc_type_descriptions.append(
+                f"- **{type_id}**: {type_info['name']}\n  Keywords: {keywords}"
+            )
+            known_type_ids.add(type_id)
 
     doc_types_text = "\n".join(doc_type_descriptions)
 
@@ -1788,6 +1809,8 @@ Respond with ONLY valid JSON in this exact format:
 {{
   "credit_agreement": <page_number or null>,
   "loan_agreement": <page_number or null>,
+  "loan_package": <page_number or null>,
+  "bsa_profile": <page_number or null>,
   "promissory_note": <page_number or null>,
   "closing_disclosure": <page_number or null>,
   "form_1003": <page_number or null>,
