@@ -1,12 +1,12 @@
 # CLAUDE.md - AI Development Assistant Configuration
 
-This file provides context and guidance for Claude (Opus 4.5) when working on this project.
+This file provides context and guidance for Claude when working on this project.
 
 ## Project Overview
 
 **Project Name**: Financial Documents Processing
-**Pattern**: Router Pattern - Cost-Optimized Intelligent Document Processing
-**Industry**: Financial Services (Mortgage Loan Processing, Credit Agreements)
+**Pattern**: Router Pattern - Cost-Optimized Intelligent Document Processing with Plugin Architecture
+**Industry**: Financial Services (Mortgage Loan Processing, Credit Agreements, BSA/KYC Compliance)
 **Repository**: https://github.com/vibhupb/financial-documents-processing
 
 ### Purpose
@@ -82,6 +82,10 @@ This project implements a serverless AWS architecture for processing high-volume
 | Frontend | React + TypeScript + Vite | Dashboard UI |
 | PDF Viewing | react-pdf | In-browser PDF rendering |
 | Styling | Tailwind CSS | Utility-first CSS framework |
+| Plugin Registry | Python TypedDict + pkgutil | Auto-discovery of document type plugins |
+| PII Encryption | AWS KMS | Envelope encryption for SSN, DOB, Tax ID fields |
+| Authentication | Amazon Cognito | User Pool with Admins/Reviewers/Viewers RBAC |
+| PII Audit | Amazon DynamoDB | Access audit trail for compliance |
 
 ## Project Structure
 
@@ -104,15 +108,32 @@ financial-documents-processing/
 │   ├── normalizer/                   # Data normalization
 │   │   └── handler.py                # Claude 3.5 Haiku normalization
 │   └── layers/
-│       └── pypdf/                    # PyPDF Lambda layer
-│           ├── requirements.txt
-│           └── build.sh
+│       ├── pypdf/                    # PyPDF Lambda layer
+│       │   ├── requirements.txt
+│       │   └── build.sh
+│       └── plugins/                  # Document type plugin layer (auto-discovered)
+│           └── python/document_plugins/
+│               ├── contract.py       # TypedDict plugin contract (10 types)
+│               ├── registry.py       # Auto-discovery via pkgutil
+│               ├── safe_log.py       # PII-safe logging (redacts SSN, DOB, etc.)
+│               ├── pii_crypto.py     # KMS envelope encryption for PII fields
+│               ├── types/            # One file per document type
+│               │   ├── loan_package.py, credit_agreement.py, loan_agreement.py
+│               │   ├── bsa_profile.py, w2.py, drivers_license.py
+│               │   └── (add new doc types here - auto-discovered)
+│               └── prompts/          # Normalization templates per type
+│                   ├── common_preamble.txt, common_footer.txt
+│                   └── {doc_type}.txt (one per plugin)
 ├── frontend/                         # React Dashboard
 │   ├── src/
 │   │   ├── components/               # Reusable UI components
 │   │   │   ├── DocumentViewer.tsx    # PDF + extracted data viewer
 │   │   │   ├── ExtractedValuesPanel.tsx  # Formatted data display
 │   │   │   ├── ProcessingMetricsPanel.tsx  # Cost & time breakdown panel
+│   │   │   ├── GenericDataFields.tsx # Schema-driven renderer (any doc type)
+│   │   │   ├── BSAProfileFields.tsx  # BSA Profile custom renderer
+│   │   │   ├── BooleanFlag.tsx       # Yes/No badge component
+│   │   │   ├── PIIIndicator.tsx      # PII masking lock icon
 │   │   │   ├── PDFViewer.tsx         # PDF rendering with react-pdf
 │   │   │   └── StatusBadge.tsx       # Processing status indicator
 │   │   ├── pages/                    # Route pages
@@ -121,8 +142,11 @@ financial-documents-processing/
 │   │   │   ├── Documents.tsx         # Document list
 │   │   │   ├── DocumentDetail.tsx    # Document viewer page
 │   │   │   └── ReviewDocument.tsx    # Review workflow page
+│   │   ├── contexts/
+│   │   │   └── AuthContext.tsx        # Cognito auth context + useAuth hook
 │   │   ├── services/
-│   │   │   └── api.ts                # API client (TanStack Query)
+│   │   │   ├── api.ts                # API client (TanStack Query)
+│   │   │   └── auth.ts               # Cognito authentication service
 │   │   └── types/
 │   │       └── index.ts              # TypeScript interfaces
 │   ├── package.json
@@ -131,15 +155,21 @@ financial-documents-processing/
 ├── src/                              # Python source modules
 │   └── financial_docs/
 │       ├── common/                   # Shared utilities
-│       ├── schemas/                  # Data schemas
+│       ├── schemas/                  # Data schemas (DEPRECATED - use plugins)
 │       └── utils/                    # Helper functions
-├── tests/                            # Python tests
+├── tests/                            # Python tests (47 plugin registry tests)
+│   └── sample-documents/             # Test PDFs with synthetic data
 ├── scripts/
-│   ├── deploy.sh                     # Full deployment script
+│   ├── common.sh                     # Shared env preamble (AWS validation, helpers)
+│   ├── deploy-backend.sh             # CDK stack deployment
+│   ├── deploy-frontend.sh            # React build + S3 sync + CloudFront invalidation
+│   ├── deploy.sh                     # Full deployment (backend + frontend)
 │   ├── cleanup.sh                    # Reset S3 and DynamoDB for testing
 │   ├── setup-dev.sh                  # Development environment setup
-│   ├── generate-architecture-diagram.py  # AWS architecture diagram generator
-│   └── upload-test-doc.sh            # Test document upload
+│   ├── upload-test-doc.sh            # Test document upload
+│   ├── encrypt-existing-pii.py       # PII encryption migration (--dry-run default)
+│   ├── decrypt-for-rollback.py       # PII decryption for rollback (--confirm required)
+│   └── generate-sample-bsa.py        # Fill BSA template with synthetic data
 ├── .vscode/                          # VS Code configuration
 ├── package.json                      # CDK dependencies
 ├── tsconfig.json                     # TypeScript config
@@ -149,23 +179,58 @@ financial-documents-processing/
 └── README.md                         # Project documentation
 ```
 
-## Supported Document Types
+## Supported Document Types (Plugin Registry)
 
-### Loan Packages
-- **Promissory Note**: Interest rate, principal amount, borrower names, maturity date, monthly payment
-- **Closing Disclosure (TILA-RESPA)**: Loan amount, fees, closing costs, cash to close
-- **Form 1003**: Borrower info, property address, employment details, SSN (masked)
+All document types are auto-discovered from `lambda/layers/plugins/python/document_plugins/types/`. Query `GET /plugins` API for live registry.
 
-### Credit Agreements
-- **Agreement Info**: Document type, amendment number, agreement/effective/maturity dates
-- **Parties**: Borrower, ultimate holdings, administrative agent, lead arrangers, guarantors
-- **Facility Terms**: Max revolving credit, elected commitment, LC commitment/sublimit, swingline sublimit
-- **Facilities**: Facility type, name, commitment amount, maturity date
-- **Applicable Rates**: Reference rate, pricing basis, floor, pricing tiers (SOFR/ABR spreads, unused fees)
-- **Payment Terms**: Interest period options, interest payment dates
-- **Fees**: Commitment fee rate, LC fee rate, fronting fee rate, agency fee
-- **Lender Commitments**: Per-lender allocations (name, percentage, term/revolving commitments)
-- **Covenants**: Fixed charge coverage ratio, other covenants
+| Plugin ID | Name | Sections | Page Strategy | PII | Cost |
+|-----------|------|----------|---------------|-----|------|
+| `loan_package` | Loan Package (Mortgage) | 3 (promissory note, closing disclosure, Form 1003) | LLM start-page detection | No | ~$0.34 |
+| `credit_agreement` | Credit Agreement | 7 (agreement info, rates, terms, lenders, covenants, fees, definitions) | Keyword density → targeted pages | No | ~$0.40-$2.00 |
+| `loan_agreement` | Loan Agreement | 8 (loan terms, interest, payment, parties, security, fees, covenants, signatures) | Keyword density → targeted pages | No | ~$0.18-$0.60 |
+| `bsa_profile` | BSA Profile (KYC/CDD) | 1 (all pages, FORMS+TABLES) | All pages (5-page form) | Yes (SSN, DOB, Tax ID) | ~$0.13 |
+| `w2` | W-2 Wage and Tax Statement | 1 (FORMS+QUERIES) | All pages (1-2 pages) | Yes (SSN) | ~$0.10 |
+| `drivers_license` | Driver's License | 1 (QUERIES+FORMS, 300 DPI) | All pages (1 page) | Yes (DOB, License#) | ~$0.08 |
+
+## Plugin Architecture
+
+### Self-Registering Pattern
+
+Adding a new document type requires **exactly 2 files** — no router, normalizer, frontend, or CDK changes:
+
+```
+lambda/layers/plugins/python/document_plugins/
+  types/{doc_type}.py      ← Plugin config (classification, extraction, schema)
+  prompts/{doc_type}.txt   ← Normalization prompt template
+```
+
+Everything else auto-derives:
+- **Router**: Builds classification prompt from plugin registry keywords
+- **Extractor**: Reads Textract features + queries from plugin section config
+- **Normalizer**: Loads prompt template from plugin's `normalization.prompt_template`
+- **Frontend**: `GenericDataFields` component renders ANY document type dynamically
+- **API**: `GET /plugins` returns all registered types with schemas
+
+### Three Page-Targeting Strategies
+
+The Router Pattern's cost optimization is preserved through per-plugin configuration:
+
+| Strategy | Config | When | Savings |
+|----------|--------|------|---------|
+| **KEYWORD DENSITY** | `has_sections: True` | Large docs (50-300+ pages) | ~90% (extract 30 of 300 pages) |
+| **LLM START-PAGE** | `section_names: [...]` | Multi-doc packages | ~70% |
+| **ALL PAGES** | `target_all_pages: True` | Small forms (1-5 pages) | N/A (already cheap) |
+
+### Plugin Contract (DocumentPluginConfig)
+
+Each plugin exports `PLUGIN_CONFIG: DocumentPluginConfig` with:
+- `plugin_id`, `name`, `description`, `plugin_version`
+- `classification` — keywords, page strategy, distinguishing rules
+- `sections` — per-section Textract features, queries, keywords for page targeting
+- `normalization` — prompt template name, LLM model, max tokens, field overrides
+- `output_schema` — JSON Schema defining the normalized output structure
+- `pii_paths` — JSON path markers for PII encryption (`beneficialOwners[*].ssn`)
+- `cost_budget` — max/warn thresholds, section priority for budget trimming
 
 ## Development Guidelines
 
@@ -236,6 +301,26 @@ financial-documents-processing/
 - **Solution**: Vite + React + TypeScript, deployed to S3 + CloudFront
 - **Features**: PDF viewer, side-by-side extracted data, review workflow
 
+### 7. Plugin Architecture (Self-Registering)
+- **Why**: Adding Credit Agreements required changes to 6+ files; doesn't scale
+- **Solution**: Each document type is a self-contained plugin config + prompt template
+- **Result**: New doc types = 2 files, zero changes elsewhere. GenericDataFields auto-renders UI.
+
+### 8. Blue/Green Step Functions Routing
+- **Why**: Can't break existing workflows during migration to Map state
+- **Solution**: ExtractionRouteChoice checks for `extractionPlan` first, falls back to legacy Parallel branches
+- **Result**: Both old and new paths coexist safely
+
+### 9. PII Field-Level Encryption
+- **Why**: BSA/KYC documents contain SSN, DOB, Tax ID
+- **Solution**: KMS envelope encryption (1 API call per record, AES-256-GCM per field)
+- **Modules**: `pii_crypto.py` (encrypt/decrypt), `safe_log.py` (redact in CloudWatch)
+
+### 10. Cognito Authentication (RBAC)
+- **Why**: API had zero authentication, PII would be publicly accessible
+- **Solution**: Cognito User Pool with Admins/Reviewers/Viewers groups
+- **Status**: User Pool provisioned, `REQUIRE_AUTH=false` (backward compat default)
+
 ## Architectural Design Rationale: Router Pattern vs Alternatives
 
 ### Why Not Use Expensive LLMs (Opus 4.5, GPT-4) with Tool Calling?
@@ -300,59 +385,57 @@ Many document processing solutions use expensive foundation models with tool cal
 
 ## Common Tasks
 
-### Adding a New Document Type
+### Adding a New Document Type (2-File Plugin)
 
-1. Update `lambda/router/handler.py`:
-   - Add document type to the classification prompt
-   - Add corresponding key to the JSON response
+**Step 1: Create the plugin config**
+```
+lambda/layers/plugins/python/document_plugins/types/{doc_type}.py
+```
+Export `PLUGIN_CONFIG: DocumentPluginConfig` with classification keywords, sections with Textract queries, normalization config, output schema, and PII paths. Use existing plugins as templates (e.g., `w2.py` for simple forms, `credit_agreement.py` for multi-section documents).
 
-2. Update `lib/stacks/document-processing-stack.ts`:
-   - Add new extraction branch in `parallelExtraction`
-   - Configure appropriate Textract features
+**Step 2: Create the normalization prompt**
+```
+lambda/layers/plugins/python/document_plugins/prompts/{doc_type}.txt
+```
+Document-type-specific rules. Gets sandwiched between `common_preamble.txt` and `common_footer.txt`. Use `{{`/`}}` for JSON braces. Include explicit Textract field name → schema field mappings.
 
-3. Update `lambda/normalizer/handler.py`:
-   - Add normalization rules for the new document type
-   - Update the output schema
+**Step 3: Deploy**
+```bash
+./scripts/deploy-backend.sh   # CDK auto-includes new files in plugins layer
+```
 
-4. Update `frontend/src/types/index.ts`:
-   - Add TypeScript interface for new document type
-   - Add to `LoanData` or `CreditAgreementData`
+**That's it.** No router, normalizer, frontend, or CDK changes needed. The plugin registry auto-discovers the new file. GenericDataFields renders it in the UI automatically.
 
-5. Update `frontend/src/components/ExtractedValuesPanel.tsx`:
-   - Add new section for displaying extracted data
-   - Create field component for the document type
+**Optional: Custom UI component** — For polished UX, add `frontend/src/components/{DocType}Fields.tsx` and register it in `ExtractedValuesPanel.tsx`. Without this, GenericDataFields renders all fields dynamically.
 
-### Adding New Fields to Credit Agreement
+### Adding New Fields to an Existing Document Type
 
-1. Update `lambda/normalizer/handler.py`:
-   - Add field extraction in the normalization prompt
+1. Add queries to the plugin's `sections.{sectionId}.queries` list
+2. Update the plugin's `output_schema` with new field definitions
+3. Update the plugin's prompt template with extraction rules for the new field
+4. Deploy: `./scripts/deploy-backend.sh`
 
-2. Update `frontend/src/types/index.ts`:
-   - Add field to `CreditAgreement` interface
-
-3. Update `frontend/src/components/ExtractedValuesPanel.tsx`:
-   - Add `<FieldRow>` in `CreditAgreementFields` component
-
-4. Update `frontend/src/pages/ReviewDocument.tsx`:
-   - Add field in `renderCreditAgreementData` function
-
-### Deploying Frontend Changes
+### Deploying
 
 ```bash
-cd frontend
-npm run build
-aws s3 sync dist/ s3://financial-docs-frontend-{account}-{region}/ --delete
-aws cloudfront create-invalidation --distribution-id {DIST_ID} --paths "/*"
+./scripts/deploy-backend.sh    # Build layers + CDK deploy (sources common.sh)
+./scripts/deploy-frontend.sh   # Build React + S3 sync + CloudFront invalidation
+./scripts/cleanup.sh           # Reset S3 and DynamoDB for testing
 ```
 
 ### Modifying Extraction Queries
 
-Edit `lib/stacks/document-processing-stack.ts` in the `extractPromissoryNote` task:
-```typescript
-queries: [
-  'What is the Interest Rate?',
-  'Your new query here',
-],
+Queries now live in plugin configs, not CDK. Edit the plugin file directly:
+```python
+# lambda/layers/plugins/python/document_plugins/types/{doc_type}.py
+"sections": {
+    "my_section": {
+        "queries": [
+            "What is the Interest Rate?",
+            "Your new query here",
+        ],
+    },
+}
 ```
 
 ### Adding New Lambda Environment Variables
@@ -386,6 +469,7 @@ new_var = os.environ.get('NEW_VAR')
 | POST | `/review/{id}/reject` | Reject document |
 | PUT | `/documents/{id}/fields` | Correct field values |
 | POST | `/documents/{id}/reprocess` | Trigger reprocessing |
+| GET | `/plugins` | List registered document type plugins with schemas |
 
 ## Testing
 
@@ -423,18 +507,12 @@ pytest tests/     # Python tests
 
 ### Deploy Backend
 ```bash
-npm install
-npm run build
-cdk deploy --all
+./scripts/deploy-backend.sh   # Sources common.sh, validates AWS env, builds layers + CDK deploy
 ```
 
 ### Deploy Frontend
 ```bash
-cd frontend
-npm install
-npm run build
-aws s3 sync dist/ s3://financial-docs-frontend-{account}-{region}/ --delete
-aws cloudfront create-invalidation --distribution-id {DIST_ID} --paths "/*"
+./scripts/deploy-frontend.sh  # Sources common.sh, npm build, S3 sync, CloudFront invalidation
 ```
 
 ### Destroy Infrastructure
@@ -447,32 +525,32 @@ cdk destroy --all
 When working on this project, Claude should:
 
 ### DO:
+- **Use plugin architecture** for new document types (never hardcode in router/normalizer/frontend)
+- **All scripts must source `common.sh`** for AWS env validation, `uv run python`, and helpers
+- Maintain cost-optimization as a primary concern (Router Pattern)
+- Use `safe_log()` for any logging that might contain PII — never `print()` raw financial data
 - Follow the established code patterns and naming conventions
-- Maintain cost-optimization as a primary concern
 - Keep Lambda functions focused and single-purpose
-- Document any non-obvious design decisions
 - Ensure error handling is comprehensive
 - Consider audit trail requirements for financial compliance
-- Keep frontend and backend types synchronized
 - Use TanStack Query for data fetching in React
 - Test changes locally before suggesting deployment
 
 ### DON'T:
-- Introduce dependencies without justification
-- Break the existing Step Functions workflow without updating all consumers
-- Store PII in logs
-- Use synchronous Textract for multi-page documents (use async for >1 page)
-- Hardcode AWS account IDs or regions
-- Skip error handling in Lambda functions
-- Forget to update both frontend pages when changing data structures
+- **Don't add document-type-specific code to router, normalizer, or frontend** — use plugin configs
+- **Don't use bare `python` or `python3`** — always use `uv run python` via `run_python()`
+- **Don't deploy frontend with `--skip-build`** — always rebuild before syncing to S3
+- Don't introduce dependencies without justification
+- Don't store PII in logs (use safe_log module)
+- Don't hardcode AWS account IDs or regions (use `common.sh` helpers)
+- Don't skip error handling in Lambda functions
 
 ### When Adding Features:
-1. Consider impact on cost (is there a cheaper way?)
-2. Update CLAUDE.md if architecture changes
-3. Ensure backward compatibility with existing documents
-4. Add appropriate CloudWatch metrics/alarms
-5. Update README.md with usage instructions
-6. Update frontend types and components together
+1. **New document type?** Create 2 files: `types/{type}.py` + `prompts/{type}.txt` (see Plugin Architecture)
+2. Consider impact on cost (is there a cheaper way?)
+3. Update CLAUDE.md if architecture changes
+4. Ensure backward compatibility with existing documents
+5. Run `uv run pytest tests/` to verify plugin registry tests pass
 
 ## Troubleshooting
 
@@ -559,6 +637,7 @@ When working on this project, Claude should:
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 3.0.0 | 2026-02-19 | Plugin architecture: self-registering document types (6 plugins), Map state, KMS encryption, Cognito auth, BSA Profile, W-2, Driver's License, GenericDataFields, common.sh scripts |
 | 2.2.0 | 2024-12-29 | Performance optimization: 2GB Lambda memory, 30 parallel workers, ~35s processing time; Add cleanup.sh script; Add ProcessingMetricsPanel component |
 | 2.1.0 | 2024-12-29 | Complete cost tracking: Add Step Functions + Lambda costs |
 | 2.0.0 | 2024-12-25 | Add React dashboard, Review workflow, Credit Agreement support |
@@ -574,4 +653,4 @@ For questions about this project or AI-assisted development, refer to:
 
 ---
 
-*This CLAUDE.md file is designed to provide context to Claude (Opus 4.5) for AI-assisted development. Keep it updated as the project evolves.*
+*This CLAUDE.md file is designed to provide context to Claude for AI-assisted development. Keep it updated as the project evolves.*
