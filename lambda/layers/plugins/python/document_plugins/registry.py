@@ -1,13 +1,17 @@
-"""Plugin Registry - Auto-discovery of document type plugins.
+"""Plugin Registry - Dual-source auto-discovery of document type plugins.
 
-Uses importlib + pkgutil.iter_modules to discover all plugin configs
-in the types/ subpackage. Adding a new document type = creating one
-file in types/ with a PLUGIN_CONFIG dict. No registration boilerplate.
+Two sources, loaded in order:
+  1. File-based plugins (types/ subpackage) -- immutable baseline, always win on collision
+  2. DynamoDB dynamic plugins (PUBLISHED status) -- created via self-service wizard
 
-Same pattern as Django management commands.
+Adding a new document type:
+  - Developer: create types/{doc}.py + prompts/{doc}.txt (file-based)
+  - Analyst: use the plugin builder UI (DynamoDB-backed, no code needed)
 """
 
 import importlib
+import json
+import os
 import pkgutil
 from typing import Dict, List, Optional
 
@@ -18,17 +22,21 @@ from document_plugins.contract import DocumentPluginConfig, ClassificationConfig
 _REGISTRY: Dict[str, DocumentPluginConfig] = {}
 _DISCOVERED: bool = False
 
+# DynamoDB table for dynamic plugins (set via Lambda env var)
+PLUGIN_CONFIGS_TABLE = os.environ.get("PLUGIN_CONFIGS_TABLE", "document-plugin-configs")
+
 
 def _discover_plugins() -> None:
-    """Scan the types/ subpackage for modules exporting PLUGIN_CONFIG.
+    """Two-phase plugin discovery: files first, then DynamoDB.
 
-    Each module must have a module-level PLUGIN_CONFIG dict with at least
-    a 'plugin_id' key. Invalid or missing configs are logged and skipped.
+    File-based plugins are the immutable baseline. DynamoDB dynamic plugins
+    (PUBLISHED status) are loaded second and cannot override file-based ones.
     """
     global _DISCOVERED
     if _DISCOVERED:
         return
 
+    # Phase 1: File-based plugins (existing behavior, always loaded)
     for _importer, modname, _ispkg in pkgutil.iter_modules(_types_pkg.__path__):
         if modname.startswith("_"):
             continue
@@ -43,15 +51,67 @@ def _discover_plugins() -> None:
                         f"document_plugins.types.{modname} - skipping"
                     )
                     continue
+                config["_source"] = "file"
                 _REGISTRY[plugin_id] = config
-            else:
-                # Module exists but has no valid PLUGIN_CONFIG - not an error,
-                # could be a helper module
-                pass
         except Exception as e:
             print(f"WARNING: Failed to load plugin from document_plugins.types.{modname}: {e}")
 
+    # Phase 2: DynamoDB dynamic plugins (PUBLISHED only, graceful degradation)
+    _discover_dynamic_plugins()
+
     _DISCOVERED = True
+
+
+def _discover_dynamic_plugins() -> None:
+    """Load PUBLISHED plugins from DynamoDB. File-based plugins always win on collision."""
+    try:
+        import boto3
+        from boto3.dynamodb.conditions import Key
+
+        table = boto3.resource("dynamodb").Table(PLUGIN_CONFIGS_TABLE)
+
+        # Query all PUBLISHED items
+        response = table.query(
+            IndexName="StatusIndex",
+            KeyConditionExpression=Key("status").eq("PUBLISHED"),
+        )
+
+        for item in response.get("Items", []):
+            plugin_id = item.get("pluginId", "")
+            if not plugin_id:
+                continue
+
+            # File-based plugins always win
+            if plugin_id in _REGISTRY:
+                if _REGISTRY[plugin_id].get("_source") == "file":
+                    print(f"INFO: Dynamic plugin '{plugin_id}' skipped (file-based plugin takes priority)")
+                    continue
+
+            config = item.get("config", {})
+            if isinstance(config, str):
+                config = json.loads(config)
+
+            config["_source"] = "dynamic"
+            config["_version"] = str(item.get("version", "v1"))
+            config["_dynamodb_item"] = {
+                "pluginId": plugin_id,
+                "version": str(item.get("version", "v1")),
+                "status": item.get("status"),
+                "createdBy": item.get("createdBy", ""),
+                "updatedAt": item.get("updatedAt", ""),
+            }
+
+            # Store prompt template separately (not in the plugin config dict)
+            if "promptTemplate" in item:
+                config["_prompt_template_text"] = item["promptTemplate"]
+
+            _REGISTRY[plugin_id] = config
+
+    except ImportError:
+        pass  # boto3 not available (local testing without AWS)
+    except Exception as e:
+        print(f"INFO: Dynamic plugin discovery skipped: {e}")
+        # Graceful degradation: file-based plugins still work
 
 
 def get_plugin(plugin_id: str) -> DocumentPluginConfig:

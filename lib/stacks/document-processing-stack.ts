@@ -953,6 +953,7 @@ export class DocumentProcessingStack extends cdk.Stack {
         BUCKET_NAME: documentBucket.bucketName,
         TABLE_NAME: documentTable.tableName,
         STATE_MACHINE_ARN: stateMachine.stateMachineArn,
+        PLUGIN_CONFIGS_TABLE: 'document-plugin-configs',
         CORS_ORIGIN: '*',
       },
       tracing: lambda.Tracing.ACTIVE,
@@ -1015,9 +1016,18 @@ export class DocumentProcessingStack extends cdk.Stack {
     const metricsResource = api.root.addResource('metrics');
     metricsResource.addMethod('GET', apiIntegration);
 
-    // Plugin registry (frontend uses this to render any document type dynamically)
+    // Plugin registry + config builder (CRUD for self-service plugin creation)
     const pluginsResource = api.root.addResource('plugins');
-    pluginsResource.addMethod('GET', apiIntegration);
+    pluginsResource.addMethod('GET', apiIntegration);   // List all plugins (file + dynamic)
+    pluginsResource.addMethod('POST', apiIntegration);  // Create draft plugin config
+
+    const pluginByIdResource = pluginsResource.addResource('{pluginId}');
+    pluginByIdResource.addMethod('GET', apiIntegration);    // Get plugin config with versions
+    pluginByIdResource.addMethod('PUT', apiIntegration);    // Update draft config
+    pluginByIdResource.addMethod('DELETE', apiIntegration); // Delete dynamic plugin
+
+    const pluginPublishResource = pluginByIdResource.addResource('publish');
+    pluginPublishResource.addMethod('POST', apiIntegration); // Publish for production
 
     // Review workflow routes
     const reviewResource = api.root.addResource('review');
@@ -1200,8 +1210,41 @@ function handler(event) {
     piiAuditTable.grantWriteData(apiLambda);
 
     // ==========================================
+    // Plugin Config Store (Self-Service Plugin Builder)
+    // ==========================================
+
+    const pluginConfigsTable = new dynamodb.Table(this, 'PluginConfigsTable', {
+      tableName: 'document-plugin-configs',
+      partitionKey: { name: 'pluginId', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'version', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      pointInTimeRecovery: true,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+    });
+
+    pluginConfigsTable.addGlobalSecondaryIndex({
+      indexName: 'StatusIndex',
+      partitionKey: { name: 'status', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'updatedAt', type: dynamodb.AttributeType.STRING },
+      projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    // API Lambda needs read/write for config CRUD
+    pluginConfigsTable.grantReadWriteData(apiLambda);
+    // Router/Extractor/Normalizer need read for published configs
+    pluginConfigsTable.grantReadData(routerLambda);
+    pluginConfigsTable.grantReadData(extractorLambda);
+    pluginConfigsTable.grantReadData(normalizerLambda);
+
+    // ==========================================
     // Outputs
     // ==========================================
+
+    new cdk.CfnOutput(this, 'PluginConfigsTableName', {
+      value: pluginConfigsTable.tableName,
+      description: 'DynamoDB table for dynamic plugin configurations',
+      exportName: 'FinancialDocPluginConfigsTable',
+    });
 
     new cdk.CfnOutput(this, 'UserPoolId', {
       value: userPool.userPoolId,

@@ -1,6 +1,6 @@
 import { ReactNode } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { FileText, Upload, LayoutDashboard, ClipboardCheck, LogOut } from 'lucide-react';
+import { FileText, Upload, LayoutDashboard, ClipboardCheck, LogOut, Puzzle } from 'lucide-react';
 import clsx from 'clsx';
 import { useAuth } from '../contexts/AuthContext';
 
@@ -13,6 +13,7 @@ const navigation = [
   { name: 'Documents', href: '/documents', icon: FileText },
   { name: 'Review', href: '/review', icon: ClipboardCheck, roles: ['Admins', 'Reviewers'] as const },
   { name: 'Upload', href: '/upload', icon: Upload, roles: ['Admins', 'Reviewers'] as const },
+  { name: 'Config', href: '/config', icon: Puzzle, roles: ['Admins'] as const },
 ];
 
 export default function Layout({ children }: LayoutProps) {
