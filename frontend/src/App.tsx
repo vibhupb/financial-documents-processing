@@ -8,6 +8,7 @@ import DocumentDetail from './pages/DocumentDetail';
 import Upload from './pages/Upload';
 import Review from './pages/Review';
 import ReviewDocument from './pages/ReviewDocument';
+import PluginList from './pages/PluginList';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, isLoading } = useAuth();
@@ -80,6 +81,14 @@ function AppRoutes() {
         element={
           <ProtectedRoute>
             <Layout><ReviewDocument /></Layout>
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/config"
+        element={
+          <ProtectedRoute>
+            <Layout><PluginList /></Layout>
           </ProtectedRoute>
         }
       />

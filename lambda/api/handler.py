@@ -428,6 +428,193 @@ def get_registered_plugins() -> dict[str, Any]:
         return {"plugins": {}, "count": 0, "error": str(e)}
 
 
+PLUGIN_CONFIGS_TABLE = os.environ.get("PLUGIN_CONFIGS_TABLE", "document-plugin-configs")
+
+
+def create_plugin_config(body: dict[str, Any], user: Any) -> dict[str, Any]:
+    """Create a new draft plugin configuration."""
+    plugin_id = body.get("pluginId", "").strip().lower().replace(" ", "_")
+    if not plugin_id:
+        return {"error": "pluginId is required"}
+
+    name = body.get("name", plugin_id)
+    config = body.get("config", {})
+    prompt_template = body.get("promptTemplate", "")
+    timestamp = datetime.utcnow().isoformat() + "Z"
+
+    table = dynamodb.Table(PLUGIN_CONFIGS_TABLE)
+    item = {
+        "pluginId": plugin_id,
+        "version": "v1",
+        "status": "DRAFT",
+        "name": name,
+        "description": body.get("description", ""),
+        "config": config,
+        "promptTemplate": prompt_template,
+        "createdBy": getattr(user, 'email', 'unknown') if user else 'unknown',
+        "createdAt": timestamp,
+        "updatedAt": timestamp,
+        "testResults": [],
+        "sampleDocumentKey": body.get("sampleDocumentKey", ""),
+    }
+    table.put_item(Item=item)
+    return {"pluginId": plugin_id, "version": "v1", "status": "DRAFT"}
+
+
+def get_plugin_config(plugin_id: str) -> dict[str, Any]:
+    """Get a plugin config with all versions."""
+    table = dynamodb.Table(PLUGIN_CONFIGS_TABLE)
+    result = table.query(
+        KeyConditionExpression=boto3.dynamodb.conditions.Key("pluginId").eq(plugin_id),
+        ScanIndexForward=False,  # Latest version first
+    )
+    items = result.get("Items", [])
+    if not items:
+        return {"error": "Plugin not found", "pluginId": plugin_id}
+    return {
+        "pluginId": plugin_id,
+        "versions": items,
+        "latestVersion": items[0].get("version"),
+        "latestStatus": items[0].get("status"),
+    }
+
+
+def update_plugin_config(plugin_id: str, body: dict[str, Any], user: Any) -> dict[str, Any]:
+    """Update a draft plugin configuration (creates new version if published)."""
+    table = dynamodb.Table(PLUGIN_CONFIGS_TABLE)
+    timestamp = datetime.utcnow().isoformat() + "Z"
+
+    # Get latest version
+    result = table.query(
+        KeyConditionExpression=boto3.dynamodb.conditions.Key("pluginId").eq(plugin_id),
+        ScanIndexForward=False,
+        Limit=1,
+    )
+    items = result.get("Items", [])
+    if not items:
+        return {"error": "Plugin not found"}
+
+    latest = items[0]
+    current_version = latest["version"]
+    current_status = latest.get("status", "DRAFT")
+
+    # If published, create new draft version
+    if current_status == "PUBLISHED":
+        version_num = int(current_version.replace("v", "")) + 1
+        new_version = f"v{version_num}"
+        item = {
+            "pluginId": plugin_id,
+            "version": new_version,
+            "status": "DRAFT",
+            "name": body.get("name", latest.get("name", "")),
+            "description": body.get("description", latest.get("description", "")),
+            "config": body.get("config", latest.get("config", {})),
+            "promptTemplate": body.get("promptTemplate", latest.get("promptTemplate", "")),
+            "createdBy": getattr(user, 'email', 'unknown') if user else 'unknown',
+            "createdAt": timestamp,
+            "updatedAt": timestamp,
+            "testResults": [],
+            "sampleDocumentKey": body.get("sampleDocumentKey", latest.get("sampleDocumentKey", "")),
+        }
+        table.put_item(Item=item)
+        return {"pluginId": plugin_id, "version": new_version, "status": "DRAFT"}
+
+    # Otherwise update the draft in place
+    update_fields = {}
+    for key in ["name", "description", "config", "promptTemplate", "sampleDocumentKey"]:
+        if key in body:
+            update_fields[key] = body[key]
+    update_fields["updatedAt"] = timestamp
+
+    expr_parts = []
+    attr_values = {}
+    for i, (k, v) in enumerate(update_fields.items()):
+        expr_parts.append(f"#{k} = :val{i}")
+        attr_values[f":val{i}"] = v
+
+    attr_names = {f"#{k}": k for k in update_fields}
+
+    table.update_item(
+        Key={"pluginId": plugin_id, "version": current_version},
+        UpdateExpression="SET " + ", ".join(expr_parts),
+        ExpressionAttributeNames=attr_names,
+        ExpressionAttributeValues=attr_values,
+    )
+    return {"pluginId": plugin_id, "version": current_version, "status": "DRAFT", "updated": True}
+
+
+def publish_plugin_config(plugin_id: str, user: Any) -> dict[str, Any]:
+    """Publish the latest draft version for production use."""
+    table = dynamodb.Table(PLUGIN_CONFIGS_TABLE)
+    timestamp = datetime.utcnow().isoformat() + "Z"
+
+    # Get latest version
+    result = table.query(
+        KeyConditionExpression=boto3.dynamodb.conditions.Key("pluginId").eq(plugin_id),
+        ScanIndexForward=False,
+        Limit=1,
+    )
+    items = result.get("Items", [])
+    if not items:
+        return {"error": "Plugin not found"}
+
+    latest = items[0]
+    version = latest["version"]
+
+    if latest.get("status") == "PUBLISHED":
+        return {"error": "Already published", "version": version}
+
+    # Unpublish any previously published version
+    all_versions = table.query(
+        KeyConditionExpression=boto3.dynamodb.conditions.Key("pluginId").eq(plugin_id),
+    ).get("Items", [])
+
+    for item in all_versions:
+        if item.get("status") == "PUBLISHED" and item["version"] != version:
+            table.update_item(
+                Key={"pluginId": plugin_id, "version": item["version"]},
+                UpdateExpression="SET #s = :s, updatedAt = :t",
+                ExpressionAttributeNames={"#s": "status"},
+                ExpressionAttributeValues={":s": "ARCHIVED", ":t": timestamp},
+            )
+
+    # Publish this version
+    table.update_item(
+        Key={"pluginId": plugin_id, "version": version},
+        UpdateExpression="SET #s = :s, updatedAt = :t, publishedBy = :by",
+        ExpressionAttributeNames={"#s": "status"},
+        ExpressionAttributeValues={
+            ":s": "PUBLISHED",
+            ":t": timestamp,
+            ":by": getattr(user, 'email', 'unknown') if user else 'unknown',
+        },
+    )
+
+    return {"pluginId": plugin_id, "version": version, "status": "PUBLISHED"}
+
+
+def delete_plugin_config(plugin_id: str) -> dict[str, Any]:
+    """Delete all versions of a dynamic plugin (cannot delete file-based)."""
+    try:
+        from document_plugins.registry import get_plugin
+        existing = get_plugin(plugin_id)
+        if existing.get("_source") == "file":
+            return {"error": "Cannot delete file-based plugin"}
+    except (KeyError, ImportError):
+        pass
+
+    table = dynamodb.Table(PLUGIN_CONFIGS_TABLE)
+    result = table.query(
+        KeyConditionExpression=boto3.dynamodb.conditions.Key("pluginId").eq(plugin_id),
+    )
+    deleted = 0
+    for item in result.get("Items", []):
+        table.delete_item(Key={"pluginId": plugin_id, "version": item["version"]})
+        deleted += 1
+
+    return {"pluginId": plugin_id, "deletedVersions": deleted}
+
+
 def get_metrics() -> dict[str, Any]:
     """Get processing metrics and statistics."""
     table = dynamodb.Table(TABLE_NAME)
@@ -879,6 +1066,25 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
 
         elif path == "/plugins" and http_method == "GET":
             return response(200, get_registered_plugins())
+
+        elif path == "/plugins" and http_method == "POST":
+            return response(200, create_plugin_config(body or {}, user))
+
+        elif path.startswith("/plugins/") and "/publish" in path and http_method == "POST":
+            pid = path.split("/")[2]
+            return response(200, publish_plugin_config(pid, user))
+
+        elif path.startswith("/plugins/") and http_method == "GET":
+            pid = path_params.get("pluginId") or path.split("/")[2]
+            return response(200, get_plugin_config(pid))
+
+        elif path.startswith("/plugins/") and http_method == "PUT":
+            pid = path_params.get("pluginId") or path.split("/")[2]
+            return response(200, update_plugin_config(pid, body or {}, user))
+
+        elif path.startswith("/plugins/") and http_method == "DELETE":
+            pid = path_params.get("pluginId") or path.split("/")[2]
+            return response(200, delete_plugin_config(pid))
 
         # Review workflow endpoints
         elif path == "/review" and http_method == "GET":

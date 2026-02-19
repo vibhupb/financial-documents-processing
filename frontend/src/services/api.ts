@@ -97,8 +97,13 @@ export const api = {
   // Metrics
   getMetrics: () => fetchApi<Metrics>('/metrics'),
 
-  // Plugin registry (document types + schemas)
+  // Plugin registry + config builder
   getPlugins: () => fetchApi<{ plugins: Record<string, any>; count: number }>('/plugins'),
+  getPluginConfig: (pluginId: string) => fetchApi<any>(`/plugins/${pluginId}`),
+  createPluginConfig: (data: any) => fetchApi<any>('/plugins', { method: 'POST', body: JSON.stringify(data) }),
+  updatePluginConfig: (pluginId: string, data: any) => fetchApi<any>(`/plugins/${pluginId}`, { method: 'PUT', body: JSON.stringify(data) }),
+  publishPlugin: (pluginId: string) => fetchApi<any>(`/plugins/${pluginId}/publish`, { method: 'POST' }),
+  deletePlugin: (pluginId: string) => fetchApi<any>(`/plugins/${pluginId}`, { method: 'DELETE' }),
 
   // Review workflow
   listReviewQueue: (params?: { status?: ReviewStatus; limit?: number }) => {
