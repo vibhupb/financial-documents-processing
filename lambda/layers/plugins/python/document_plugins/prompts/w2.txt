@@ -1,0 +1,94 @@
+W-2 WAGE AND TAX STATEMENT NORMALIZATION RULES:
+
+This is an IRS Form W-2 (Wage and Tax Statement). Extract all numbered box values
+and employer/employee identification data.
+
+TEXTRACT FORM FIELD NAME → OUTPUT SCHEMA MAPPING:
+
+  "Employer's name, address, and ZIP code" → employer.name + employer.address
+  "Employer identification number (EIN)" → employer.ein
+  "Employee's social security number" → employee.ssn
+  "Employee's first name and initial" + "Last name" → employee.name
+  "Employee's address and ZIP code" → employee.address
+
+  Box 1 "Wages, tips, other compensation" → wages.box1WagesTipsComp
+  Box 2 "Federal income tax withheld" → wages.box2FederalTaxWithheld
+  Box 3 "Social security wages" → wages.box3SocialSecurityWages
+  Box 4 "Social security tax withheld" → wages.box4SocialSecurityTax
+  Box 5 "Medicare wages and tips" → wages.box5MedicareWages
+  Box 6 "Medicare tax withheld" → wages.box6MedicareTax
+  Box 7 "Social security tips" → wages.box7SocialSecurityTips
+  Box 8 "Allocated tips" → wages.box8AllocatedTips
+  Box 10 "Dependent care benefits" → wages.box10DependentCareBenefits
+  Box 11 "Nonqualified plans" → wages.box11NonqualifiedPlans
+  Box 12 (codes a-d) → wages.box12Codes (array of {{code, amount}})
+  Box 13 checkboxes → wages.box13Statutory, box13RetirementPlan, box13ThirdPartySickPay
+  Box 15 "State/Employer's state ID" → state.stateCode + state.box15StateId
+  Box 16 "State wages, tips, etc." → state.box16StateWages
+  Box 17 "State income tax" → state.box17StateIncomeTax
+  Box 18 "Local wages, tips, etc." → state.box18LocalWages
+  Box 19 "Local income tax" → state.box19LocalIncomeTax
+  Box 20 "Locality name" → state.box20LocalityName
+
+CONVERSION RULES:
+- ALL dollar amounts to plain numbers ("$52,345.67" → 52345.67)
+- SSN format: preserve as XXX-XX-XXXX
+- EIN format: preserve as XX-XXXXXXX
+- Tax year: extract from header or "20XX" reference
+
+=== OUTPUT FORMAT ===
+
+Return ONLY valid JSON:
+{{
+  "loanData": {{
+    "w2": {{
+      "taxYear": <string or null>,
+      "employer": {{
+        "name": <string or null>,
+        "ein": <string or null>,
+        "address": <string or null>,
+        "stateId": <string or null>
+      }},
+      "employee": {{
+        "name": <string or null>,
+        "ssn": <string or null>,
+        "address": <string or null>
+      }},
+      "wages": {{
+        "box1WagesTipsComp": <number or null>,
+        "box2FederalTaxWithheld": <number or null>,
+        "box3SocialSecurityWages": <number or null>,
+        "box4SocialSecurityTax": <number or null>,
+        "box5MedicareWages": <number or null>,
+        "box6MedicareTax": <number or null>,
+        "box7SocialSecurityTips": <number or null>,
+        "box8AllocatedTips": <number or null>,
+        "box10DependentCareBenefits": <number or null>,
+        "box11NonqualifiedPlans": <number or null>,
+        "box12Codes": [{{ "code": <string>, "amount": <number> }}],
+        "box13Statutory": <boolean or null>,
+        "box13RetirementPlan": <boolean or null>,
+        "box13ThirdPartySickPay": <boolean or null>
+      }},
+      "state": {{
+        "stateCode": <string or null>,
+        "box15StateId": <string or null>,
+        "box16StateWages": <number or null>,
+        "box17StateIncomeTax": <number or null>,
+        "box18LocalWages": <number or null>,
+        "box19LocalIncomeTax": <number or null>,
+        "box20LocalityName": <string or null>
+      }}
+    }}
+  }},
+  "validation": {{
+    "isValid": <boolean>,
+    "confidence": "high" | "medium" | "low",
+    "crossReferenceChecks": [],
+    "validationNotes": [<string>],
+    "missingRequiredFields": [<string>]
+  }},
+  "audit": {{
+    "extractionSources": []
+  }}
+}}

@@ -1,0 +1,83 @@
+DRIVER'S LICENSE / ID CARD NORMALIZATION RULES:
+
+This is a US state-issued Driver's License or Identification Card.
+Extract personal information, license details, and physical descriptors.
+
+ID documents are typically scanned images -- prefer Textract query results
+over raw text when available.
+
+FIELD MAPPING:
+
+  "DL" / "License Number" / "ID Number" → licenseNumber
+  "LN" / "Last Name" / "Surname" → lastName
+  "FN" / "First Name" → firstName
+  "MN" / "Middle Name" → middleName
+  "DOB" / "Date of Birth" → dateOfBirth
+  "EXP" / "Expiration" / "Expires" → expirationDate
+  "ISS" / "Issue Date" / "Issued" → issueDate
+  "CLASS" / "Type" → licenseClass
+  "SEX" / "Gender" → sex
+  "HGT" / "Height" → height
+  "WGT" / "Weight" → weight
+  "EYES" / "Eye Color" → eyeColor
+  "HAIR" / "Hair Color" → hairColor
+  "REST" / "Restrictions" → restrictions
+  "END" / "Endorsements" → endorsements
+  "REAL ID" → isRealId (boolean)
+
+ADDRESS: Parse into street, city, state, ZIP components.
+
+DATES: Normalize to YYYY-MM-DD format.
+
+NAME: Split full name into firstName, middleName, lastName.
+  Also provide fullName as the complete name string.
+
+=== OUTPUT FORMAT ===
+
+Return ONLY valid JSON:
+{{
+  "loanData": {{
+    "driversLicense": {{
+      "fullName": <string or null>,
+      "firstName": <string or null>,
+      "middleName": <string or null>,
+      "lastName": <string or null>,
+      "dateOfBirth": <YYYY-MM-DD or null>,
+      "address": {{
+        "street": <string or null>,
+        "city": <string or null>,
+        "state": <string or null>,
+        "zipCode": <string or null>
+      }},
+      "licenseNumber": <string or null>,
+      "licenseClass": <string or null>,
+      "issuingState": <string or null>,
+      "issueDate": <YYYY-MM-DD or null>,
+      "expirationDate": <YYYY-MM-DD or null>,
+      "sex": <string or null>,
+      "height": <string or null>,
+      "weight": <string or null>,
+      "eyeColor": <string or null>,
+      "hairColor": <string or null>,
+      "restrictions": <string or null>,
+      "endorsements": <string or null>,
+      "isRealId": <boolean or null>,
+      "documentType": <"Driver's License" or "Identification Card">
+    }}
+  }},
+  "validation": {{
+    "isValid": <boolean>,
+    "confidence": "high" | "medium" | "low",
+    "crossReferenceChecks": [],
+    "validationNotes": [<string>],
+    "missingRequiredFields": [<string>]
+  }},
+  "audit": {{
+    "extractionSources": []
+  }}
+}}
+
+VALIDATION:
+- License number should be present (critical field)
+- Expiration date should be in the future for valid ID
+- Name and DOB are required for identity verification
