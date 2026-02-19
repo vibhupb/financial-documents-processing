@@ -57,6 +57,11 @@ export class DocumentProcessingStack extends cdk.Stack {
           prefix: 'temp/',
           expiration: cdk.Duration.days(1),
         },
+        {
+          id: 'CleanupExtractionIntermediates',
+          prefix: 'extractions/',
+          expiration: cdk.Duration.days(1),
+        },
       ],
     });
 
@@ -756,12 +761,74 @@ export class DocumentProcessingStack extends cdk.Stack {
     });
 
     // ==========================================
-    // Document Type Routing (Choice State)
+    // Plugin-Driven Map State (Phase 3)
     // ==========================================
 
-    // Choice state to route based on primary document type
-    const documentTypeChoice = new sfn.Choice(this, 'DocumentTypeChoice', {
-      comment: 'Route based on the primary document type detected by the router',
+    // Per-iteration failure handler for Map state
+    const sectionExtractionFailed = new sfn.Pass(this, 'SectionExtractionFailed', {
+      result: sfn.Result.fromObject({
+        status: 'SECTION_FAILED',
+        error: 'Extraction failed for this section',
+      }),
+    });
+
+    // Inner LambdaInvoke for each Map iteration
+    const extractSection = new tasks.LambdaInvoke(this, 'ExtractSection', {
+      lambdaFunction: extractorLambda,
+      payload: sfn.TaskInput.fromObject({
+        'documentId.$': '$.sectionConfig.documentId',
+        'bucket.$': '$.sectionConfig.bucket',
+        'key.$': '$.sectionConfig.key',
+        'contentHash.$': '$.sectionConfig.contentHash',
+        'size.$': '$.sectionConfig.size',
+        'sectionConfig.$': '$.sectionConfig',
+        'pluginId.$': '$.sectionConfig.pluginId',
+      }),
+      outputPath: '$.Payload',
+      retryOnServiceExceptions: false,
+    });
+
+    // Explicit retry for Textract throttling
+    extractSection.addRetry({
+      errors: [
+        'ThrottlingException',
+        'ProvisionedThroughputExceededException',
+        'LimitExceededException',
+        'Lambda.TooManyRequestsException',
+      ],
+      interval: cdk.Duration.seconds(2),
+      maxAttempts: 3,
+      backoffRate: 2.0,
+    });
+
+    // Per-iteration catch
+    extractSection.addCatch(sectionExtractionFailed, {
+      resultPath: '$.sectionError',
+    });
+
+    // Map state iterates over extraction plan from router
+    const mapExtraction = new sfn.Map(this, 'MapExtraction', {
+      comment: 'Plugin-driven: iterate over extraction plan sections from router',
+      maxConcurrency: 10,
+      itemsPath: '$.extractionPlan',
+      itemSelector: {
+        'sectionConfig.$': '$$.Map.Item.Value',
+      },
+      resultPath: '$.extractions',
+    });
+
+    mapExtraction.itemProcessor(extractSection);
+
+    // Map extraction -> normalize
+    mapExtraction.next(normalizeData);
+
+    // ==========================================
+    // Document Type Routing (Blue/Green)
+    // ==========================================
+
+    // Legacy choice state (retained for blue/green transition)
+    const legacyDocumentTypeChoice = new sfn.Choice(this, 'LegacyDocumentTypeChoice', {
+      comment: 'Legacy routing based on classification output (Parallel branches)',
     });
 
     // Credit Agreement path: parallel section extraction -> normalize
@@ -773,23 +840,30 @@ export class DocumentProcessingStack extends cdk.Stack {
     // Mortgage document path: parallel extraction -> normalize
     parallelMortgageExtraction.next(normalizeData);
 
-    // Build the state machine with document type routing
-    // Priority: Credit Agreement (complex syndicated) > Loan Agreement (simple) > Mortgage/Other
-    // Note: Loan Agreement routing now checks for loanAgreementSections (not just classification)
-    // to ensure intelligent page selection is available. Documents classified before this change
-    // will need to be reprocessed to get loanAgreementSections.
-    const definition = classifyDocument.next(
-      documentTypeChoice
-        .when(
-          sfn.Condition.isPresent('$.creditAgreementSections'),
-          parallelCreditAgreementExtraction
-        )
-        .when(
-          sfn.Condition.isPresent('$.loanAgreementSections'),
-          parallelLoanAgreementExtraction
-        )
-        .otherwise(parallelMortgageExtraction)
-    );
+    legacyDocumentTypeChoice
+      .when(
+        sfn.Condition.isPresent('$.creditAgreementSections'),
+        parallelCreditAgreementExtraction
+      )
+      .when(
+        sfn.Condition.isPresent('$.loanAgreementSections'),
+        parallelLoanAgreementExtraction
+      )
+      .otherwise(parallelMortgageExtraction);
+
+    // Primary choice: extractionPlan present -> Map; otherwise -> legacy
+    const extractionRouteChoice = new sfn.Choice(this, 'ExtractionRouteChoice', {
+      comment: 'Blue/green: use plugin Map if router emits extractionPlan, else legacy Parallel',
+    });
+
+    extractionRouteChoice
+      .when(
+        sfn.Condition.isPresent('$.extractionPlan'),
+        mapExtraction
+      )
+      .otherwise(legacyDocumentTypeChoice);
+
+    const definition = classifyDocument.next(extractionRouteChoice);
 
     // Normalize leads to processing complete
     normalizeData.next(processingComplete);
@@ -805,6 +879,9 @@ export class DocumentProcessingStack extends cdk.Stack {
       resultPath: '$.error',
     });
     parallelMortgageExtraction.addCatch(handleError, {
+      resultPath: '$.error',
+    });
+    mapExtraction.addCatch(handleError, {
       resultPath: '$.error',
     });
     normalizeData.addCatch(handleError, {
@@ -824,7 +901,7 @@ export class DocumentProcessingStack extends cdk.Stack {
           retention: logs.RetentionDays.ONE_MONTH,
           removalPolicy: cdk.RemovalPolicy.DESTROY,
         }),
-        level: sfn.LogLevel.ALL,
+        level: sfn.LogLevel.ERROR,  // Prevent PII from financial documents appearing in CloudWatch
       },
     });
 
