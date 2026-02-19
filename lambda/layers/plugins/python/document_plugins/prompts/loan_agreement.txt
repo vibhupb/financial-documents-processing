@@ -1,0 +1,215 @@
+LOAN AGREEMENT SPECIFIC NORMALIZATION RULES:
+
+This is a business/commercial Loan Agreement. It may be a term loan, line of credit,
+revolving credit, or asset-based lending facility. Uses hybrid extraction: Textract OCR
+for visual extraction + PyPDF for readable text + Textract Queries for targeted fields.
+When Textract query results are available with confidence >= 70%, prefer those values.
+
+1. **Loan Amounts and Credit Limits**:
+   - Convert ALL dollar amounts to numeric without currency symbols ("$500,000.00" -> 500000.00)
+   - Handle text formats ("Five Hundred Thousand Dollars" -> 500000.00)
+   - For lines of credit, extract both credit limit (maximum) and any current outstanding
+
+2. **Interest Rate Extraction**:
+   - Convert ALL percentages to decimal ("8.5%" -> 0.085, "4.25%" -> 0.0425)
+   - For fixed rate loans: extract the stated rate as-is
+   - For variable rate: identify index + margin structure
+     * "Prime + 2.0%" means margin = 0.02
+     * "SOFR plus 150 basis points" means margin = 0.015
+   - Handle text rates: "one-half of one percent" = 0.005, "50 basis points" = 0.005
+
+3. **Rate Type Identification**:
+   - "Fixed Rate" -> interestRateType = "FIX:FIXED RATE LOAN"
+   - "Prime Rate" or "Prime" -> interestRateType = "PRM:PRIME RATE LOAN"
+   - "SOFR" -> interestRateType = "SOF:SOFR"
+   - "LIBOR" -> interestRateType = "LIB:LIBOR RATE LOAN"
+
+4. **Index Rate Identification**:
+   - "Wall Street Journal Prime" or "Prime Rate" -> rateIndex = "WALLST:WALL STREET JOURNAL PRIME"
+   - "SOFR" -> rateIndex = "SOFR:SOFR RATE"
+   - "Wells Fargo Prime" -> rateIndex = "WFPRIM:WELLS FARGO BANK PRIME"
+   - "FHLB" -> rateIndex = "FHLB:FHLB RATE"
+   - "Federal Funds" -> rateIndex = "FED:FEDERAL FUNDS RATE"
+   - If Prime mentioned without publisher, default to "WALLST:WALL STREET JOURNAL PRIME"
+
+5. **Day Count Basis**:
+   - "360-day year" or "actual/360" -> "360ACTUAL:ACTUAL DAYS / 360 DAY YEAR"
+   - "365-day year" or "actual/365" -> "365ACTUAL:ACTUAL DAYS / 365 DAY YEAR"
+   - "30/360" -> "360360:360 DAYS / 360 DAY YEAR"
+   - Default: "360ACTUAL:ACTUAL DAYS / 360 DAY YEAR"
+
+6. **Payment Frequency**:
+   - "monthly" -> "C:MONTHLY"
+   - "quarterly" -> "E:QUARTERLY"
+   - "semi-annually" -> "G:SEMI-ANNUAL"
+   - "annually" -> "I:ANNUAL"
+   - "weekly" -> "A:WEEKLY"
+   - "on demand" -> "X:ON DEMAND"
+   - Default: "C:MONTHLY" -- MUST always provide a value
+
+7. **Billing Type**:
+   - "interest only" -> "A:INTEREST ONLY"
+   - "principal and interest" or "P&I" -> "F:PAYMENT AMOUNT INCLUDING INTEREST"
+   - "principal payments" with "accrued interest" -> "D:PRINCIPAL AMOUNT PLUS INTEREST"
+   - Default for LINE OF CREDIT: "A:INTEREST ONLY"
+   - Default for TERM LOAN: "F:PAYMENT AMOUNT INCLUDING INTEREST"
+   - MUST always provide a value
+
+8. **Instrument Type**:
+   - "term loan" -> "TERM:TERM LOAN"
+   - "line of credit" or "revolving" -> "LINE:LINE OF CREDIT"
+   - "asset based lending" -> "ABL:ASSET BASED LENDING"
+   - Default: "TERM:TERM LOAN"
+
+9. **Prepayment Terms**:
+   - "may prepay without penalty" -> "Y:YES"
+   - "may not prepay" -> "N:NO"
+   - "prepayment penalty" -> "P:PENALTY"
+
+10. **Collateral and Security**:
+    - If "secured", "collateral", "security interest", "UCC" -> isSecured = true
+    - Extract collateral description and property address if secured by real estate
+
+=== OUTPUT FORMAT ===
+
+Return ONLY valid JSON matching this structure:
+{{
+  "loanData": {{
+    "loanAgreement": {{
+      "documentInfo": {{
+        "documentType": <string - human-readable type>,
+        "loanNumber": <string or null>,
+        "agreementDate": <YYYY-MM-DD or null>,
+        "effectiveDate": <YYYY-MM-DD or null>,
+        "closingDate": <YYYY-MM-DD or null>
+      }},
+      "loanTerms": {{
+        "loanAmount": <number or null>,
+        "creditLimit": <number or null>,
+        "interestRate": <decimal or null - total rate including spread>,
+        "annualPercentageRate": <decimal or null>,
+        "isFixedRate": <boolean or null>,
+        "maturityDate": <YYYY-MM-DD or null>,
+        "loanTermMonths": <number or null>
+      }},
+      "interestDetails": {{
+        "rateType": <string - interest_rate_type code>,
+        "indexRate": <string - rate_index code>,
+        "margin": <decimal or null>,
+        "floor": <decimal or null>,
+        "ceiling": <decimal or null>,
+        "defaultRate": <decimal or null>,
+        "dayCountBasis": <string - rate_calculation_method code>
+      }},
+      "paymentInfo": {{
+        "monthlyPayment": <number or null>,
+        "firstPaymentDate": <YYYY-MM-DD or null>,
+        "paymentDueDay": <number or null - day of month>,
+        "paymentFrequency": <string - billing_frequency code>,
+        "numberOfPayments": <number or null>,
+        "balloonPayment": <number or null>
+      }},
+      "parties": {{
+        "borrower": {{
+          "name": <string or null>,
+          "address": <string or null>
+        }},
+        "guarantor": {{
+          "name": <string or null>,
+          "address": <string or null>
+        }},
+        "lender": {{
+          "name": <string or null>,
+          "address": <string or null>
+        }}
+      }},
+      "security": {{
+        "isSecured": <boolean or null>,
+        "collateralDescription": <string or null>,
+        "propertyAddress": <string or null>
+      }},
+      "fees": {{
+        "originationFee": <number or null>,
+        "latePaymentFee": <number or null>,
+        "gracePeriodDays": <number or null>,
+        "closingCosts": <number or null>,
+        "annualFee": <number or null>
+      }},
+      "prepayment": {{
+        "hasPenalty": <boolean or null>,
+        "penaltyTerms": <string or null>
+      }},
+      "covenants": {{
+        "financialCovenants": [<string>],
+        "debtServiceCoverageRatio": <decimal or null>,
+        "currentRatio": <decimal or null>
+      }},
+      "repayment": {{
+        "schedule": <string or null>,
+        "principalReductions": <string or null>,
+        "interestOnlyPeriod": <string or null>
+      }},
+      "default": {{
+        "eventsOfDefault": [<string>],
+        "remedies": [<string>]
+      }},
+      "_extractedCodes": {{
+        "instrumentType": <string - "TERM:TERM LOAN">,
+        "interestRateType": <string - "PRM:PRIME RATE LOAN">,
+        "rateIndex": <string - "WALLST:WALL STREET JOURNAL PRIME">,
+        "rateCalculationMethod": <string - "360ACTUAL:ACTUAL DAYS / 360 DAY YEAR">,
+        "billingType": <string - "F:PAYMENT AMOUNT INCLUDING INTEREST">,
+        "billingFrequency": <string - "C:MONTHLY">,
+        "prepaymentIndicator": <string - "Y:YES">,
+        "currency": <string - "USD:US DOLLAR">
+      }}
+    }}
+  }},
+  "validation": {{
+    "isValid": <boolean>,
+    "confidence": "high" | "medium" | "low",
+    "crossReferenceChecks": [
+      {{
+        "field1": <string>,
+        "field2": <string>,
+        "match": <boolean>,
+        "note": <string or null>
+      }}
+    ],
+    "validationNotes": [<string>],
+    "missingRequiredFields": [<string>]
+  }},
+  "audit": {{
+    "extractionSources": [
+      {{
+        "field": <string>,
+        "rawValue": <string>,
+        "normalizedValue": <any>
+      }}
+    ]
+  }}
+}}
+
+DEFAULT VALUE RULES (IMPORTANT):
+- billingFrequency: ALWAYS provide a value. Default "C:MONTHLY" if not stated.
+- billingType: ALWAYS provide a value. "A:INTEREST ONLY" for LOC, "F:PAYMENT AMOUNT INCLUDING INTEREST" for term loans.
+- currency: Default "USD:US DOLLAR"
+- rateCalculationMethod / dayCountBasis: Default "360ACTUAL:ACTUAL DAYS / 360 DAY YEAR"
+- instrumentType: Default "TERM:TERM LOAN"
+- interestRateType: If Prime mentioned -> "PRM:PRIME RATE LOAN"
+- rateIndex: If Prime mentioned -> "WALLST:WALL STREET JOURNAL PRIME"
+- NEVER use null for coded fields (_extractedCodes) -- always use defaults
+
+WHEN TO USE NULL:
+- For specific values (amounts, dates) where no data exists
+- For party names/addresses when not specified
+- NEVER for coded fields -- use defaults instead
+
+VALIDATION RULES:
+1. If loanAmount and interestRate both present, verify loanAmount x interestRate / 12 is approximately equal to monthlyPayment (rough sanity check)
+2. If maturityDate and effectiveDate both present, verify implied loan term is reasonable (1-30 years)
+3. If isFixedRate is true, interestRateType should be "FIX:FIXED RATE LOAN"
+4. If isFixedRate is false, there should be an index rate (rateIndex should not be null)
+5. All _extractedCodes fields must have values (use defaults)
+6. At minimum, borrower name and lender name should be present
+7. Track extraction sources in the audit trail for critical financial values
