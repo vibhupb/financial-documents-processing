@@ -30,6 +30,7 @@ import type {
   SignatureValidation,
 } from '../types';
 import ProcessingMetricsPanel from './ProcessingMetricsPanel';
+import BSAProfileFields from './BSAProfileFields';
 
 interface ExtractedValuesPanelProps {
   data: LoanData | null;
@@ -261,6 +262,19 @@ export default function ExtractedValuesPanel({
             onPageClick={onFieldClick}
           >
             <LoanAgreementFields data={data.loanAgreement} onFieldClick={onFieldClick} />
+          </Section>
+        )}
+
+        {/* BSA Profile (Bank Secrecy Act / KYC) */}
+        {(data as any).bsaProfile && (
+          <Section
+            title="BSA Profile"
+            icon={<User className="w-5 h-5 text-teal-600" />}
+            isExpanded={expandedSections.has('bsaProfile')}
+            onToggle={() => toggleSection('bsaProfile')}
+            onPageClick={onFieldClick}
+          >
+            <BSAProfileFields data={(data as any).bsaProfile} onFieldClick={onFieldClick} />
           </Section>
         )}
 

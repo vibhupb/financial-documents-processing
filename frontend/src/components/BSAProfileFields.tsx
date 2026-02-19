@@ -12,7 +12,7 @@ interface BSAProfileFieldsProps {
  * Renders BSA Profile (Bank Secrecy Act / KYC) extracted data.
  * Handles: legal entity info, risk assessment, beneficial owners, trust info.
  */
-export default function BSAProfileFields({ data, onFieldClick }: BSAProfileFieldsProps) {
+export default function BSAProfileFields({ data }: BSAProfileFieldsProps) {
   const [expandedSections, setExpandedSections] = useState<Set<string>>(
     new Set(['legalEntity', 'riskAssessment'])
   );
@@ -229,14 +229,13 @@ function RiskBadge({ level }: { level: string }) {
 }
 
 function CollapsibleSection({
-  id,
   title,
   icon,
   expanded,
   onToggle,
   children,
 }: {
-  id: string;
+  id?: string;
   title: string;
   icon?: React.ReactNode;
   expanded: boolean;

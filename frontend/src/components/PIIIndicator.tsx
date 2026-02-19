@@ -16,10 +16,9 @@ export default function PIIIndicator({ value, isMasked }: PIIIndicatorProps) {
     <span className="inline-flex items-center gap-1.5">
       <span className="text-sm text-gray-900 font-mono">{value}</span>
       {isMasked && (
-        <Lock
-          className="w-3.5 h-3.5 text-gray-400"
-          title="PII field — masked for security"
-        />
+        <span title="PII field — masked for security">
+          <Lock className="w-3.5 h-3.5 text-gray-400" />
+        </span>
       )}
     </span>
   );

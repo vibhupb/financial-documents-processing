@@ -23,13 +23,14 @@ export interface AuthResult {
 
 // Placeholder configuration - will use Amplify v6 when deployed
 const COGNITO_USER_POOL_ID = import.meta.env.VITE_COGNITO_USER_POOL_ID || '';
-const COGNITO_CLIENT_ID = import.meta.env.VITE_COGNITO_CLIENT_ID || '';
+// Client ID reserved for Amplify v6 integration
+const COGNITO_CLIENT_ID = import.meta.env.VITE_COGNITO_CLIENT_ID || ''; void COGNITO_CLIENT_ID;
 
 /**
  * Sign in with email and password.
  * Returns AuthResult with user info or error.
  */
-export async function signIn(email: string, password: string): Promise<AuthResult> {
+export async function signIn(email: string, _password: string): Promise<AuthResult> {
   // When Amplify is configured, this will use amplifySignIn
   // For now, return a mock for development
   if (!COGNITO_USER_POOL_ID) {
