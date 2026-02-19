@@ -7,11 +7,13 @@ This Lambda function provides REST API endpoints for:
 - Getting processing metrics
 """
 
+import copy
 import json
 import os
 import uuid
 import boto3
 from botocore.config import Config
+from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
 from typing import Any
@@ -19,6 +21,98 @@ from urllib.parse import unquote
 
 # Get region for S3 regional endpoint (avoids 307 redirect CORS issues)
 AWS_REGION = os.environ.get("AWS_REGION", "us-west-2")
+
+# Authentication configuration
+REQUIRE_AUTH = os.environ.get("REQUIRE_AUTH", "false").lower() == "true"
+
+
+@dataclass
+class UserContext:
+    """Authenticated user context from Cognito JWT claims."""
+    user_id: str = "anonymous"
+    email: str = ""
+    groups: list = field(default_factory=list)
+    is_authenticated: bool = False
+
+    def can_view_pii(self) -> bool:
+        return "Admins" in self.groups
+
+    def can_modify(self) -> bool:
+        return bool({"Admins", "Reviewers"} & set(self.groups))
+
+    def has_role(self, role: str) -> bool:
+        return role in self.groups
+
+
+def extract_user_context(event: dict) -> UserContext:
+    """Extract user context from API Gateway Cognito authorizer claims."""
+    try:
+        claims = event.get("requestContext", {}).get("authorizer", {}).get("claims", {})
+        if not claims:
+            return UserContext()
+        groups_raw = claims.get("cognito:groups", "")
+        groups = [g.strip() for g in groups_raw.split(",") if g.strip()] if groups_raw else []
+        return UserContext(
+            user_id=claims.get("sub", "unknown"),
+            email=claims.get("email", ""),
+            groups=groups,
+            is_authenticated=True,
+        )
+    except Exception:
+        return UserContext()
+
+
+def mask_pii_fields(data: dict, user: UserContext, document_type: str) -> dict:
+    """Mask PII fields based on user role and plugin config."""
+    if not data or user.can_view_pii():
+        return data
+    try:
+        from document_plugins.registry import get_plugin_for_document_type
+        plugin = get_plugin_for_document_type(document_type)
+        if not plugin:
+            return data
+        pii_paths = plugin.get("pii_paths", [])
+        if not pii_paths:
+            return data
+    except (ImportError, Exception):
+        return data
+
+    import re
+    masked = copy.deepcopy(data)
+    for marker in pii_paths:
+        json_path = marker.get("json_path", "")
+        pii_type = marker.get("pii_type", "")
+        # Simple path-based masking for common patterns
+        parts = json_path.replace("[*]", ".[*]").split(".")
+        _mask_at_path(masked, parts, pii_type)
+    return masked
+
+
+def _mask_at_path(data, parts, pii_type, depth=0):
+    """Recursively mask values at a path with [*] wildcard support."""
+    if depth >= len(parts) or data is None:
+        return
+    part = parts[depth]
+    if part == "[*]" and isinstance(data, list):
+        for item in data:
+            _mask_at_path(item, parts, pii_type, depth + 1)
+    elif isinstance(data, dict) and part in data:
+        if depth == len(parts) - 1:
+            # Leaf - mask the value
+            val = data[part]
+            if val and isinstance(val, str):
+                if pii_type == "ssn":
+                    digits = val.replace("-", "").replace(" ", "")
+                    data[part] = f"***-**-{digits[-4:]}" if len(digits) >= 4 else "***-**-****"
+                elif pii_type == "dob":
+                    data[part] = "****-**-**"
+                elif pii_type == "tax_id":
+                    digits = val.replace("-", "").replace(" ", "")
+                    data[part] = f"**-***{digits[-4:]}" if len(digits) >= 4 else "**-*******"
+                else:
+                    data[part] = "**REDACTED**"
+        else:
+            _mask_at_path(data[part], parts, pii_type, depth + 1)
 
 # Configure S3 client with regional endpoint to avoid 307 redirects
 # which break CORS in browsers
@@ -692,6 +786,15 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     http_method = event.get("httpMethod", event.get("requestContext", {}).get("http", {}).get("method", ""))
     if http_method == "OPTIONS":
         return response(200, {"message": "CORS preflight"})
+
+    # Extract authenticated user context from Cognito JWT claims
+    user = extract_user_context(event)
+    if REQUIRE_AUTH and not user.is_authenticated:
+        return response(401, {"error": "Authentication required"})
+    # Backward compat: when REQUIRE_AUTH=false, anonymous gets all roles
+    if not REQUIRE_AUTH and not user.is_authenticated:
+        user = UserContext(user_id="anonymous", email="anonymous@system",
+                          groups=["Admins", "Reviewers", "Viewers"], is_authenticated=False)
 
     # Extract path and method
     path = event.get("path", event.get("rawPath", ""))

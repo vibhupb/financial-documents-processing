@@ -10,6 +10,8 @@ import * as logs from 'aws-cdk-lib/aws-logs';
 import * as apigateway from 'aws-cdk-lib/aws-apigateway';
 import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
 import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
+import * as kms from 'aws-cdk-lib/aws-kms';
+import * as cognito from 'aws-cdk-lib/aws-cognito';
 import { Construct } from 'constructs';
 import * as path from 'path';
 
@@ -1101,8 +1103,126 @@ function handler(event) {
     });
 
     // ==========================================
+    // Phase 6: Security & Compliance
+    // ==========================================
+
+    // KMS key for PII field-level encryption
+    const piiEncryptionKey = new kms.Key(this, 'PIIEncryptionKey', {
+      alias: 'financial-docs-pii-encryption',
+      description: 'Encrypts PII fields in financial document extractions',
+      enableKeyRotation: true,
+      pendingWindow: cdk.Duration.days(30),
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+    });
+
+    // Cognito User Pool for API authentication
+    const userPool = new cognito.UserPool(this, 'FinancialDocsUserPool', {
+      userPoolName: 'financial-docs-users',
+      selfSignUpEnabled: false,
+      signInAliases: { email: true },
+      standardAttributes: {
+        email: { required: true, mutable: false },
+      },
+      passwordPolicy: {
+        minLength: 12,
+        requireLowercase: true,
+        requireUppercase: true,
+        requireDigits: true,
+        requireSymbols: true,
+      },
+      accountRecovery: cognito.AccountRecovery.EMAIL_ONLY,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+    });
+
+    // RBAC Groups
+    new cognito.CfnUserPoolGroup(this, 'AdminsGroup', {
+      userPoolId: userPool.userPoolId,
+      groupName: 'Admins',
+      description: 'Full access: view decrypted PII, approve/reject, manage users',
+    });
+
+    new cognito.CfnUserPoolGroup(this, 'ReviewersGroup', {
+      userPoolId: userPool.userPoolId,
+      groupName: 'Reviewers',
+      description: 'Review access: view decrypted PII, approve/reject documents',
+    });
+
+    new cognito.CfnUserPoolGroup(this, 'ViewersGroup', {
+      userPoolId: userPool.userPoolId,
+      groupName: 'Viewers',
+      description: 'Read-only access: view masked PII only',
+    });
+
+    // App client for React frontend
+    const userPoolClient = new cognito.UserPoolClient(this, 'FinancialDocsAppClient', {
+      userPool,
+      userPoolClientName: 'financial-docs-dashboard',
+      generateSecret: false,
+      authFlows: { userSrp: true },
+      preventUserExistenceErrors: true,
+      accessTokenValidity: cdk.Duration.hours(1),
+      idTokenValidity: cdk.Duration.hours(1),
+      refreshTokenValidity: cdk.Duration.days(30),
+    });
+
+    // PII audit table (7-year retention for BSA/FinCEN compliance)
+    const piiAuditTable = new dynamodb.Table(this, 'PIIAuditTable', {
+      tableName: 'financial-documents-pii-audit',
+      partitionKey: { name: 'documentId', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'accessTimestamp', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      pointInTimeRecovery: true,
+      encryption: dynamodb.TableEncryption.CUSTOMER_MANAGED,
+      encryptionKey: piiEncryptionKey,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+      timeToLiveAttribute: 'ttl',
+    });
+
+    piiAuditTable.addGlobalSecondaryIndex({
+      indexName: 'AccessorIndex',
+      partitionKey: { name: 'accessorId', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'accessTimestamp', type: dynamodb.AttributeType.STRING },
+      projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    // Cognito authorizer (provisioned, NOT attached to methods yet)
+    const cognitoAuthorizer = new apigateway.CognitoUserPoolsAuthorizer(this, 'CognitoAuthorizer', {
+      authorizerName: 'financial-docs-cognito-auth',
+      cognitoUserPools: [userPool],
+    });
+
+    // KMS grants
+    piiEncryptionKey.grantEncryptDecrypt(normalizerLambda);
+    piiEncryptionKey.grantEncryptDecrypt(apiLambda);
+    piiAuditTable.grantWriteData(apiLambda);
+
+    // ==========================================
     // Outputs
     // ==========================================
+
+    new cdk.CfnOutput(this, 'UserPoolId', {
+      value: userPool.userPoolId,
+      description: 'Cognito User Pool ID',
+      exportName: 'FinancialDocUserPoolId',
+    });
+
+    new cdk.CfnOutput(this, 'UserPoolClientId', {
+      value: userPoolClient.userPoolClientId,
+      description: 'Cognito App Client ID',
+      exportName: 'FinancialDocUserPoolClientId',
+    });
+
+    new cdk.CfnOutput(this, 'PIIEncryptionKeyArn', {
+      value: piiEncryptionKey.keyArn,
+      description: 'KMS key ARN for PII encryption',
+      exportName: 'FinancialDocPIIKeyArn',
+    });
+
+    new cdk.CfnOutput(this, 'PIIAuditTableName', {
+      value: piiAuditTable.tableName,
+      description: 'PII access audit table',
+      exportName: 'FinancialDocPIIAuditTable',
+    });
 
     new cdk.CfnOutput(this, 'DocumentBucketName', {
       value: documentBucket.bucketName,
