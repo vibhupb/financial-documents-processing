@@ -1014,6 +1014,10 @@ export class DocumentProcessingStack extends cdk.Stack {
     const metricsResource = api.root.addResource('metrics');
     metricsResource.addMethod('GET', apiIntegration);
 
+    // Plugin registry (frontend uses this to render any document type dynamically)
+    const pluginsResource = api.root.addResource('plugins');
+    pluginsResource.addMethod('GET', apiIntegration);
+
     // Review workflow routes
     const reviewResource = api.root.addResource('review');
     reviewResource.addMethod('GET', apiIntegration);  // List review queue

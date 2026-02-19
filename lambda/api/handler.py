@@ -399,6 +399,35 @@ def get_processing_status(document_id: str) -> dict[str, Any]:
         return {"error": f"Failed to get processing status: {str(e)}"}
 
 
+def get_registered_plugins() -> dict[str, Any]:
+    """Return registered document type plugins with their schemas.
+
+    The frontend uses this to dynamically render extracted data
+    for ANY document type without hardcoded component mappings.
+    """
+    try:
+        from document_plugins.registry import get_all_plugins
+        plugins = get_all_plugins()
+        result = {}
+        for plugin_id, config in plugins.items():
+            result[plugin_id] = {
+                "pluginId": plugin_id,
+                "name": config.get("name", plugin_id),
+                "description": config.get("description", ""),
+                "version": config.get("plugin_version", "1.0.0"),
+                "outputSchema": config.get("output_schema", {}),
+                "classification": {
+                    "keywords": config.get("classification", {}).get("keywords", [])[:10],
+                },
+                "sections": list(config.get("sections", {}).keys()),
+                "hasPiiFields": len(config.get("pii_paths", [])) > 0,
+                "requiresSignatures": config.get("requires_signatures", False),
+            }
+        return {"plugins": result, "count": len(result)}
+    except (ImportError, Exception) as e:
+        return {"plugins": {}, "count": 0, "error": str(e)}
+
+
 def get_metrics() -> dict[str, Any]:
     """Get processing metrics and statistics."""
     table = dynamodb.Table(TABLE_NAME)
@@ -847,6 +876,9 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
 
         elif path == "/metrics" and http_method == "GET":
             return response(200, get_metrics())
+
+        elif path == "/plugins" and http_method == "GET":
+            return response(200, get_registered_plugins())
 
         # Review workflow endpoints
         elif path == "/review" and http_method == "GET":

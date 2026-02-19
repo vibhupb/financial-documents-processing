@@ -31,6 +31,7 @@ import type {
 } from '../types';
 import ProcessingMetricsPanel from './ProcessingMetricsPanel';
 import BSAProfileFields from './BSAProfileFields';
+import GenericDataFields from './GenericDataFields';
 
 interface ExtractedValuesPanelProps {
   data: LoanData | null;
@@ -277,6 +278,26 @@ export default function ExtractedValuesPanel({
             <BSAProfileFields data={(data as any).bsaProfile} onFieldClick={onFieldClick} />
           </Section>
         )}
+
+        {/* Generic fallback: renders ANY document type not handled above */}
+        {(() => {
+          const knownKeys = ['promissoryNote', 'closingDisclosure', 'form1003', 'creditAgreement', 'loanAgreement', 'bsaProfile'];
+          const unknownKeys = Object.keys(data).filter(k => !knownKeys.includes(k) && !k.startsWith('_'));
+          return unknownKeys.map(key => (
+            (data as any)[key] && typeof (data as any)[key] === 'object' && (
+              <Section
+                key={key}
+                title={key.replace(/([A-Z])/g, ' $1').replace(/^\w/, c => c.toUpperCase()).trim()}
+                icon={<FileText className="w-5 h-5 text-gray-600" />}
+                isExpanded={expandedSections.has(key)}
+                onToggle={() => toggleSection(key)}
+                onPageClick={onFieldClick}
+              >
+                <GenericDataFields data={(data as any)[key]} />
+              </Section>
+            )
+          ));
+        })()}
 
         {/* Validation Notes */}
         {validation?.validationNotes && validation.validationNotes.length > 0 && (

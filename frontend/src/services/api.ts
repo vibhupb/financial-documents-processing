@@ -97,6 +97,9 @@ export const api = {
   // Metrics
   getMetrics: () => fetchApi<Metrics>('/metrics'),
 
+  // Plugin registry (document types + schemas)
+  getPlugins: () => fetchApi<{ plugins: Record<string, any>; count: number }>('/plugins'),
+
   // Review workflow
   listReviewQueue: (params?: { status?: ReviewStatus; limit?: number }) => {
     const searchParams = new URLSearchParams();

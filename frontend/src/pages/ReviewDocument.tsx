@@ -6,6 +6,7 @@ import PDFViewer from '../components/PDFViewer';
 import StatusBadge from '../components/StatusBadge';
 import ProcessingMetricsPanel from '../components/ProcessingMetricsPanel';
 import BSAProfileFields from '../components/BSAProfileFields';
+import GenericDataFields from '../components/GenericDataFields';
 
 export default function ReviewDocument() {
   const { documentId } = useParams<{ documentId: string }>();
@@ -974,7 +975,8 @@ export default function ReviewDocument() {
     const creditAgreement = data.creditAgreement as Record<string, unknown> | undefined;
     const loanAgreement = data.loanAgreement as Record<string, unknown> | undefined;
     const bsaProfile = data.bsaProfile as Record<string, unknown> | undefined;
-    const hasFormattedView = !!creditAgreement || !!loanAgreement || !!bsaProfile;
+    // GenericDataFields can render ANY document type, so always show formatted view
+    const hasFormattedView = true;
 
     return (
       <div className="bg-white shadow rounded-lg p-4">
@@ -1016,7 +1018,9 @@ export default function ReviewDocument() {
             renderCreditAgreementData(creditAgreement)
           ) : loanAgreement ? (
             renderLoanAgreementData(loanAgreement)
-          ) : null}
+          ) : (
+            <GenericDataFields data={data} />
+          )}
         </div>
       </div>
     );
