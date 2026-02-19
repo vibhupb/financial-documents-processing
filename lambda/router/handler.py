@@ -840,6 +840,285 @@ DOCUMENT_TYPES = {
 }
 
 
+# ==========================================
+# Plugin-Driven Classification Functions
+# ==========================================
+
+
+def _evaluate_bonus_rule(
+    rule: dict[str, Any],
+    page_text: str,
+    page_index: int,
+    total_pages: int,
+) -> int:
+    """Evaluate a PageBonusRule from plugin config against a page.
+
+    Returns the bonus score if the condition matches, else 0.
+    """
+    condition = rule.get("condition", "")
+    patterns = rule.get("patterns", [])
+    bonus = rule.get("bonus", 0)
+
+    if condition == "contains_any":
+        for pattern in patterns:
+            if pattern.lower() in page_text:
+                return bonus
+        return 0
+    elif condition == "contains_all":
+        for pattern in patterns:
+            if pattern.lower() not in page_text:
+                return 0
+        return bonus
+    elif condition == "first_n_pages":
+        n = int(patterns[0]) if patterns and patterns[0].isdigit() else 5
+        return bonus if page_index < n else 0
+    elif condition == "last_n_pages":
+        n = int(patterns[0]) if patterns and patterns[0].isdigit() else 3
+        return bonus if page_index >= total_pages - n else 0
+    elif condition == "regex_match":
+        for pattern in patterns:
+            try:
+                if re.search(pattern, page_text, re.IGNORECASE):
+                    return bonus
+            except re.error:
+                continue
+        return 0
+    return 0
+
+
+def build_classification_prompt(
+    page_snippets: list[dict[str, Any]],
+    all_plugins: dict[str, Any],
+) -> str:
+    """Build a dynamic Bedrock classification prompt from all registered plugins."""
+    text_pages = [p for p in page_snippets if p["has_text"]]
+    formatted_pages = "\n\n".join(
+        [f"=== PAGE {p['page_number']} ===\n{p['snippet']}" for p in text_pages]
+    )
+
+    doc_type_blocks = []
+    distinguishing_rules = []
+    response_keys = []
+
+    for plugin_id, plugin_config in all_plugins.items():
+        classification = plugin_config.get("classification", {})
+        keywords = classification.get("keywords", [])
+        name = plugin_config.get("name", plugin_id)
+        description = plugin_config.get("description", "")
+        keyword_sample = ", ".join(keywords[:8])
+        doc_type_blocks.append(
+            f"- **{plugin_id}**: {name}\n  Description: {description}\n  Keywords: {keyword_sample}"
+        )
+        for rule in classification.get("distinguishing_rules", []):
+            distinguishing_rules.append(f"- **{plugin_id}**: {rule}")
+        if classification.get("section_names"):
+            for section_name in classification["section_names"]:
+                response_keys.append(f'    "{section_name}": <page_number or null>')
+        else:
+            response_keys.append(f'    "{plugin_id}": <page_number or null>')
+
+    doc_types_text = "\n".join(doc_type_blocks)
+    response_keys_text = ",\n".join(response_keys)
+    distinguishing_section = ""
+    if distinguishing_rules:
+        distinguishing_section = (
+            "\n\nCRITICAL DISTINCTIONS BETWEEN DOCUMENT TYPES:\n"
+            + "\n".join(distinguishing_rules)
+        )
+
+    return f"""You are a financial document classifier specializing in loan packages and financial documents.
+
+Analyze the following page snippets. Identify the FIRST page number where each document type begins:
+
+{doc_types_text}
+{distinguishing_section}
+
+PAGE SNIPPETS:
+{formatted_pages}
+
+IMPORTANT RULES:
+- Return ONLY the page number where each document STARTS
+- If a document type is not found, use null
+- Be conservative - only identify if you're confident
+- A document may span multiple pages; return only the first page
+
+Respond with ONLY valid JSON:
+{{
+{response_keys_text},
+    "primary_document_type": "<most important document type found>",
+    "confidence": "high" | "medium" | "low",
+    "totalPagesAnalyzed": {len(text_pages)}
+}}"""
+
+
+def identify_sections_generic(
+    page_snippets: list[dict[str, Any]],
+    plugin: dict[str, Any],
+    page_count: int,
+) -> dict[str, list[int]]:
+    """Generic section identification using keyword density scoring from plugin config."""
+    sections_config = plugin.get("sections", {})
+    section_pages: dict[str, list[int]] = {sid: [] for sid in sections_config}
+    section_scores: dict[str, list[tuple[int, float, int]]] = {sid: [] for sid in sections_config}
+    total_pages = len(page_snippets)
+
+    for page in page_snippets:
+        if not page["has_text"]:
+            continue
+        page_num = page["page_number"]
+        page_index = page_num - 1
+        text_lower = page["snippet"].lower()
+
+        for section_id, section_config in sections_config.items():
+            hints = section_config.get("classification_hints", {})
+            keywords = hints.get("keywords", [])
+
+            if not keywords:
+                max_p = hints.get("max_pages", section_config.get("max_pages", 5))
+                if page_num <= max_p:
+                    section_pages[section_id].append(page_num)
+                continue
+
+            matches = sum(1 for kw in keywords if kw.lower() in text_lower)
+            bonus = sum(
+                _evaluate_bonus_rule(rule, text_lower, page_index, total_pages)
+                for rule in hints.get("page_bonus_rules", [])
+            )
+            score = matches + bonus
+            min_matches = hints.get("min_keyword_matches", 2)
+            if score >= min_matches:
+                section_scores[section_id].append((page_num, score, matches))
+
+    for section_id, scores in section_scores.items():
+        if not scores:
+            continue
+        scores.sort(key=lambda x: (-x[1], x[0]))
+        section_config = sections_config[section_id]
+        limit = section_config.get("classification_hints", {}).get(
+            "max_pages", section_config.get("max_pages", 5)
+        )
+        top_pages = [pn for pn, s, m in scores[:limit]]
+        section_pages[section_id] = sorted(top_pages)
+
+    return section_pages
+
+
+def build_extraction_plan(
+    plugin: dict[str, Any],
+    classification_result: dict[str, Any],
+    page_snippets: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Build the extraction plan array that Step Functions Map state iterates over."""
+    plugin_id = plugin["plugin_id"]
+    sections_config = plugin.get("sections", {})
+    classification = plugin.get("classification", {})
+    total_pages = len(page_snippets)
+    extraction_sections = []
+
+    if classification.get("target_all_pages"):
+        all_pages = list(range(1, total_pages + 1))
+        for section_id, section_config in sections_config.items():
+            max_p = section_config.get("max_pages", total_pages)
+            extraction_sections.append({
+                "sectionId": section_id,
+                "sectionPages": all_pages[:max_p],
+                "sectionConfig": section_config,
+                "pluginId": plugin_id,
+                "textractFeatures": section_config.get("textract_features", ["QUERIES"]),
+                "queries": section_config.get("queries", []),
+            })
+    elif classification.get("section_names"):
+        starts = []
+        for section_name in classification["section_names"]:
+            start = classification_result.get(section_name)
+            if start is not None:
+                starts.append((section_name, int(start)))
+        starts.sort(key=lambda x: x[1])
+        for i, (sname, start_page) in enumerate(starts):
+            if sname not in sections_config:
+                continue
+            sc = sections_config[sname]
+            max_p = sc.get("max_pages", 10)
+            end = starts[i + 1][1] - 1 if i + 1 < len(starts) else total_pages
+            end = min(end, start_page + max_p - 1)
+            extraction_sections.append({
+                "sectionId": sname,
+                "sectionPages": list(range(start_page, end + 1)),
+                "sectionConfig": sc,
+                "pluginId": plugin_id,
+                "textractFeatures": sc.get("textract_features", ["QUERIES"]),
+                "queries": sc.get("queries", []),
+            })
+    else:
+        identified = classification_result.get("sections", {})
+        for section_id, sc in sections_config.items():
+            pages = identified.get(section_id, [])
+            if not pages:
+                continue
+            extraction_sections.append({
+                "sectionId": section_id,
+                "sectionPages": sorted(pages),
+                "sectionConfig": sc,
+                "pluginId": plugin_id,
+                "textractFeatures": sc.get("textract_features", ["QUERIES"]),
+                "queries": sc.get("queries", []),
+            })
+
+    return extraction_sections
+
+
+def _resolve_plugin(
+    classification_result: dict[str, Any],
+    all_plugins: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Resolve which plugin handles this document based on LLM classification."""
+    primary_type = classification_result.get("primary_document_type", "").lower()
+
+    if primary_type in all_plugins:
+        return all_plugins[primary_type]
+
+    for plugin_id, plugin_config in all_plugins.items():
+        section_names = plugin_config.get("classification", {}).get("section_names", [])
+        if primary_type in section_names:
+            return plugin_config
+
+    for plugin_id, plugin_config in all_plugins.items():
+        legacy_map = plugin_config.get("legacy_section_map", {})
+        if primary_type in legacy_map or primary_type.upper() in legacy_map:
+            return plugin_config
+
+    return None
+
+
+def add_backward_compatible_keys(
+    result: dict[str, Any],
+    plugin_id: str,
+    extraction_plan: list[dict[str, Any]],
+    classification: dict[str, Any],
+) -> None:
+    """Add legacy output keys alongside extractionPlan for Step Functions transition."""
+    if plugin_id == "credit_agreement":
+        legacy_sections = {}
+        for sec in extraction_plan:
+            legacy_sections[sec["sectionId"]] = sec["sectionPages"]
+        result["creditAgreementSections"] = {
+            "sections": legacy_sections,
+            "confidence": classification.get("confidence", "unknown"),
+        }
+    elif plugin_id == "loan_package":
+        classification["promissoryNote"] = classification.get("promissory_note")
+        classification["closingDisclosure"] = classification.get("closing_disclosure")
+        classification["form1003"] = classification.get("form_1003")
+        result["classification"] = classification
+    elif plugin_id == "loan_agreement":
+        legacy_sections = {}
+        for sec in extraction_plan:
+            legacy_sections[sec["sectionId"]] = sec["sectionPages"]
+        result["loanAgreementSections"] = {"sections": legacy_sections}
+        classification["loanAgreement"] = classification.get("loan_agreement")
+        result["classification"] = classification
+
+
 def detect_text_quality(text: str) -> dict[str, Any]:
     """Detect text quality to identify garbled/corrupt text from font encoding issues.
 
@@ -1741,6 +2020,50 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 "lowQualityPageCount": len(low_quality_pages),
             },
         }
+
+        # ============================================================
+        # Plugin-driven extraction plan (dual-format output)
+        # When ROUTER_OUTPUT_FORMAT=dual, emit extractionPlan alongside legacy keys
+        # ============================================================
+        router_output_format = os.environ.get("ROUTER_OUTPUT_FORMAT", "legacy")
+        if router_output_format == "dual":
+            try:
+                from document_plugins.registry import get_all_plugins
+
+                all_plugins = get_all_plugins()
+                plugin = _resolve_plugin(classification, all_plugins)
+                if plugin:
+                    plugin_id = plugin["plugin_id"]
+                    plugin_cls = plugin.get("classification", {})
+
+                    # Build section pages based on plugin type
+                    if plugin_cls.get("target_all_pages"):
+                        section_result = classification
+                    elif plugin_cls.get("section_names"):
+                        section_result = classification
+                    elif plugin_cls.get("has_sections") or plugin.get("sections"):
+                        keyword_sections = identify_sections_generic(
+                            page_snippets, plugin, total_pages
+                        )
+                        section_result = {"sections": keyword_sections}
+                    else:
+                        section_result = classification
+
+                    extraction_plan = build_extraction_plan(
+                        plugin, section_result, page_snippets
+                    )
+                    result["extractionPlan"] = extraction_plan
+                    result["pluginId"] = plugin_id
+                    result["metadata"]["pluginId"] = plugin_id
+                    result["metadata"]["pluginVersion"] = plugin.get("plugin_version", "unknown")
+
+                    # Add backward-compatible legacy keys
+                    add_backward_compatible_keys(
+                        result, plugin_id, extraction_plan, classification
+                    )
+                    print(f"Plugin extraction plan: {len(extraction_plan)} sections for {plugin_id}")
+            except Exception as plugin_err:
+                print(f"Warning: Plugin extraction plan failed, using legacy path: {plugin_err}")
 
         # Add Credit Agreement section details if detected
         if credit_agreement_sections:
