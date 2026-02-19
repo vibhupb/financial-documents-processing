@@ -1185,11 +1185,9 @@ function handler(event) {
       projectionType: dynamodb.ProjectionType.ALL,
     });
 
-    // Cognito authorizer (provisioned, NOT attached to methods yet)
-    const cognitoAuthorizer = new apigateway.CognitoUserPoolsAuthorizer(this, 'CognitoAuthorizer', {
-      authorizerName: 'financial-docs-cognito-auth',
-      cognitoUserPools: [userPool],
-    });
+    // Cognito authorizer — deferred until attached to API methods
+    // CDK requires authorizer to reference a RestApi. Will add when
+    // frontend auth is enabled: { authorizer, authorizationType: COGNITO }
 
     // KMS grants
     piiEncryptionKey.grantEncryptDecrypt(normalizerLambda);
