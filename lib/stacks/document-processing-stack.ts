@@ -946,6 +946,7 @@ export class DocumentProcessingStack extends cdk.Stack {
       runtime: lambda.Runtime.PYTHON_3_13,
       handler: 'handler.lambda_handler',
       code: lambda.Code.fromAsset(path.join(__dirname, '../../lambda/api')),
+      layers: [pluginsLayer],
       memorySize: 512,
       timeout: cdk.Duration.seconds(30),
       environment: {
