@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronRight, Shield, Users, Building2 } from 'lucide-react';
+import { ChevronDown, ChevronRight, Shield, Users, Building2, FileCheck } from 'lucide-react';
 import { useState } from 'react';
 import BooleanFlag from './BooleanFlag';
 import PIIIndicator from './PIIIndicator';
@@ -8,15 +8,11 @@ interface BSAProfileFieldsProps {
   onFieldClick?: (pageNumber: number, fieldName: string) => void;
 }
 
-/**
- * Renders BSA Profile (Bank Secrecy Act / KYC) extracted data.
- * Handles: legal entity info, risk assessment, beneficial owners, trust info.
- */
 export default function BSAProfileFields({ data }: BSAProfileFieldsProps) {
   const [expandedSections, setExpandedSections] = useState<Set<string>>(
-    new Set(['legalEntity', 'riskAssessment'])
+    new Set(['legalEntity', 'riskAssessment', 'beneficialOwners', 'certification'])
   );
-  const [expandedOwners, setExpandedOwners] = useState<Set<number>>(new Set([0]));
+  const [expandedOwners, setExpandedOwners] = useState<Set<number>>(new Set([0, 1]));
 
   const toggleSection = (id: string) => {
     setExpandedSections((prev) => {
@@ -34,96 +30,129 @@ export default function BSAProfileFields({ data }: BSAProfileFieldsProps) {
     });
   };
 
-  const legalEntity = data?.legalEntity || data?.legalEntityInfo || {};
-  const riskAssessment = data?.riskAssessment || {};
-  const beneficialOwners = data?.beneficialOwners || [];
-  const trustInfo = data?.trustInfo || {};
-  const certification = data?.certification || {};
+  const le = data?.legalEntity || {};
+  const ra = data?.riskAssessment || {};
+  const owners = data?.beneficialOwners || [];
+  const trust = data?.trustInfo || {};
+  const cert = data?.certificationInfo || {};
+  const addr = le?.principalAddress || {};
 
   const isMasked = (val: string | undefined) =>
     typeof val === 'string' && /\*{2,}/.test(val);
 
   return (
     <div className="space-y-3">
-      {/* Legal Entity Information */}
-      <CollapsibleSection
-        id="legalEntity"
+      {/* Legal Entity */}
+      <Section
         title="Legal Entity Information"
         icon={<Building2 className="w-4 h-4" />}
         expanded={expandedSections.has('legalEntity')}
         onToggle={() => toggleSection('legalEntity')}
       >
-        <div className="grid grid-cols-2 gap-2 text-sm">
-          <Field label="Entity Name" value={legalEntity.entityName} />
-          <Field label="Entity Type" value={legalEntity.entityType} />
-          <Field label="Address" value={legalEntity.address} />
-          <Field label="City" value={legalEntity.city} />
-          <Field label="State" value={legalEntity.state} />
-          <Field label="ZIP" value={legalEntity.zipCode} />
+        <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
+          <Field label="Company Name" value={le.companyName} />
+          <Field label="DBA Name" value={le.dbaName} />
+          <Field label="Entity Type" value={le.entityType} />
           <div>
-            <span className="text-gray-500">Tax ID:</span>{' '}
-            <PIIIndicator value={legalEntity.taxId} isMasked={isMasked(legalEntity.taxId)} />
+            <span className="text-gray-500 text-xs">Tax ID:</span>{' '}
+            <PIIIndicator value={le.taxId} isMasked={isMasked(le.taxId)} />
           </div>
-          <Field label="SOS Number" value={legalEntity.sosNumber} />
-          <Field label="Established" value={legalEntity.establishmentDate} />
+          <Field label="Tax ID Type" value={le.taxIdType} />
+          <Field label="NAICS Code" value={le.naicsCode} />
+          <Field label="NAICS Description" value={le.naicsDescription} />
+          <Field label="State of Organization" value={le.stateOfOrganization} />
+          <Field label="Country" value={le.countryOfOrganization} />
+          <Field label="Date Established" value={le.dateOfOrganization} />
+          <Field label="Phone" value={le.phoneNumber} />
+          <Field label="Email" value={le.emailAddress} />
+          <Field label="Fax" value={le.faxNumber} />
+          <Field label="Website" value={le.webAddress} />
+          <div className="flex items-center gap-1">
+            <span className="text-gray-500 text-xs">Publicly Traded:</span>
+            <BooleanFlag value={le.isPubliclyTraded} />
+          </div>
+          <Field label="Ticker" value={le.tickerSymbol} />
+          <Field label="Business Description" value={le.businessDescription} className="col-span-2" />
         </div>
-      </CollapsibleSection>
+        {(addr.street || addr.city) && (
+          <div className="mt-2 p-2 bg-gray-50 rounded text-sm">
+            <span className="text-gray-500 text-xs font-medium">Principal Address:</span>
+            <div className="text-gray-900">
+              {addr.street && <div>{addr.street}</div>}
+              {(addr.city || addr.state || addr.zipCode) && (
+                <div>{[addr.city, addr.state, addr.zipCode].filter(Boolean).join(', ')}</div>
+              )}
+              {addr.country && addr.country !== 'United States' && <div>{addr.country}</div>}
+            </div>
+          </div>
+        )}
+      </Section>
 
       {/* Risk Assessment */}
-      <CollapsibleSection
-        id="riskAssessment"
+      <Section
         title="Risk Assessment"
         icon={<Shield className="w-4 h-4" />}
         expanded={expandedSections.has('riskAssessment')}
         onToggle={() => toggleSection('riskAssessment')}
       >
         <div className="space-y-2 text-sm">
-          {riskAssessment.riskLevel && (
+          {ra.overallRiskRating && (
             <div className="flex items-center gap-2">
-              <span className="text-gray-500">Risk Level:</span>
-              <RiskBadge level={riskAssessment.riskLevel} />
+              <span className="text-gray-500">Risk Rating:</span>
+              <RiskBadge level={ra.overallRiskRating} />
             </div>
           )}
-          <Field label="Industry" value={riskAssessment.industryClassification} />
-          {riskAssessment.riskFactors?.length > 0 && (
-            <div>
-              <span className="text-gray-500 text-xs">Risk Factors:</span>
-              <ul className="mt-1 space-y-0.5">
-                {riskAssessment.riskFactors.map((f: any, i: number) => (
-                  <li key={i} className="flex items-center gap-2 text-xs">
-                    <span className={f.selected ? 'text-red-600' : 'text-gray-400'}>
-                      {f.selected ? '✓' : '○'}
-                    </span>
-                    <span>{f.factor}</span>
-                  </li>
+          <div className="grid grid-cols-2 gap-x-4 gap-y-1">
+            <BoolRow label="Cash Intensive" value={ra.isCashIntensive} />
+            <BoolRow label="PEP Association" value={ra.hasPepAssociation} />
+            <BoolRow label="AML History" value={ra.hasAmlHistory} />
+            <BoolRow label="SAR History" value={ra.hasSarHistory} />
+            <BoolRow label="Fraud History" value={ra.hasFraudHistory} />
+            <BoolRow label="OFAC List" value={ra.isOnOfacList} />
+            <BoolRow label="Money Service Business" value={ra.isMoneyServiceBusiness} />
+            <BoolRow label="3rd Party Payment Processor" value={ra.isThirdPartyPaymentProcessor} />
+            <BoolRow label="Requires EDD" value={ra.requiresEdd} />
+          </div>
+          {ra.industryRiskFlags?.length > 0 && (
+            <div className="mt-1">
+              <span className="text-gray-500 text-xs">Industry Risk Flags:</span>
+              <div className="flex flex-wrap gap-1 mt-1">
+                {ra.industryRiskFlags.map((flag: string, i: number) => (
+                  <span key={i} className="px-2 py-0.5 bg-amber-50 text-amber-700 rounded text-xs">
+                    {flag}
+                  </span>
                 ))}
-              </ul>
+              </div>
             </div>
           )}
+          <Field label="EDD Reason" value={ra.eddReason} />
+          <Field label="Risk Notes" value={ra.riskNotes} />
         </div>
-      </CollapsibleSection>
+      </Section>
 
       {/* Beneficial Owners */}
-      {beneficialOwners.length > 0 && (
-        <CollapsibleSection
-          id="beneficialOwners"
-          title={`Beneficial Owners (${beneficialOwners.length})`}
+      {owners.length > 0 && (
+        <Section
+          title={`Beneficial Owners (${owners.length})`}
           icon={<Users className="w-4 h-4" />}
           expanded={expandedSections.has('beneficialOwners')}
           onToggle={() => toggleSection('beneficialOwners')}
         >
           <div className="space-y-2">
-            {beneficialOwners.map((owner: any, idx: number) => (
+            {owners.map((owner: any, idx: number) => (
               <div key={idx} className="border border-gray-200 rounded-md overflow-hidden">
                 <button
                   onClick={() => toggleOwner(idx)}
-                  className="w-full flex items-center justify-between p-2 bg-gray-50 hover:bg-gray-100 text-sm"
+                  className="w-full flex items-center justify-between p-2.5 bg-gray-50 hover:bg-gray-100 text-sm"
                 >
                   <span className="font-medium text-gray-900">
-                    {getValue(owner.name) || `Owner ${idx + 1}`}
-                    {owner.ownershipPercentage && (
-                      <span className="text-gray-500 ml-2">
-                        ({getValue(owner.ownershipPercentage)}%)
+                    {owner.fullName || owner.name || `Owner ${idx + 1}`}
+                    {owner.ownershipPercentage != null && (
+                      <span className="text-gray-500 ml-2">({owner.ownershipPercentage}%)</span>
+                    )}
+                    {owner.controlPerson && (
+                      <span className="ml-2 px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded text-xs">
+                        Control Person
                       </span>
                     )}
                   </span>
@@ -134,83 +163,118 @@ export default function BSAProfileFields({ data }: BSAProfileFieldsProps) {
                   )}
                 </button>
                 {expandedOwners.has(idx) && (
-                  <div className="p-2 grid grid-cols-2 gap-1 text-xs">
+                  <div className="p-3 grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
                     <div>
                       <span className="text-gray-500">SSN:</span>{' '}
-                      <PIIIndicator value={getValue(owner.ssn)} isMasked={isMasked(getValue(owner.ssn))} />
+                      <PIIIndicator value={owner.ssn} isMasked={isMasked(owner.ssn)} />
                     </div>
                     <div>
-                      <span className="text-gray-500">DOB:</span>{' '}
-                      <PIIIndicator value={getValue(owner.dateOfBirth)} isMasked={isMasked(getValue(owner.dateOfBirth))} />
+                      <span className="text-gray-500">Date of Birth:</span>{' '}
+                      <PIIIndicator value={owner.dateOfBirth} isMasked={isMasked(owner.dateOfBirth)} />
                     </div>
-                    <Field label="Ownership Type" value={owner.ownershipType} />
+                    <Field label="Title" value={owner.title || owner.professionalTitle} />
+                    <Field label="Citizenship" value={owner.citizenship} />
+                    <Field label="Residency" value={owner.residency || owner.countryOfResidency} />
+                    <div className="flex items-center gap-1">
+                      <span className="text-gray-500">PEP:</span>
+                      <BooleanFlag value={owner.isPep} />
+                    </div>
+                    <Field label="ID Type" value={owner.identificationDocType || owner.idDocumentType} />
                     <div>
-                      <span className="text-gray-500">Gov ID:</span>{' '}
+                      <span className="text-gray-500">ID Number:</span>{' '}
                       <PIIIndicator
-                        value={getValue(owner.governmentIdNumber)}
-                        isMasked={isMasked(getValue(owner.governmentIdNumber))}
+                        value={owner.identificationDocNumber || owner.idDocumentNumber}
+                        isMasked={isMasked(owner.identificationDocNumber || owner.idDocumentNumber)}
                       />
                     </div>
+                    <Field label="ID Issued" value={owner.identificationDocIssuance || owner.idIssuanceDate} />
+                    <Field label="ID Expires" value={owner.identificationDocExpiration || owner.idExpirationDate} />
+                    <Field label="Email" value={owner.emailAddress} />
+                    <Field label="Phone" value={owner.phone || owner.businessPhone} />
+                    {owner.address && (
+                      <div className="col-span-2 mt-1 p-1.5 bg-gray-50 rounded">
+                        <span className="text-gray-500">Address: </span>
+                        {typeof owner.address === 'string' ? (
+                          <span>{owner.address}</span>
+                        ) : (
+                          <span>
+                            {owner.address.street}
+                            {owner.address.city && `, ${owner.address.city}`}
+                            {owner.address.state && `, ${owner.address.state}`}
+                            {owner.address.zipCode && ` ${owner.address.zipCode}`}
+                          </span>
+                        )}
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
             ))}
           </div>
-        </CollapsibleSection>
+        </Section>
       )}
 
       {/* Trust Info */}
-      {trustInfo.isTrust && (
-        <CollapsibleSection
-          id="trustInfo"
+      {trust && (trust.trustName || trust.trusteeName) && (
+        <Section
           title="Trust Information"
           expanded={expandedSections.has('trustInfo')}
           onToggle={() => toggleSection('trustInfo')}
         >
           <div className="grid grid-cols-2 gap-2 text-sm">
-            <div>
-              <span className="text-gray-500">Is Trust:</span>{' '}
-              <BooleanFlag value={trustInfo.isTrust} />
+            <Field label="Trust Name" value={trust.trustName} />
+            <Field label="Trustee" value={trust.trusteeName} />
+            <div className="flex items-center gap-1">
+              <span className="text-gray-500 text-xs">Is Trust:</span>
+              <BooleanFlag value={trust.isTrust} />
             </div>
-            <Field label="Trust Name" value={trustInfo.trustName} />
-            <Field label="Trustee" value={trustInfo.trusteeNames} />
           </div>
-        </CollapsibleSection>
+        </Section>
       )}
 
       {/* Certification */}
-      {(certification.authorizedRepName || certification.signatureDate) && (
-        <CollapsibleSection
-          id="certification"
+      {(cert.signatoryName || cert.certificationDate) && (
+        <Section
           title="Certification"
+          icon={<FileCheck className="w-4 h-4" />}
           expanded={expandedSections.has('certification')}
           onToggle={() => toggleSection('certification')}
         >
           <div className="grid grid-cols-2 gap-2 text-sm">
-            <Field label="Representative" value={certification.authorizedRepName} />
-            <Field label="Title" value={certification.authorizedRepTitle} />
-            <Field label="Signature Date" value={certification.signatureDate} />
+            <Field label="Signatory" value={cert.signatoryName} />
+            <Field label="Title" value={cert.signatoryTitle} />
+            <Field label="Date" value={cert.certificationDate} />
+            <Field label="Signature Status" value={cert.signatureStatus} />
           </div>
-        </CollapsibleSection>
+        </Section>
       )}
     </div>
   );
 }
 
-// Helper to extract value from ExtractedField<T> or plain value
 function getValue(field: any): string {
   if (field === null || field === undefined) return '';
   if (typeof field === 'object' && 'value' in field) return String(field.value ?? '');
   return String(field);
 }
 
-function Field({ label, value }: { label: string; value: any }) {
+function Field({ label, value, className = '' }: { label: string; value: any; className?: string }) {
   const v = getValue(value);
   if (!v) return null;
   return (
-    <div>
-      <span className="text-gray-500">{label}:</span>{' '}
-      <span className="text-gray-900">{v}</span>
+    <div className={className}>
+      <span className="text-gray-500 text-xs">{label}:</span>{' '}
+      <span className="text-gray-900 text-sm">{v}</span>
+    </div>
+  );
+}
+
+function BoolRow({ label, value }: { label: string; value: boolean | null | undefined }) {
+  if (value === null || value === undefined) return null;
+  return (
+    <div className="flex items-center gap-1.5">
+      <span className="text-gray-500 text-xs">{label}:</span>
+      <BooleanFlag value={value} />
     </div>
   );
 }
@@ -220,6 +284,7 @@ function RiskBadge({ level }: { level: string }) {
     LOW: 'bg-green-100 text-green-800',
     MEDIUM: 'bg-yellow-100 text-yellow-800',
     HIGH: 'bg-red-100 text-red-800',
+    PROHIBITED: 'bg-red-200 text-red-900',
   };
   return (
     <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${colors[level] || 'bg-gray-100 text-gray-600'}`}>
@@ -228,14 +293,13 @@ function RiskBadge({ level }: { level: string }) {
   );
 }
 
-function CollapsibleSection({
+function Section({
   title,
   icon,
   expanded,
   onToggle,
   children,
 }: {
-  id?: string;
   title: string;
   icon?: React.ReactNode;
   expanded: boolean;
