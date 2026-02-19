@@ -1,5 +1,8 @@
 """Document classification types and categories.
 
+DEPRECATED: Use document_plugins.registry and per-plugin classification
+configs instead. See lambda/layers/plugins/python/document_plugins/types/.
+
 This module defines all supported document types for classification.
 Each document type has:
 - A unique identifier

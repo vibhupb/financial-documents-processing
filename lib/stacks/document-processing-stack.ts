@@ -118,6 +118,13 @@ export class DocumentProcessingStack extends cdk.Stack {
       description: 'PyPDF library for PDF text extraction',
     });
 
+    // Plugins Layer for document type configurations
+    const pluginsLayer = new lambda.LayerVersion(this, 'PluginsLayer', {
+      code: lambda.Code.fromAsset(path.join(__dirname, '../../lambda/layers/plugins')),
+      compatibleRuntimes: [lambda.Runtime.PYTHON_3_13],
+      description: 'Document type plugin configurations (classification, extraction, normalization)',
+    });
+
     // ==========================================
     // Layer 2: Router Lambda (Classification)
     // ==========================================
@@ -127,13 +134,14 @@ export class DocumentProcessingStack extends cdk.Stack {
       runtime: lambda.Runtime.PYTHON_3_13,
       handler: 'handler.lambda_handler',
       code: lambda.Code.fromAsset(path.join(__dirname, '../../lambda/router')),
-      layers: [pypdfLayer],
+      layers: [pypdfLayer, pluginsLayer],
       memorySize: 2048,  // 2GB = 1 vCPU - faster PyPDF text extraction (CPU-bound)
       timeout: cdk.Duration.minutes(5),
       environment: {
         BUCKET_NAME: documentBucket.bucketName,
         TABLE_NAME: documentTable.tableName,  // For status updates
         BEDROCK_MODEL_ID: 'us.anthropic.claude-3-haiku-20240307-v1:0',
+        ROUTER_OUTPUT_FORMAT: 'dual',  // Emit both legacy keys AND extractionPlan
       },
       tracing: lambda.Tracing.ACTIVE,
     });
@@ -156,7 +164,7 @@ export class DocumentProcessingStack extends cdk.Stack {
       runtime: lambda.Runtime.PYTHON_3_13,
       handler: 'handler.lambda_handler',
       code: lambda.Code.fromAsset(path.join(__dirname, '../../lambda/extractor')),
-      layers: [pypdfLayer],
+      layers: [pypdfLayer, pluginsLayer],
       memorySize: 2048,  // 2GB provides 2x CPU for faster PDF rendering with 30 parallel workers
       timeout: cdk.Duration.minutes(10),  // Increased for large sections
       environment: {
@@ -194,6 +202,7 @@ export class DocumentProcessingStack extends cdk.Stack {
       runtime: lambda.Runtime.PYTHON_3_13,
       handler: 'handler.lambda_handler',
       code: lambda.Code.fromAsset(path.join(__dirname, '../../lambda/normalizer')),
+      layers: [pluginsLayer],
       memorySize: 2048,  // 2GB = 1 vCPU - faster JSON parsing and processing
       timeout: cdk.Duration.minutes(5),  // Haiku is fast
       environment: {
