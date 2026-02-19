@@ -56,6 +56,162 @@ IMAGE_DPI = int(os.environ.get('IMAGE_DPI', '150'))
 # The normalizer uses MAX_LOAN_AGREEMENT_RAW_TEXT = 50000, but we can be more generous at extractor level
 # since Step Functions combines multiple extraction results in parallel state.
 MAX_RAW_TEXT_CHARS = int(os.environ.get('MAX_RAW_TEXT_CHARS', '80000'))  # ~80KB max for rawText
+S3_EXTRACTION_PREFIX = os.environ.get('S3_EXTRACTION_PREFIX', 'extractions/')
+
+
+# ==========================================
+# Plugin-Driven Generic Section Extraction
+# ==========================================
+
+
+def extract_section_generic(
+    bucket: str,
+    key: str,
+    document_id: str,
+    section_config: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Generic section extraction for Step Functions Map state.
+
+    Receives sectionConfig from the plugin and delegates to appropriate
+    Textract features. Replaces per-document-type extraction branches.
+    """
+    section_id = section_config.get("sectionId", "unknown")
+    pages = section_config.get("sectionPages", [])
+    textract_features = section_config.get("textractFeatures", [])
+    queries = section_config.get("queries", [])
+    sc = section_config.get("sectionConfig", section_config)
+    include_pypdf = sc.get("include_pypdf_text", False)
+    extract_sigs = sc.get("extract_signatures", False)
+    render_dpi = sc.get("render_dpi", IMAGE_DPI)
+
+    if not pages:
+        return {
+            "section": section_id,
+            "status": "SKIPPED",
+            "reason": "No pages identified",
+            "results": None,
+        }
+
+    print(f"extract_section_generic: '{section_id}' pages={pages} "
+          f"features={textract_features} queries={len(queries)}")
+
+    section_start = time.time()
+    results = {}
+    textract_failed = False
+    page_images = []
+    temp_key = None
+
+    try:
+        # Download PDF
+        s3_response = s3_client.get_object(Bucket=bucket, Key=key)
+        pdf_stream = io.BytesIO(s3_response['Body'].read())
+
+        # Extract section pages
+        section_bytes = extract_multiple_pages(pdf_stream, pages)
+
+        # Render to images
+        if PYMUPDF_AVAILABLE:
+            try:
+                page_images = render_pdf_pages_to_images(section_bytes, dpi=render_dpi)
+                results["pagesProcessed"] = len(page_images)
+            except Exception as e:
+                print(f"Image rendering failed for '{section_id}': {e}")
+
+        # S3 fallback
+        if not page_images:
+            temp_key = upload_temp_section(bucket, document_id, section_id, section_bytes)
+
+        # Run each Textract feature
+        for feature in textract_features:
+            feat = feature.upper()
+            if feat == "QUERIES" and queries:
+                if page_images and len(page_images) > 1:
+                    results["queries"] = process_pages_queries_parallel(page_images, queries, bucket)
+                elif page_images:
+                    results["queries"] = extract_with_queries(bucket, "", queries, image_bytes=page_images[0])
+                elif temp_key:
+                    results["queries"] = extract_with_queries(bucket, temp_key, queries)
+                textract_failed = textract_failed or not results.get("queries")
+
+            elif feat == "TABLES":
+                if page_images and len(page_images) > 1:
+                    tables, failed = process_pages_tables_parallel(page_images, bucket)
+                    results["tables"] = {"tables": tables, "tableCount": len(tables)}
+                    textract_failed = textract_failed or failed
+                elif page_images:
+                    results["tables"] = extract_tables(bucket, "", image_bytes=page_images[0])
+                elif temp_key:
+                    results["tables"] = extract_tables(bucket, temp_key)
+
+            elif feat == "FORMS":
+                if page_images and len(page_images) > 1:
+                    # Multi-page forms: extract per-page and merge
+                    all_kv = {}
+                    for idx, img in enumerate(page_images):
+                        page_result = extract_forms(bucket, "", image_bytes=img)
+                        for k, v in page_result.get("keyValues", {}).items():
+                            if k not in all_kv or (isinstance(v, dict) and v.get("confidence", 0) >
+                                    all_kv[k].get("confidence", 0)):
+                                all_kv[k] = v
+                    results["forms"] = {"keyValues": all_kv, "fieldCount": len(all_kv)}
+                elif page_images:
+                    results["forms"] = extract_forms(bucket, "", image_bytes=page_images[0])
+                elif temp_key:
+                    results["forms"] = extract_forms(bucket, temp_key)
+
+        # Signature detection
+        if extract_sigs and page_images:
+            if len(page_images) > 1:
+                all_sigs = process_pages_signatures_parallel(page_images, bucket)
+                results["signatures"] = {
+                    "signatures": all_sigs,
+                    "signatureCount": len(all_sigs),
+                    "hasSignatures": len(all_sigs) > 0,
+                }
+            else:
+                results["signatures"] = extract_signatures(bucket, "", image_bytes=page_images[0])
+
+        # PyPDF text
+        if include_pypdf:
+            pdf_stream.seek(0)
+            raw_text = extract_text_from_pages(pdf_stream, pages)
+            if raw_text:
+                if len(raw_text) > MAX_RAW_TEXT_CHARS:
+                    raw_text = raw_text[:MAX_RAW_TEXT_CHARS] + "\n\n... [TRUNCATED]"
+                results["rawText"] = raw_text
+
+        # Cleanup
+        if temp_key:
+            try:
+                s3_client.delete_object(Bucket=bucket, Key=temp_key)
+            except Exception:
+                pass
+
+        processing_time = time.time() - section_start
+        return {
+            "section": section_id,
+            "status": "EXTRACTED" if not textract_failed else "PARTIAL_EXTRACTION",
+            "pageNumbers": pages,
+            "pageCount": len(pages),
+            "pagesProcessed": len(page_images) if page_images else 1,
+            "results": results,
+            "processingTimeSeconds": round(processing_time, 2),
+        }
+
+    except Exception as e:
+        print(f"Error extracting section '{section_id}': {e}")
+        if temp_key:
+            try:
+                s3_client.delete_object(Bucket=bucket, Key=temp_key)
+            except Exception:
+                pass
+        return {
+            "section": section_id,
+            "status": "FAILED",
+            "pageNumbers": pages,
+            "error": str(e),
+        }
+
 
 # COMPREHENSIVE Credit Agreement section-specific queries
 # Optimized for both speed AND extraction quality based on ground truth analysis
@@ -2095,6 +2251,24 @@ def lambda_handler(event, context):
     document_id = event['documentId']
     bucket = event.get('bucket', BUCKET_NAME)
     key = event['key']
+
+    # ============================================================
+    # MODE 0: Plugin-driven section extraction (Phase 4 Map state)
+    # ============================================================
+    section_config = event.get('sectionConfig')
+    if section_config:
+        print(f"Plugin-driven section extraction: {section_config.get('sectionId', 'unknown')}")
+        result = extract_section_generic(
+            bucket=bucket, key=key, document_id=document_id,
+            section_config=section_config,
+        )
+        # Pass through metadata
+        result['documentId'] = document_id
+        result['contentHash'] = event.get('contentHash')
+        result['size'] = event.get('size')
+        result['key'] = key
+        result['routerTokenUsage'] = event.get('routerTokenUsage')
+        return result
 
     # Pass through metadata for downstream processing
     content_hash = event.get('contentHash')
