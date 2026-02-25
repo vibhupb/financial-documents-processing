@@ -2,12 +2,8 @@ import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import Layout from './components/Layout';
 import Login from './pages/Login';
-import Dashboard from './pages/Dashboard';
-import Documents from './pages/Documents';
+import WorkQueue from './pages/WorkQueue';
 import DocumentDetail from './pages/DocumentDetail';
-import Upload from './pages/Upload';
-import Review from './pages/Review';
-import ReviewDocument from './pages/ReviewDocument';
 import PluginList from './pages/PluginList';
 import PluginWizard from './pages/PluginWizard';
 
@@ -41,15 +37,7 @@ function AppRoutes() {
         path="/"
         element={
           <ProtectedRoute>
-            <Layout><Dashboard /></Layout>
-          </ProtectedRoute>
-        }
-      />
-      <Route
-        path="/documents"
-        element={
-          <ProtectedRoute>
-            <Layout><Documents /></Layout>
+            <Layout><WorkQueue /></Layout>
           </ProtectedRoute>
         }
       />
@@ -58,30 +46,6 @@ function AppRoutes() {
         element={
           <ProtectedRoute>
             <Layout><DocumentDetail /></Layout>
-          </ProtectedRoute>
-        }
-      />
-      <Route
-        path="/upload"
-        element={
-          <ProtectedRoute>
-            <Layout><Upload /></Layout>
-          </ProtectedRoute>
-        }
-      />
-      <Route
-        path="/review"
-        element={
-          <ProtectedRoute>
-            <Layout><Review /></Layout>
-          </ProtectedRoute>
-        }
-      />
-      <Route
-        path="/review/:documentId"
-        element={
-          <ProtectedRoute>
-            <Layout><ReviewDocument /></Layout>
           </ProtectedRoute>
         }
       />

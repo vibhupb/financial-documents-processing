@@ -1,30 +1,48 @@
 import { ReactNode } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { FileText, Upload, LayoutDashboard, ClipboardCheck, LogOut, Puzzle } from 'lucide-react';
+import { useQuery } from '@tanstack/react-query';
+import { FileText, Puzzle, LogOut, Inbox } from 'lucide-react';
 import clsx from 'clsx';
 import { useAuth } from '../contexts/AuthContext';
+import { api } from '../services/api';
 
 interface LayoutProps {
   children: ReactNode;
 }
 
-const navigation = [
-  { name: 'Dashboard', href: '/', icon: LayoutDashboard },
-  { name: 'Documents', href: '/documents', icon: FileText },
-  { name: 'Review', href: '/review', icon: ClipboardCheck, roles: ['Admins', 'Reviewers'] as const },
-  { name: 'Upload', href: '/upload', icon: Upload, roles: ['Admins', 'Reviewers'] as const },
-  { name: 'Config', href: '/config', icon: Puzzle, roles: ['Admins'] as const },
-];
-
 export default function Layout({ children }: LayoutProps) {
   const location = useLocation();
-  const { user, userGroups, signOut } = useAuth();
+  const { user, userGroups, signOut, hasRole } = useAuth();
 
-  // Filter navigation by user role
-  const filteredNavigation = navigation.filter((item) => {
-    if (!item.roles) return true;
-    return item.roles.some((role) => userGroups.includes(role));
+  // Fetch metrics for the attention badge on Work Queue nav item
+  const { data: metrics } = useQuery({
+    queryKey: ['metrics'],
+    queryFn: api.getMetrics,
+    refetchInterval: 15000,
   });
+
+  const attentionCount =
+    (metrics?.statusCounts?.['FAILED'] || 0) +
+    (metrics?.statusCounts?.['PENDING_REVIEW'] || 0);
+
+  const navigation = [
+    {
+      name: 'Work Queue',
+      href: '/',
+      icon: Inbox,
+      badge: attentionCount > 0 ? attentionCount : undefined,
+    },
+    ...(hasRole('Admins')
+      ? [
+          {
+            name: 'Plugin Studio',
+            href: '/config',
+            icon: Puzzle,
+            badge: undefined as number | undefined,
+          },
+        ]
+      : []),
+  ];
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -43,8 +61,11 @@ export default function Layout({ children }: LayoutProps) {
 
         {/* Navigation */}
         <nav className="flex-1 px-4 py-4 space-y-1">
-          {filteredNavigation.map((item) => {
-            const isActive = location.pathname === item.href;
+          {navigation.map((item) => {
+            const isActive =
+              item.href === '/'
+                ? location.pathname === '/'
+                : location.pathname.startsWith(item.href);
             return (
               <Link
                 key={item.name}
@@ -57,7 +78,12 @@ export default function Layout({ children }: LayoutProps) {
                 )}
               >
                 <item.icon className="w-5 h-5" />
-                {item.name}
+                <span className="flex-1">{item.name}</span>
+                {item.badge !== undefined && (
+                  <span className="inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full text-xs font-semibold bg-red-100 text-red-700">
+                    {item.badge}
+                  </span>
+                )}
               </Link>
             );
           })}
