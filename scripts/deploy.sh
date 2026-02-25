@@ -57,6 +57,16 @@ FRONTEND_BUCKET=$(cat cdk-outputs.json | grep FrontendBucketName | cut -d'"' -f4
 if [ -n "$FRONTEND_BUCKET" ]; then
     aws s3 sync frontend/dist/ "s3://$FRONTEND_BUCKET/" --delete
     echo "Frontend deployed to S3 bucket: $FRONTEND_BUCKET"
+
+    # Invalidate CloudFront cache
+    DISTRIBUTION_ID=$(aws cloudfront list-distributions \
+        --query "DistributionList.Items[?Origins.Items[?contains(DomainName, '$FRONTEND_BUCKET')]].Id" \
+        --output text 2>/dev/null) || true
+    if [ -n "$DISTRIBUTION_ID" ] && [ "$DISTRIBUTION_ID" != "None" ]; then
+        echo "Invalidating CloudFront cache ($DISTRIBUTION_ID)..."
+        aws cloudfront create-invalidation --distribution-id "$DISTRIBUTION_ID" --paths "/*" > /dev/null 2>&1
+        echo "CloudFront invalidation started (takes ~30-60s)"
+    fi
 fi
 
 # Display outputs
