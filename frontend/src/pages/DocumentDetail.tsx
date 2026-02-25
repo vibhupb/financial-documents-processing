@@ -1,21 +1,81 @@
-import { useParams, Link } from 'react-router-dom';
+import { useParams, Link, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import {
   ArrowLeft,
-  FileText,
   AlertCircle,
   Clock,
-  RefreshCw,
+  DollarSign,
+  Timer,
+  ChevronRight,
+  FileText,
 } from 'lucide-react';
-import { format } from 'date-fns';
 import { api } from '../services/api';
 import StatusBadge from '../components/StatusBadge';
 import DocumentViewer from '../components/DocumentViewer';
+import PipelineTracker from '../components/PipelineTracker';
+import LiveResultsStream from '../components/LiveResultsStream';
+import InlineReviewActions from '../components/InlineReviewActions';
+import UnknownTypePrompt from '../components/UnknownTypePrompt';
+import type { Document, EnrichedStatusResponse, ProcessingStatus } from '../types';
+
+const PROCESSING_STATUSES: ProcessingStatus[] = [
+  'PENDING',
+  'CLASSIFIED',
+  'EXTRACTING',
+  'EXTRACTED',
+  'NORMALIZING',
+  'REPROCESSING',
+];
+const COMPLETED_STATUSES: ProcessingStatus[] = ['PROCESSED', 'FAILED', 'SKIPPED'];
+
+function isProcessingStatus(status: string): boolean {
+  return PROCESSING_STATUSES.includes(status as ProcessingStatus);
+}
+
+function isCompletedStatus(status: string): boolean {
+  return COMPLETED_STATUSES.includes(status as ProcessingStatus);
+}
+
+function isUnknownTypeFailure(
+  doc: Document,
+  statusData: EnrichedStatusResponse | undefined
+): boolean {
+  if (doc.status !== 'FAILED') return false;
+  if (!statusData?.stages?.classification) return false;
+  const classResult = statusData.stages.classification.result;
+  if (!classResult) return false;
+  const docType = classResult.documentType?.toLowerCase() ?? '';
+  const confidence = typeof classResult.confidence === 'number' ? classResult.confidence : 0;
+  return docType === 'unknown' || docType === '' || confidence < 50;
+}
+
+function formatDocType(docType?: string): string {
+  if (!docType) return '';
+  return docType
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function formatCost(cost?: { totalCost: number }): string {
+  if (!cost) return '';
+  return `$${cost.totalCost.toFixed(2)}`;
+}
+
+function formatTime(time?: { totalSeconds: number }): string {
+  if (!time) return '';
+  const s = Math.round(time.totalSeconds);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  const rem = s % 60;
+  return `${m}m ${rem}s`;
+}
 
 export default function DocumentDetail() {
   const { documentId } = useParams<{ documentId: string }>();
+  const navigate = useNavigate();
 
-  // Fetch document data with polling while processing
+  // --- Data fetching ---
+
   const {
     data: documentData,
     isLoading: isDocumentLoading,
@@ -25,58 +85,68 @@ export default function DocumentDetail() {
     queryKey: ['document', documentId],
     queryFn: () => api.getDocument(documentId!),
     enabled: !!documentId,
-    retry: 10, // Retry up to 10 times for newly uploaded documents
-    retryDelay: (attemptIndex) => Math.min(1000 * (attemptIndex + 1), 5000), // 1s, 2s, 3s, 4s, 5s max
+    retry: 10,
+    retryDelay: (attemptIndex) => Math.min(1000 * (attemptIndex + 1), 5000),
     refetchInterval: (query) => {
       const data = query.state.data;
-      // If document not found yet (just uploaded), keep polling
-      if (data && 'error' in data) {
-        return 2000; // Poll every 2 seconds waiting for trigger Lambda
-      }
+      // Document not created yet by trigger Lambda -- keep polling
+      if (data && 'error' in data) return 2000;
       const status = data && 'document' in data ? data.document?.status : undefined;
-      // Poll every 3 seconds while processing, stop when done
-      if (!status || ['PROCESSED', 'FAILED', 'SKIPPED'].includes(status)) {
-        return false;
-      }
+      if (!status || isCompletedStatus(status)) return false;
       return 3000;
     },
   });
 
-  // Helper to safely get document from response
-  const getDocument = () => {
-    if (documentData && 'document' in documentData) {
-      return documentData.document;
-    }
-    return undefined;
-  };
+  const currentDoc: Document | undefined =
+    documentData && 'document' in documentData ? documentData.document : undefined;
 
-  const currentDoc = getDocument();
+  const docStatus = currentDoc?.status;
+  const isProcessing = !!docStatus && isProcessingStatus(docStatus);
+  const isProcessedOrReview =
+    docStatus === 'PROCESSED' || !!currentDoc?.reviewStatus;
 
-  // Fetch PDF URL for viewing
-  const {
-    data: pdfData,
-    isLoading: isPdfLoading,
-    error: pdfError,
-  } = useQuery({
-    queryKey: ['document-pdf', documentId],
-    queryFn: () => api.getDocumentPdfUrl(documentId!),
-    enabled: !!documentId && currentDoc?.status === 'PROCESSED',
-    staleTime: 1000 * 60 * 50, // 50 minutes (URLs expire in 1 hour)
-  });
-
-  // Fetch processing status (polling while processing)
+  // Processing status -- polls while processing
   const { data: statusData } = useQuery({
     queryKey: ['document-status', documentId],
     queryFn: () => api.getProcessingStatus(documentId!),
-    enabled: !!documentId,
-    refetchInterval:
-      currentDoc?.status === 'PROCESSED' ||
-      currentDoc?.status === 'FAILED'
-        ? false
-        : 5000,
+    enabled: !!documentId && (isProcessing || docStatus === 'FAILED'),
+    refetchInterval: isProcessing ? 3000 : false,
   });
 
-  // Loading state
+  // PDF URL -- fetch only when completed
+  const {
+    data: pdfData,
+    isLoading: isPdfLoading,
+  } = useQuery({
+    queryKey: ['document-pdf', documentId],
+    queryFn: () => api.getDocumentPdfUrl(documentId!),
+    enabled: !!documentId && isProcessedOrReview,
+    staleTime: 50 * 60 * 1000,
+  });
+
+  // Review queue for "Next in Queue" button
+  const { data: reviewQueueData } = useQuery({
+    queryKey: ['review-queue-nav'],
+    queryFn: () => api.listDocuments({ status: 'PENDING_REVIEW' }),
+    enabled: currentDoc?.reviewStatus === 'PENDING_REVIEW',
+    staleTime: 30_000,
+  });
+
+  // --- Computed ---
+
+  const handleNextInQueue = () => {
+    if (!reviewQueueData?.documents?.length) return;
+    const docs = reviewQueueData.documents;
+    const currentIndex = docs.findIndex((d) => d.documentId === documentId);
+    const nextIndex = currentIndex >= 0 ? (currentIndex + 1) % docs.length : 0;
+    const nextDoc = docs[nextIndex];
+    if (nextDoc && nextDoc.documentId !== documentId) {
+      navigate(`/documents/${nextDoc.documentId}`);
+    }
+  };
+
+  // --- Loading state ---
+
   if (isDocumentLoading) {
     return (
       <div className="flex items-center justify-center h-full">
@@ -88,7 +158,8 @@ export default function DocumentDetail() {
     );
   }
 
-  // Waiting for document to be created (just uploaded, trigger Lambda hasn't run yet)
+  // --- Initializing state (trigger Lambda hasn't created DB record yet) ---
+
   if (documentData && 'error' in documentData && failureCount < 10) {
     return (
       <div className="flex items-center justify-center h-full">
@@ -103,15 +174,14 @@ export default function DocumentDetail() {
           <p className="text-gray-500 mb-2">
             Your document is being uploaded and initialized...
           </p>
-          <p className="text-sm text-gray-400 font-mono">
-            ID: {documentId}
-          </p>
+          <p className="text-sm text-gray-400 font-mono">ID: {documentId}</p>
         </div>
       </div>
     );
   }
 
-  // Error state (after retries exhausted)
+  // --- Error state (retries exhausted, no document) ---
+
   if (documentError || !currentDoc) {
     return (
       <div className="flex items-center justify-center h-full">
@@ -124,11 +194,11 @@ export default function DocumentDetail() {
             The requested document could not be found or you don't have permission to view it.
           </p>
           <Link
-            to="/documents"
+            to="/"
             className="inline-flex items-center gap-2 px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition-colors"
           >
             <ArrowLeft className="w-4 h-4" />
-            Back to Documents
+            Back to Queue
           </Link>
         </div>
       </div>
@@ -136,148 +206,160 @@ export default function DocumentDetail() {
   }
 
   const doc = currentDoc;
-  const isProcessing = !['PROCESSED', 'FAILED', 'SKIPPED'].includes(doc.status);
 
-  // Processing state - show progress
+  // --- Mode C: Unknown Type (failed + unknown/low confidence classification) ---
+
+  if (isUnknownTypeFailure(doc, statusData)) {
+    const classResult = statusData?.stages?.classification?.result;
+    return (
+      <div className="h-full flex flex-col">
+        <DetailHeader
+          doc={doc}
+          documentId={documentId!}
+        />
+
+        <div className="flex-1 overflow-y-auto">
+          {/* Pipeline tracker showing where it failed */}
+          {statusData?.stages && (
+            <div className="px-6 py-4 border-b border-gray-200 bg-white">
+              <PipelineTracker stages={statusData.stages} />
+            </div>
+          )}
+
+          {/* Unknown type prompt */}
+          <div className="px-6 py-12">
+            <UnknownTypePrompt
+              documentId={documentId!}
+              bestGuess={classResult?.documentType}
+              confidence={
+                typeof classResult?.confidence === 'number'
+                  ? classResult.confidence
+                  : undefined
+              }
+            />
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // --- Mode A: Processing View ---
+
   if (isProcessing) {
     return (
       <div className="h-full flex flex-col">
-        {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200 bg-white">
-          <div className="flex items-center gap-4">
-            <Link
-              to="/documents"
-              className="w-10 h-10 flex items-center justify-center rounded-lg bg-gray-100 hover:bg-gray-200 transition-colors"
-            >
-              <ArrowLeft className="w-5 h-5 text-gray-600" />
-            </Link>
-            <div>
-              <h1 className="text-xl font-bold text-gray-900">
-                {doc.fileName || 'Document Processing'}
-              </h1>
-              <p className="text-sm text-gray-500 font-mono">{documentId}</p>
-            </div>
-          </div>
-          <StatusBadge status={doc.status} />
-        </div>
+        <DetailHeader
+          doc={doc}
+          documentId={documentId!}
+          docType={statusData?.documentType}
+        />
 
-        {/* Processing Progress */}
-        <div className="flex-1 flex items-center justify-center">
-          <div className="text-center max-w-md">
-            <div className="relative">
-              <div className="animate-spin rounded-full h-20 w-20 border-4 border-primary-200 border-t-primary-600 mx-auto" />
-              <Clock className="w-8 h-8 text-primary-600 absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2" />
+        <div className="flex-1 overflow-y-auto">
+          {/* Pipeline tracker */}
+          {statusData?.stages && (
+            <div className="px-6 py-4 border-b border-gray-200 bg-white">
+              <PipelineTracker stages={statusData.stages} />
             </div>
-            <h3 className="text-xl font-semibold text-gray-900 mt-6 mb-2">
-              Processing Document
+          )}
+
+          {/* Live results stream */}
+          <div className="px-6 py-4">
+            <h3 className="text-sm font-medium text-gray-700 mb-2">
+              Processing Log
             </h3>
-            <p className="text-gray-500 mb-4">
-              Your document is being processed. This typically takes 30-60 seconds.
-            </p>
-
-            {/* Processing stages */}
-            <div className="bg-gray-50 rounded-lg p-4 text-left">
-              <ProcessingStage
-                label="Classification"
-                status={getStageStatus('CLASSIFIED', doc.status)}
-              />
-              <ProcessingStage
-                label="Extraction"
-                status={getStageStatus('EXTRACTED', doc.status)}
-              />
-              <ProcessingStage
-                label="Normalization"
-                status={getStageStatus('PROCESSED', doc.status)}
-              />
-            </div>
-
-            {statusData?.startDate && (
-              <p className="text-xs text-gray-400 mt-4">
-                Started: {format(new Date(statusData.startDate), 'MMM d, yyyy h:mm:ss a')}
-              </p>
-            )}
+            <LiveResultsStream
+              events={statusData?.events ?? []}
+              startedAt={statusData?.startedAt}
+            />
           </div>
         </div>
       </div>
     );
   }
 
-  // Failed state
+  // --- FAILED state (not unknown type -- general failure) ---
+
   if (doc.status === 'FAILED') {
     return (
       <div className="h-full flex flex-col">
-        {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200 bg-white">
-          <div className="flex items-center gap-4">
-            <Link
-              to="/documents"
-              className="w-10 h-10 flex items-center justify-center rounded-lg bg-gray-100 hover:bg-gray-200 transition-colors"
-            >
-              <ArrowLeft className="w-5 h-5 text-gray-600" />
-            </Link>
-            <div>
-              <h1 className="text-xl font-bold text-gray-900">
-                {doc.fileName || 'Processing Failed'}
-              </h1>
-              <p className="text-sm text-gray-500 font-mono">{documentId}</p>
-            </div>
-          </div>
-          <StatusBadge status={doc.status} />
-        </div>
+        <DetailHeader
+          doc={doc}
+          documentId={documentId!}
+        />
 
-        {/* Error message */}
-        <div className="flex-1 flex items-center justify-center">
-          <div className="text-center max-w-md">
-            <AlertCircle className="w-16 h-16 text-red-500 mx-auto mb-4" />
-            <h3 className="text-xl font-semibold text-gray-900 mb-2">
-              Processing Failed
-            </h3>
-            <p className="text-gray-500 mb-6">
-              We encountered an error while processing your document. Please try uploading again.
-            </p>
-            <div className="flex items-center justify-center gap-4">
-              <Link
-                to="/upload"
-                className="inline-flex items-center gap-2 px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition-colors"
-              >
-                <RefreshCw className="w-4 h-4" />
-                Try Again
-              </Link>
-              <Link
-                to="/documents"
-                className="inline-flex items-center gap-2 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors"
-              >
-                Back to Documents
-              </Link>
+        <div className="flex-1 overflow-y-auto">
+          {statusData?.stages && (
+            <div className="px-6 py-4 border-b border-gray-200 bg-white">
+              <PipelineTracker stages={statusData.stages} />
+            </div>
+          )}
+
+          <div className="flex-1 flex items-center justify-center py-16">
+            <div className="text-center max-w-md">
+              <AlertCircle className="w-16 h-16 text-red-500 mx-auto mb-4" />
+              <h3 className="text-xl font-semibold text-gray-900 mb-2">
+                Processing Failed
+              </h3>
+              <p className="text-gray-500 mb-6">
+                An error occurred during document processing.
+              </p>
+              <InlineReviewActions
+                documentId={documentId!}
+                status={doc.status}
+                reviewStatus={doc.reviewStatus}
+              />
             </div>
           </div>
+
+          {/* Show events log if available */}
+          {statusData?.events && statusData.events.length > 0 && (
+            <div className="px-6 py-4 border-t border-gray-200">
+              <h3 className="text-sm font-medium text-gray-700 mb-2">
+                Processing Log
+              </h3>
+              <LiveResultsStream
+                events={statusData.events}
+                startedAt={statusData.startedAt}
+              />
+            </div>
+          )}
         </div>
       </div>
     );
   }
 
-  // PDF loading
+  // --- Mode B: Review/Completed View ---
+
+  // Build review bar for PENDING_REVIEW documents
+  const reviewBar =
+    doc.reviewStatus === 'PENDING_REVIEW' ? (
+      <div className="flex items-center justify-between px-4 py-3 bg-amber-50 border-t border-amber-200">
+        <InlineReviewActions
+          documentId={documentId!}
+          status={doc.status}
+          reviewStatus={doc.reviewStatus}
+        />
+        {reviewQueueData?.documents && reviewQueueData.documents.length > 1 && (
+          <button
+            onClick={handleNextInQueue}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-amber-700 bg-amber-100 rounded-md hover:bg-amber-200 transition-colors"
+          >
+            Next in Queue
+            <ChevronRight className="w-3.5 h-3.5" />
+          </button>
+        )}
+      </div>
+    ) : undefined;
+
+  // PDF still loading
   if (isPdfLoading) {
     return (
       <div className="h-full flex flex-col">
-        {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200 bg-white">
-          <div className="flex items-center gap-4">
-            <Link
-              to="/documents"
-              className="w-10 h-10 flex items-center justify-center rounded-lg bg-gray-100 hover:bg-gray-200 transition-colors"
-            >
-              <ArrowLeft className="w-5 h-5 text-gray-600" />
-            </Link>
-            <div>
-              <h1 className="text-xl font-bold text-gray-900">
-                {doc.fileName || 'Document'}
-              </h1>
-              <p className="text-sm text-gray-500 font-mono">{documentId}</p>
-            </div>
-          </div>
-          <StatusBadge status={doc.status} />
-        </div>
+        <DetailHeader
+          doc={doc}
+          documentId={documentId!}
+          showMeta
+        />
 
         <div className="flex-1 flex items-center justify-center">
           <div className="text-center">
@@ -289,31 +371,17 @@ export default function DocumentDetail() {
     );
   }
 
-  // PDF error - show data only view
-  if (pdfError || !pdfData?.pdfUrl) {
+  // PDF error or no URL -- show data-only fallback
+  if (!pdfData?.pdfUrl) {
     return (
       <div className="h-full flex flex-col">
-        {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200 bg-white">
-          <div className="flex items-center gap-4">
-            <Link
-              to="/documents"
-              className="w-10 h-10 flex items-center justify-center rounded-lg bg-gray-100 hover:bg-gray-200 transition-colors"
-            >
-              <ArrowLeft className="w-5 h-5 text-gray-600" />
-            </Link>
-            <div>
-              <h1 className="text-xl font-bold text-gray-900">
-                {doc.fileName || 'Document'}
-              </h1>
-              <p className="text-sm text-gray-500 font-mono">{documentId}</p>
-            </div>
-          </div>
-          <StatusBadge status={doc.status} />
-        </div>
+        <DetailHeader
+          doc={doc}
+          documentId={documentId!}
+          showMeta
+        />
 
-        {/* Data only fallback */}
-        <div className="flex-1 flex">
+        <div className="flex-1 flex overflow-hidden">
           <div className="w-1/3 border-r border-gray-200 flex items-center justify-center bg-gray-50">
             <div className="text-center p-8">
               <FileText className="w-16 h-16 text-gray-300 mx-auto mb-4" />
@@ -328,6 +396,7 @@ export default function DocumentDetail() {
               document={doc}
               pdfUrl=""
               className="h-full"
+              reviewBar={reviewBar}
             />
           </div>
         </div>
@@ -335,97 +404,80 @@ export default function DocumentDetail() {
     );
   }
 
-  // Full document viewer with PDF
+  // Full document viewer
   return (
     <div className="h-full flex flex-col">
-      {/* Header */}
-      <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200 bg-white">
-        <div className="flex items-center gap-4">
-          <Link
-            to="/documents"
-            className="w-10 h-10 flex items-center justify-center rounded-lg bg-gray-100 hover:bg-gray-200 transition-colors"
-          >
-            <ArrowLeft className="w-5 h-5 text-gray-600" />
-          </Link>
-          <div>
-            <h1 className="text-xl font-bold text-gray-900">
-              {doc.fileName || 'Document'}
-            </h1>
-            <p className="text-sm text-gray-500 font-mono">{documentId}</p>
-          </div>
-        </div>
-        <div className="flex items-center gap-3">
-          <span className="text-sm text-gray-500">
-            {doc.createdAt && format(new Date(doc.createdAt), 'MMM d, yyyy h:mm a')}
-          </span>
-          <StatusBadge status={doc.status} />
-        </div>
-      </div>
+      <DetailHeader
+        doc={doc}
+        documentId={documentId!}
+        showMeta
+      />
 
-      {/* Document Viewer */}
       <div className="flex-1 overflow-hidden">
         <DocumentViewer
           document={doc}
           pdfUrl={pdfData.pdfUrl}
           className="h-full"
+          reviewBar={reviewBar}
         />
       </div>
     </div>
   );
 }
 
-// Helper function to determine processing stage status
-function getStageStatus(
-  targetStage: string,
-  currentStatus: string
-): 'pending' | 'active' | 'completed' {
-  const stages = ['PENDING', 'CLASSIFIED', 'EXTRACTING', 'EXTRACTED', 'NORMALIZING', 'PROCESSED'];
-  const targetIndex = stages.indexOf(targetStage);
-  const currentIndex = stages.indexOf(currentStatus);
+// --- Header component shared across modes ---
 
-  if (currentIndex > targetIndex) return 'completed';
-  if (currentIndex === targetIndex) return 'active';
-  return 'pending';
+interface DetailHeaderProps {
+  doc: Document;
+  documentId: string;
+  docType?: string;
+  showMeta?: boolean;
 }
 
-// Processing stage indicator component
-function ProcessingStage({
-  label,
-  status,
-}: {
-  label: string;
-  status: 'pending' | 'active' | 'completed';
-}) {
+function DetailHeader({ doc, documentId, docType, showMeta }: DetailHeaderProps) {
+  const displayType = docType || doc.documentType;
+  const cost = formatCost(doc.processingCost);
+  const time = formatTime(doc.processingTime);
+
   return (
-    <div className="flex items-center gap-3 py-2">
-      <div
-        className={`w-6 h-6 rounded-full flex items-center justify-center ${
-          status === 'completed'
-            ? 'bg-green-500'
-            : status === 'active'
-              ? 'bg-primary-500 animate-pulse'
-              : 'bg-gray-200'
-        }`}
-      >
-        {status === 'completed' ? (
-          <svg className="w-4 h-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-          </svg>
-        ) : status === 'active' ? (
-          <div className="w-2 h-2 bg-white rounded-full" />
-        ) : null}
+    <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200 bg-white flex-shrink-0">
+      <div className="flex items-center gap-4 min-w-0">
+        <Link
+          to="/"
+          className="w-10 h-10 flex items-center justify-center rounded-lg bg-gray-100 hover:bg-gray-200 transition-colors flex-shrink-0"
+        >
+          <ArrowLeft className="w-5 h-5 text-gray-600" />
+        </Link>
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <h1 className="text-xl font-bold text-gray-900 truncate">
+              {doc.fileName || 'Document'}
+            </h1>
+            {displayType && (
+              <span className="inline-flex items-center px-2 py-0.5 rounded-md bg-gray-100 text-xs font-medium text-gray-600 flex-shrink-0">
+                {formatDocType(displayType)}
+              </span>
+            )}
+          </div>
+          <p className="text-sm text-gray-500 font-mono truncate">{documentId}</p>
+        </div>
       </div>
-      <span
-        className={`text-sm ${
-          status === 'completed'
-            ? 'text-green-600 font-medium'
-            : status === 'active'
-              ? 'text-primary-600 font-medium'
-              : 'text-gray-400'
-        }`}
-      >
-        {label}
-      </span>
+
+      <div className="flex items-center gap-3 flex-shrink-0">
+        {showMeta && cost && (
+          <span className="inline-flex items-center gap-1 text-sm text-gray-500">
+            <DollarSign className="w-3.5 h-3.5" />
+            {cost}
+          </span>
+        )}
+        {showMeta && time && (
+          <span className="inline-flex items-center gap-1 text-sm text-gray-500">
+            <Timer className="w-3.5 h-3.5" />
+            {time}
+          </span>
+        )}
+        <StatusBadge status={doc.reviewStatus || doc.status} />
+      </div>
     </div>
   );
 }

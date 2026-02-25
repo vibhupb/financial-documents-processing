@@ -9,6 +9,7 @@ interface DocumentViewerProps {
   document: Document;
   pdfUrl: string;
   className?: string;
+  reviewBar?: React.ReactNode;
 }
 
 type PanelLayout = 'split' | 'pdf-only' | 'data-only';
@@ -17,6 +18,7 @@ export default function DocumentViewer({
   document,
   pdfUrl,
   className,
+  reviewBar,
 }: DocumentViewerProps) {
   const [layout, setLayout] = useState<PanelLayout>('split');
   const [highlightedPage, setHighlightedPage] = useState<number | undefined>();
@@ -184,6 +186,13 @@ export default function DocumentViewer({
           )}
         </div>
       </div>
+
+      {/* Review Bar (sticky footer) */}
+      {reviewBar && (
+        <div className="sticky bottom-0 z-10 flex-shrink-0">
+          {reviewBar}
+        </div>
+      )}
     </div>
   );
 }
