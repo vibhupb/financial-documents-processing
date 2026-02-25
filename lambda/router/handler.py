@@ -2139,9 +2139,14 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                     targeted_page_set = set()
                     for sec in extraction_plan:
                         targeted_page_set.update(sec.get("sectionPages", []))
+                    section_names = [sec.get("sectionId", "unknown") for sec in extraction_plan]
                     append_processing_event(
                         document_id, _existing_doc_type, "router",
                         f"Targeted {len(targeted_page_set)}/{total_pages} pages across {len(extraction_plan)} sections",
+                    )
+                    append_processing_event(
+                        document_id, _existing_doc_type, "router",
+                        f"Extraction plan: {', '.join(section_names)}",
                     )
             except Exception as plugin_err:
                 print(f"Warning: Plugin extraction plan failed, using legacy path: {plugin_err}")
