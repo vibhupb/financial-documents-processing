@@ -1,9 +1,9 @@
-import { useState, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useState, useCallback, useEffect } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useDropzone } from 'react-dropzone';
 import {
   Upload, Loader2, Save, ArrowLeft, ArrowRight,
-  AlertCircle, CheckCircle, Wand2,
+  AlertCircle, CheckCircle, Wand2, RotateCw, FileText,
 } from 'lucide-react';
 import clsx from 'clsx';
 import { api } from '../services/api';
@@ -29,10 +29,20 @@ interface GeneratedConfig {
   _generation?: { model: string; inputTokens: number; outputTokens: number };
 }
 
+interface SampleDocInfo {
+  documentId: string;
+  fileName?: string;
+  s3Key?: string;
+  status?: string;
+}
+
 type WizardStep = 1 | 2 | 3 | 4;
 
 export default function PluginWizard() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const sampleDocId = searchParams.get('sampleDoc');
+
   const [step, setStep] = useState<WizardStep>(1);
 
   // Step 1 state
@@ -41,6 +51,10 @@ export default function PluginWizard() {
   const [analyzing, setAnalyzing] = useState(false);
   const [analysis, setAnalysis] = useState<AnalysisResult | null>(null);
   const [uploadError, setUploadError] = useState('');
+
+  // sampleDoc state
+  const [sampleDoc, setSampleDoc] = useState<SampleDocInfo | null>(null);
+  const [sampleDocLoading, setSampleDocLoading] = useState(false);
 
   // Step 2 state
   const [generating, setGenerating] = useState(false);
@@ -57,6 +71,36 @@ export default function PluginWizard() {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [saveError, setSaveError] = useState('');
+  const [reprocessing, setReprocessing] = useState(false);
+
+  // --- sampleDoc: auto-fetch on mount ---
+  useEffect(() => {
+    if (!sampleDocId) return;
+    setSampleDocLoading(true);
+    api.getDocument(sampleDocId)
+      .then((res) => {
+        if ('error' in res) {
+          setUploadError(`Could not load sample document: ${res.error}`);
+          return;
+        }
+        const doc = res.document;
+        setSampleDoc({
+          documentId: doc.documentId,
+          fileName: doc.fileName,
+          s3Key: (doc as any).s3Key,
+          status: doc.status,
+        });
+        if (doc.fileName) {
+          setDocName(doc.fileName.replace(/\.pdf$/i, ''));
+        }
+      })
+      .catch((err) => {
+        setUploadError(`Failed to load sample document: ${err.message}`);
+      })
+      .finally(() => {
+        setSampleDocLoading(false);
+      });
+  }, [sampleDocId]);
 
   // --- Step 1: Upload & Analyze ---
   const onDrop = useCallback(async (files: File[]) => {
@@ -98,6 +142,31 @@ export default function PluginWizard() {
     maxSize: 50 * 1024 * 1024,
     disabled: uploading || analyzing,
   });
+
+  // --- sampleDoc: analyze the existing document ---
+  async function handleAnalyzeSampleDoc() {
+    if (!sampleDoc?.s3Key) {
+      setUploadError('Sample document has no S3 key for analysis');
+      return;
+    }
+    setAnalyzing(true);
+    setUploadError('');
+    try {
+      const result = await api.analyzeSample({
+        s3Key: sampleDoc.s3Key,
+        bucket: '',
+      });
+      if (result.error) {
+        setUploadError(result.error);
+      } else {
+        setAnalysis(result);
+      }
+    } catch (err: any) {
+      setUploadError(err.message || 'Analysis failed');
+    } finally {
+      setAnalyzing(false);
+    }
+  }
 
   // --- Step 2: AI Generate ---
   async function handleGenerate() {
@@ -153,6 +222,40 @@ export default function PluginWizard() {
     }
   }
 
+  // --- Step 4: Publish & Reprocess (sampleDoc flow) ---
+  async function handlePublishAndReprocess() {
+    if (!sampleDocId) return;
+    setReprocessing(true);
+    setSaveError('');
+    try {
+      // First save if not already saved
+      if (!saved) {
+        const config = {
+          pluginId,
+          name: docName,
+          description,
+          keywords: keywords.split(',').map((k) => k.trim()).filter(Boolean),
+          fields,
+          promptRules,
+          pageCount: analysis?.pageCount || 1,
+          status: 'DRAFT',
+        };
+        await api.createPluginConfig(config);
+        setSaved(true);
+      }
+      // Publish the plugin
+      await api.publishPlugin(pluginId);
+      // Reprocess the sample document
+      await api.reprocessDocument(sampleDocId);
+      // Navigate to the document detail page
+      navigate(`/documents/${sampleDocId}`);
+    } catch (err: any) {
+      setSaveError(err.message || 'Publish & reprocess failed');
+    } finally {
+      setReprocessing(false);
+    }
+  }
+
   return (
     <div className="max-w-5xl mx-auto">
       <div className="flex items-center gap-3 mb-6">
@@ -162,7 +265,9 @@ export default function PluginWizard() {
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Plugin Builder</h1>
           <p className="text-sm text-gray-500">
-            Upload a sample document and let AI generate the extraction config
+            {sampleDocId
+              ? 'Build a plugin from an existing document'
+              : 'Upload a sample document and let AI generate the extraction config'}
           </p>
         </div>
       </div>
@@ -191,8 +296,53 @@ export default function PluginWizard() {
           </div>
 
           <div className="card">
-            <label className="block text-sm font-medium text-gray-700 mb-3">Upload Sample PDF</label>
-            {!analysis ? (
+            <label className="block text-sm font-medium text-gray-700 mb-3">
+              {sampleDocId ? 'Sample Document' : 'Upload Sample PDF'}
+            </label>
+
+            {/* sampleDoc banner -- shown when arriving via ?sampleDoc= */}
+            {sampleDocId && sampleDoc && !analysis && (
+              <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4">
+                <div className="flex items-center gap-3">
+                  <FileText className="w-5 h-5 text-blue-600 flex-shrink-0" />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-blue-800 truncate">
+                      {sampleDoc.fileName || sampleDoc.documentId}
+                    </p>
+                    <p className="text-xs text-blue-600 mt-0.5">
+                      Linked from document {sampleDoc.documentId.slice(0, 8)}...
+                    </p>
+                  </div>
+                  <button
+                    onClick={handleAnalyzeSampleDoc}
+                    disabled={analyzing}
+                    className={clsx(
+                      'flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors',
+                      analyzing
+                        ? 'bg-blue-100 text-blue-400 cursor-not-allowed'
+                        : 'bg-blue-600 text-white hover:bg-blue-700'
+                    )}
+                  >
+                    {analyzing ? (
+                      <><Loader2 className="w-4 h-4 animate-spin" /> Analyzing...</>
+                    ) : (
+                      <><Wand2 className="w-4 h-4" /> Analyze Document</>
+                    )}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* sampleDoc loading state */}
+            {sampleDocId && sampleDocLoading && (
+              <div className="flex items-center justify-center py-8">
+                <Loader2 className="w-6 h-6 text-primary-600 animate-spin mr-2" />
+                <span className="text-sm text-gray-500">Loading sample document...</span>
+              </div>
+            )}
+
+            {/* Standard upload dropzone -- hidden if sampleDoc is provided and not yet analyzed */}
+            {!sampleDocId && !analysis && (
               <div
                 {...getRootProps()}
                 className={clsx(
@@ -213,7 +363,10 @@ export default function PluginWizard() {
                   </div>
                 )}
               </div>
-            ) : (
+            )}
+
+            {/* Analysis result -- same for both flows */}
+            {analysis && (
               <div className="bg-green-50 border border-green-200 rounded-lg p-4">
                 <div className="flex items-center gap-3">
                   <CheckCircle className="w-5 h-5 text-green-600" />
@@ -426,6 +579,19 @@ export default function PluginWizard() {
             <button onClick={() => navigate('/config')} className="btn-secondary">
               Back to Plugins
             </button>
+            {sampleDocId && (
+              <button
+                onClick={handlePublishAndReprocess}
+                disabled={reprocessing}
+                className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {reprocessing ? (
+                  <><Loader2 className="w-4 h-4 animate-spin" /> Publishing...</>
+                ) : (
+                  <><RotateCw className="w-4 h-4" /> Publish &amp; Reprocess</>
+                )}
+              </button>
+            )}
             <button onClick={() => navigate(`/config/${pluginId}`)} className="btn-primary">
               View Plugin
             </button>
