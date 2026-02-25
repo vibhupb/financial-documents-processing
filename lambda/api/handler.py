@@ -10,6 +10,7 @@ This Lambda function provides REST API endpoints for:
 import copy
 import json
 import os
+import re
 import uuid
 import boto3
 from botocore.config import Config
@@ -190,6 +191,14 @@ def list_documents(query_params: dict[str, str]) -> dict[str, Any]:
     documents = result.get("Items", [])
     last_evaluated_key = result.get("LastEvaluatedKey")
 
+    # Enrich each document with latestEvent from processingEvents
+    for doc in documents:
+        events = doc.get("processingEvents", [])
+        if events:
+            doc["latestEvent"] = events[-1]
+        # Remove full processingEvents list from list response to keep payload small
+        doc.pop("processingEvents", None)
+
     return {
         "documents": documents,
         "count": len(documents),
@@ -367,34 +376,122 @@ def get_document_pdf_url(document_id: str) -> dict[str, Any]:
 
 
 def get_processing_status(document_id: str) -> dict[str, Any]:
-    """Get the processing status from Step Functions."""
-    if not STATE_MACHINE_ARN:
-        return {"error": "State machine ARN not configured"}
+    """Get enriched processing status from DynamoDB processingEvents.
+
+    Reads the document record, extracts processingEvents, and derives
+    per-stage status from the event log + overall document status.
+    """
+    table = dynamodb.Table(TABLE_NAME)
 
     try:
-        # List executions for this document
-        response = sfn_client.list_executions(
-            stateMachineArn=STATE_MACHINE_ARN,
-            maxResults=10,
+        result = table.query(
+            KeyConditionExpression=boto3.dynamodb.conditions.Key("documentId").eq(document_id),
+            Limit=1,
         )
+        items = result.get("Items", [])
+        if not items:
+            return {"documentId": document_id, "status": "NOT_FOUND"}
 
-        # Find execution for this document
-        for execution in response.get("executions", []):
-            if document_id[:8] in execution["name"]:
-                # Get execution details
-                exec_details = sfn_client.describe_execution(
-                    executionArn=execution["executionArn"]
-                )
+        doc = items[0]
+        status = doc.get("status", "PENDING")
+        document_type = doc.get("documentType", "")
+        events = doc.get("processingEvents", [])
+        created_at = doc.get("createdAt")
+        updated_at = doc.get("updatedAt")
 
-                return {
-                    "documentId": document_id,
-                    "status": exec_details["status"],
-                    "startDate": exec_details["startDate"].isoformat(),
-                    "stopDate": exec_details.get("stopDate", "").isoformat() if exec_details.get("stopDate") else None,
-                    "executionArn": execution["executionArn"],
-                }
+        # Derive per-stage status from events
+        router_events = [e for e in events if e.get("stage") == "router"]
+        extractor_events = [e for e in events if e.get("stage") == "extractor"]
+        normalizer_events = [e for e in events if e.get("stage") == "normalizer"]
 
-        return {"documentId": document_id, "status": "NOT_FOUND"}
+        # Classification stage
+        classification_status = "PENDING"
+        classification_result: dict[str, Any] = {}
+        if router_events:
+            classification_status = "COMPLETED"
+            for evt in router_events:
+                msg = evt.get("message", "")
+                if "Classified as" in msg:
+                    # Parse "Classified as credit_agreement (confidence: high)"
+                    parts = msg.replace("Classified as ", "").split(" (confidence: ")
+                    if len(parts) >= 2:
+                        classification_result["documentType"] = parts[0]
+                        classification_result["confidence"] = parts[1].rstrip(")")
+                if "Targeted" in msg:
+                    # Parse "Targeted 42/156 pages across 7 sections"
+                    match = re.search(r"Targeted (\d+)/(\d+) pages across (\d+) sections", msg)
+                    if match:
+                        classification_result["targetedPages"] = int(match.group(1))
+                        classification_result["totalPages"] = int(match.group(2))
+
+        # Extraction stage
+        extraction_status = "PENDING"
+        extraction_progress: dict[str, Any] = {"completed": 0, "total": None, "currentSection": None}
+        if extractor_events:
+            completed_sections = [e for e in extractor_events if "Extracted data from" in e.get("message", "")]
+            processing_sections = [e for e in extractor_events if "Processing section:" in e.get("message", "")]
+            extraction_progress["completed"] = len(completed_sections)
+            extraction_progress["total"] = len(processing_sections) if processing_sections else None
+
+            if completed_sections and extraction_progress["total"] and len(completed_sections) >= extraction_progress["total"]:
+                extraction_status = "COMPLETED"
+            elif extractor_events:
+                extraction_status = "IN_PROGRESS"
+                # Get the latest "Processing section" that hasn't completed
+                for evt in reversed(processing_sections):
+                    section_name = evt.get("message", "").replace("Processing section: ", "")
+                    if not any(section_name in c.get("message", "") for c in completed_sections):
+                        extraction_progress["currentSection"] = section_name
+                        break
+
+        # Normalization stage
+        normalization_status = "PENDING"
+        if normalizer_events:
+            if any("Normalization complete" in e.get("message", "") for e in normalizer_events):
+                normalization_status = "COMPLETED"
+            else:
+                normalization_status = "IN_PROGRESS"
+
+        # Override with overall status
+        if status == "FAILED":
+            if not router_events:
+                classification_status = "FAILED"
+            elif not extractor_events or extraction_status != "COMPLETED":
+                extraction_status = "FAILED"
+            else:
+                normalization_status = "FAILED"
+
+        # Build section list from extraction events
+        sections = []
+        for evt in extractor_events:
+            msg = evt.get("message", "")
+            if "Processing section:" in msg:
+                sections.append(msg.replace("Processing section: ", ""))
+        if sections:
+            classification_result["sections"] = sections
+
+        return {
+            "documentId": document_id,
+            "status": status,
+            "documentType": document_type,
+            "stages": {
+                "classification": {
+                    "status": classification_status,
+                    "result": classification_result if classification_result else None,
+                },
+                "extraction": {
+                    "status": extraction_status,
+                    "progress": extraction_progress,
+                },
+                "normalization": {
+                    "status": normalization_status,
+                },
+            },
+            "events": events,
+            "startedAt": created_at,
+            "completedAt": updated_at if status in ("PROCESSED", "FAILED") else None,
+        }
+
     except Exception as e:
         return {"error": f"Failed to get processing status: {str(e)}"}
 

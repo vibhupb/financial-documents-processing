@@ -20,6 +20,7 @@ Supports all document types defined in the classification schema:
 - Insurance: Homeowners, Flood
 """
 
+import datetime
 import io
 import json
 import os
@@ -45,6 +46,26 @@ BEDROCK_MODEL_ID = os.environ.get(
 # Text extraction settings
 MAX_CHARS_PER_PAGE = 1500  # Chars per page for classification
 BATCH_SIZE = 50  # Pages per Bedrock request
+
+
+def append_processing_event(document_id: str, document_type: str, stage: str, message: str):
+    """Append a timestamped event to the document's processingEvents list."""
+    try:
+        table = boto3.resource("dynamodb").Table(os.environ.get("TABLE_NAME", "financial-documents"))
+        table.update_item(
+            Key={"documentId": document_id, "documentType": document_type},
+            UpdateExpression="SET processingEvents = list_append(if_not_exists(processingEvents, :empty), :event)",
+            ExpressionAttributeValues={
+                ":event": [{
+                    "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                    "stage": stage,
+                    "message": message,
+                }],
+                ":empty": [],
+            },
+        )
+    except Exception:
+        pass  # Non-critical — don't fail processing if event logging fails
 
 
 # Credit Agreement section definitions for targeted extraction
@@ -1935,6 +1956,26 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             if classification.get(doc_type) is not None
         ]
 
+        # Resolve existing DynamoDB documentType for event logging
+        _existing_doc_type = "PROCESSING"
+        try:
+            _q = dynamodb.Table(TABLE_NAME).query(
+                KeyConditionExpression=boto3.dynamodb.conditions.Key("documentId").eq(document_id),
+                Limit=1,
+            )
+            if _q.get("Items"):
+                _existing_doc_type = _q["Items"][0].get("documentType", "PROCESSING")
+        except Exception:
+            pass
+
+        # Log classification event
+        primary_type = classification.get("primary_document_type", "unknown")
+        confidence_str = classification.get("confidence", "unknown")
+        append_processing_event(
+            document_id, _existing_doc_type, "router",
+            f"Classified as {primary_type} (confidence: {confidence_str})",
+        )
+
         # 4. If Credit Agreement detected, identify sections with page ranges
         credit_agreement_sections = None
         if classification.get("credit_agreement") is not None:
@@ -2093,6 +2134,15 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                         result, plugin_id, extraction_plan, classification
                     )
                     print(f"Plugin extraction plan: {len(extraction_plan)} sections for {plugin_id}")
+
+                    # Log page-targeting event
+                    targeted_page_set = set()
+                    for sec in extraction_plan:
+                        targeted_page_set.update(sec.get("sectionPages", []))
+                    append_processing_event(
+                        document_id, _existing_doc_type, "router",
+                        f"Targeted {len(targeted_page_set)}/{total_pages} pages across {len(extraction_plan)} sections",
+                    )
             except Exception as plugin_err:
                 print(f"Warning: Plugin extraction plan failed, using legacy path: {plugin_err}")
 
@@ -2107,6 +2157,12 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             result["metadata"]["creditAgreementSubtype"] = credit_agreement_sections.get(
                 "documentSubtype", "unknown"
             )
+            # Log legacy page-targeting event for Credit Agreement
+            num_ca_sections = sum(1 for p in credit_agreement_sections.get("sections", {}).values() if p)
+            append_processing_event(
+                document_id, _existing_doc_type, "router",
+                f"Targeted {len(all_section_pages)}/{total_pages} pages across {num_ca_sections} sections",
+            )
 
         # Add Loan Agreement section details if detected
         if loan_agreement_sections:
@@ -2116,6 +2172,12 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             for pages in loan_agreement_sections.values():
                 all_section_pages.update(pages)
             result["metadata"]["loanAgreementTargetedPages"] = len(all_section_pages)
+            # Log legacy page-targeting event for Loan Agreement
+            num_la_sections = sum(1 for p in loan_agreement_sections.values() if p)
+            append_processing_event(
+                document_id, _existing_doc_type, "router",
+                f"Targeted {len(all_section_pages)}/{total_pages} pages across {num_la_sections} sections",
+            )
 
         # Update DynamoDB status to CLASSIFIED for progress tracking
         # Note: Table has composite key (documentId + documentType), so we query first

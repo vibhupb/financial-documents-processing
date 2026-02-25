@@ -184,11 +184,13 @@ export class DocumentProcessingStack extends cdk.Stack {
         MAX_PARALLEL_WORKERS: '30',
         // Image rendering DPI - 150 provides good OCR quality with faster processing
         IMAGE_DPI: '150',
+        TABLE_NAME: documentTable.tableName,  // For processing event logging
       },
       tracing: lambda.Tracing.ACTIVE,
     });
 
     documentBucket.grantReadWrite(extractorLambda);
+    documentTable.grantReadWriteData(extractorLambda);  // For processing event logging
     extractorLambda.addToRolePolicy(new iam.PolicyStatement({
       effect: iam.Effect.ALLOW,
       actions: [

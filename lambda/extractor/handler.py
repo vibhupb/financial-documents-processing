@@ -13,6 +13,7 @@ Supports both single-page extraction (mortgage docs) and multi-page
 section extraction (Credit Agreements).
 """
 
+import datetime
 import json
 import os
 import io
@@ -57,6 +58,27 @@ IMAGE_DPI = int(os.environ.get('IMAGE_DPI', '150'))
 # since Step Functions combines multiple extraction results in parallel state.
 MAX_RAW_TEXT_CHARS = int(os.environ.get('MAX_RAW_TEXT_CHARS', '80000'))  # ~80KB max for rawText
 S3_EXTRACTION_PREFIX = os.environ.get('S3_EXTRACTION_PREFIX', 'extractions/')
+TABLE_NAME = os.environ.get('TABLE_NAME', 'financial-documents')
+
+
+def append_processing_event(document_id: str, document_type: str, stage: str, message: str):
+    """Append a timestamped event to the document's processingEvents list."""
+    try:
+        table = boto3.resource("dynamodb").Table(TABLE_NAME)
+        table.update_item(
+            Key={"documentId": document_id, "documentType": document_type},
+            UpdateExpression="SET processingEvents = list_append(if_not_exists(processingEvents, :empty), :event)",
+            ExpressionAttributeValues={
+                ":event": [{
+                    "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                    "stage": stage,
+                    "message": message,
+                }],
+                ":empty": [],
+            },
+        )
+    except Exception:
+        pass  # Non-critical — don't fail processing if event logging fails
 
 
 # ==========================================
@@ -84,6 +106,18 @@ def extract_section_generic(
     extract_sigs = sc.get("extract_signatures", False)
     render_dpi = sc.get("render_dpi", IMAGE_DPI)
 
+    # Resolve DynamoDB documentType for event logging
+    _doc_type_for_events = "PROCESSING"
+    try:
+        _q = boto3.resource("dynamodb").Table(TABLE_NAME).query(
+            KeyConditionExpression=boto3.dynamodb.conditions.Key("documentId").eq(document_id),
+            Limit=1,
+        )
+        if _q.get("Items"):
+            _doc_type_for_events = _q["Items"][0].get("documentType", "PROCESSING")
+    except Exception:
+        pass
+
     if not pages:
         return {
             "section": section_id,
@@ -91,6 +125,9 @@ def extract_section_generic(
             "reason": "No pages identified",
             "results": None,
         }
+
+    section_name = sc.get("name", section_id)
+    append_processing_event(document_id, _doc_type_for_events, "extractor", f"Processing section: {section_name}")
 
     print(f"extract_section_generic: '{section_id}' pages={pages} "
           f"features={textract_features} queries={len(queries)}")
@@ -188,6 +225,7 @@ def extract_section_generic(
                 pass
 
         processing_time = time.time() - section_start
+        append_processing_event(document_id, _doc_type_for_events, "extractor", f"Extracted data from {section_name} ({len(pages)} pages, {round(processing_time, 1)}s)")
         return {
             "section": section_id,
             "status": "EXTRACTED" if not textract_failed else "PARTIAL_EXTRACTION",

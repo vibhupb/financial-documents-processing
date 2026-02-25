@@ -3,7 +3,7 @@ import type {
   Metrics,
   UploadResponse,
   AuditFile,
-  ProcessingStatusResponse,
+  EnrichedStatusResponse,
   ReviewQueueResponse,
   ReviewDocumentResponse,
   ApproveRejectRequest,
@@ -52,7 +52,7 @@ export const api = {
     fetchApi<{ documentId: string; auditFiles: AuditFile[] }>(`/documents/${documentId}/audit`),
 
   getProcessingStatus: (documentId: string) =>
-    fetchApi<ProcessingStatusResponse>(`/documents/${documentId}/status`),
+    fetchApi<EnrichedStatusResponse>(`/documents/${documentId}/status`),
 
   // Get presigned URL for viewing the PDF
   getDocumentPdfUrl: (documentId: string) =>

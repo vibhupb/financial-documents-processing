@@ -10,6 +10,7 @@ Cost optimization: Claude 3.5 Haiku provides excellent normalization
 quality at ~70% lower cost than Sonnet 4 ($0.03 vs $0.09 per document).
 """
 
+import datetime
 import json
 import os
 import boto3
@@ -26,6 +27,26 @@ bedrock_client = boto3.client('bedrock-runtime')
 BUCKET_NAME = os.environ.get('BUCKET_NAME')
 TABLE_NAME = os.environ.get('TABLE_NAME')
 BEDROCK_MODEL_ID = os.environ.get('BEDROCK_MODEL_ID', 'us.anthropic.claude-3-5-haiku-20241022-v1:0')
+
+
+def append_processing_event(document_id: str, document_type: str, stage: str, message: str):
+    """Append a timestamped event to the document's processingEvents list."""
+    try:
+        table = boto3.resource("dynamodb").Table(os.environ.get("TABLE_NAME", "financial-documents"))
+        table.update_item(
+            Key={"documentId": document_id, "documentType": document_type},
+            UpdateExpression="SET processingEvents = list_append(if_not_exists(processingEvents, :empty), :event)",
+            ExpressionAttributeValues={
+                ":event": [{
+                    "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                    "stage": stage,
+                    "message": message,
+                }],
+                ":empty": [],
+            },
+        )
+    except Exception:
+        pass  # Non-critical — don't fail processing if event logging fails
 
 
 # ==========================================
@@ -2367,7 +2388,20 @@ def lambda_handler(event, context):
             print(f"[PLUGIN] Plugin load failed: {e}, falling back to legacy path")
             plugin_id = None  # Fall through to legacy
 
+    # Resolve existing DynamoDB documentType for event logging
+    _doc_type_for_events = "PROCESSING"
+    try:
+        _q = dynamodb.Table(TABLE_NAME).query(
+            KeyConditionExpression=boto3.dynamodb.conditions.Key("documentId").eq(document_id),
+            Limit=1,
+        )
+        if _q.get("Items"):
+            _doc_type_for_events = _q["Items"][0].get("documentType", "PROCESSING")
+    except Exception:
+        pass
+
     if plugin_id:
+        append_processing_event(document_id, _doc_type_for_events, "normalizer", "Normalizing extracted data...")
         try:
             # Build prompt from plugin templates
             raw_data = {"sections": {}}
@@ -2388,6 +2422,22 @@ def lambda_handler(event, context):
             normalized_data, normalizer_tokens = invoke_bedrock_normalize(prompt, plugin)
             normalized_data = apply_field_overrides(normalized_data, plugin)
             print(f"[PLUGIN] Normalization complete. Tokens: in={normalizer_tokens['inputTokens']}, out={normalizer_tokens['outputTokens']}")
+
+            # Count normalized fields for event message
+            def _count_fields(obj, depth=0):
+                if depth > 5 or obj is None:
+                    return 0
+                if isinstance(obj, dict):
+                    return sum(_count_fields(v, depth + 1) for v in obj.values())
+                if isinstance(obj, list):
+                    return sum(_count_fields(i, depth + 1) for i in obj)
+                return 1
+            field_count = _count_fields(normalized_data.get("loanData", normalized_data))
+            confidence = normalized_data.get("validation", {}).get("confidence", "unknown")
+            append_processing_event(
+                document_id, _doc_type_for_events, "normalizer",
+                f"Normalization complete — {field_count} fields extracted (confidence: {confidence})",
+            )
 
             # Signature validation (shared)
             signature_validation = extract_signature_validation(
@@ -2477,6 +2527,8 @@ def lambda_handler(event, context):
         document_type = 'LOAN_PACKAGE'
     print(f"Detected document type: {document_type}")
 
+    append_processing_event(document_id, _doc_type_for_events, "normalizer", "Normalizing extracted data...")
+
     try:
         # 1. Normalize data with Bedrock (Claude 3.5 Haiku for cost optimization)
         print(f"Normalizing data with {BEDROCK_MODEL_ID}...")
@@ -2484,6 +2536,13 @@ def lambda_handler(event, context):
         normalized_data = normalization_result['data']
         normalizer_tokens = normalization_result['tokenUsage']
         print(f"Normalization complete. Validation: {normalized_data.get('validation', {})}")
+
+        # Log legacy normalization completion event
+        _legacy_confidence = normalized_data.get("validation", {}).get("confidence", "unknown")
+        append_processing_event(
+            document_id, _doc_type_for_events, "normalizer",
+            f"Normalization complete (confidence: {_legacy_confidence})",
+        )
 
         # Post-processing fix for amendment number
         # "Amended and Restated" agreements are NOT amendments - they are restated documents

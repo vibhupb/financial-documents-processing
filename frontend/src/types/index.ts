@@ -1,3 +1,40 @@
+export interface ProcessingEvent {
+  ts: string;
+  stage: 'trigger' | 'router' | 'extractor' | 'normalizer';
+  message: string;
+}
+
+export interface StageInfo {
+  status: 'PENDING' | 'IN_PROGRESS' | 'COMPLETED' | 'FAILED';
+  elapsed?: number;
+  result?: {
+    documentType?: string;
+    confidence?: number | string;
+    targetedPages?: number;
+    totalPages?: number;
+    sections?: string[];
+  };
+  progress?: {
+    completed: number;
+    total: number | null;
+    currentSection: string | null;
+  };
+}
+
+export interface EnrichedStatusResponse {
+  documentId: string;
+  status: ProcessingStatus;
+  documentType?: string;
+  stages: {
+    classification: StageInfo;
+    extraction: StageInfo;
+    normalization: StageInfo;
+  };
+  events: ProcessingEvent[];
+  startedAt?: string;
+  completedAt?: string;
+}
+
 export interface Document {
   documentId: string;
   documentType: 'LOAN_PACKAGE' | 'CREDIT_AGREEMENT' | 'LOAN_AGREEMENT';
@@ -20,6 +57,7 @@ export interface Document {
   version?: number;
   processingCost?: ProcessingCost;
   processingTime?: ProcessingTime;
+  latestEvent?: ProcessingEvent;
 }
 
 // Processing cost breakdown for a document
@@ -335,6 +373,7 @@ export interface AuditFile {
   size: number;
 }
 
+/** @deprecated Use EnrichedStatusResponse instead */
 export interface ProcessingStatusResponse {
   documentId: string;
   status: string;
