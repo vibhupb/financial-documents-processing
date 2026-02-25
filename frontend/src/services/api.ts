@@ -104,6 +104,12 @@ export const api = {
   updatePluginConfig: (pluginId: string, data: any) => fetchApi<any>(`/plugins/${pluginId}`, { method: 'PUT', body: JSON.stringify(data) }),
   publishPlugin: (pluginId: string) => fetchApi<any>(`/plugins/${pluginId}/publish`, { method: 'POST' }),
   deletePlugin: (pluginId: string) => fetchApi<any>(`/plugins/${pluginId}`, { method: 'DELETE' }),
+  analyzeSample: (data: { s3Key: string; bucket: string }) =>
+    fetchApi<any>('/plugins/analyze', { method: 'POST', body: JSON.stringify(data) }),
+  generatePluginConfig: (data: { text: string; formFields: any; name: string; pageCount: number }) =>
+    fetchApi<any>('/plugins/generate', { method: 'POST', body: JSON.stringify(data) }),
+  testPlugin: (pluginId: string) =>
+    fetchApi<any>(`/plugins/${pluginId}/test`, { method: 'POST' }),
 
   // Review workflow
   listReviewQueue: (params?: { status?: ReviewStatus; limit?: number }) => {

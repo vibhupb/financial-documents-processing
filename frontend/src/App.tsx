@@ -9,6 +9,7 @@ import Upload from './pages/Upload';
 import Review from './pages/Review';
 import ReviewDocument from './pages/ReviewDocument';
 import PluginList from './pages/PluginList';
+import PluginWizard from './pages/PluginWizard';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, isLoading } = useAuth();
@@ -89,6 +90,14 @@ function AppRoutes() {
         element={
           <ProtectedRoute>
             <Layout><PluginList /></Layout>
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/config/new"
+        element={
+          <ProtectedRoute>
+            <Layout><PluginWizard /></Layout>
           </ProtectedRoute>
         }
       />

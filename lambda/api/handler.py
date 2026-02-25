@@ -615,6 +615,170 @@ def delete_plugin_config(plugin_id: str) -> dict[str, Any]:
     return {"pluginId": plugin_id, "deletedVersions": deleted}
 
 
+def analyze_sample_document(body: dict[str, Any]) -> dict[str, Any]:
+    """Analyze a sample document: run Textract FORMS + PyPDF text extraction.
+
+    Accepts an S3 key (from presigned upload) and returns raw extraction data
+    that the wizard displays to the analyst.
+    """
+    s3_key = body.get("s3Key", "")
+    bucket = body.get("bucket", os.environ.get("BUCKET_NAME", ""))
+    if not s3_key or not bucket:
+        return {"error": "s3Key and bucket are required"}
+
+    results = {"pages": [], "forms": {}, "text": ""}
+
+    try:
+        # PyPDF text extraction (free, fast)
+        s3_response = boto3.client("s3").get_object(Bucket=bucket, Key=s3_key)
+        pdf_bytes = s3_response["Body"].read()
+
+        from pypdf import PdfReader
+        import io
+        reader = PdfReader(io.BytesIO(pdf_bytes))
+        page_texts = []
+        for i, page in enumerate(reader.pages):
+            text = page.extract_text() or ""
+            page_texts.append({"page": i + 1, "text": text[:2000], "charCount": len(text)})
+        results["pages"] = page_texts
+        results["pageCount"] = len(reader.pages)
+        results["text"] = "\n\n".join(p["text"] for p in page_texts)[:10000]
+
+        # Textract FORMS on first 3 pages (enough to detect field names)
+        textract = boto3.client("textract")
+        # Use first page as representative
+        try:
+            textract_response = textract.analyze_document(
+                Document={"S3Object": {"Bucket": bucket, "Name": s3_key}},
+                FeatureTypes=["FORMS", "TABLES"],
+            )
+            blocks = textract_response.get("Blocks", [])
+            blocks_map = {b["Id"]: b for b in blocks}
+
+            # Extract key-value pairs
+            kv_pairs = {}
+            for block in blocks:
+                if block["BlockType"] == "KEY_VALUE_SET" and "KEY" in block.get("EntityTypes", []):
+                    key_text = ""
+                    for rel in block.get("Relationships", []):
+                        if rel["Type"] == "CHILD":
+                            for cid in rel["Ids"]:
+                                cb = blocks_map.get(cid)
+                                if cb and cb["BlockType"] == "WORD":
+                                    key_text += cb.get("Text", "") + " "
+
+                    value_text = ""
+                    for rel in block.get("Relationships", []):
+                        if rel["Type"] == "VALUE":
+                            for vid in rel["Ids"]:
+                                vb = blocks_map.get(vid)
+                                if vb:
+                                    for vrel in vb.get("Relationships", []):
+                                        if vrel["Type"] == "CHILD":
+                                            for wid in vrel["Ids"]:
+                                                wb = blocks_map.get(wid)
+                                                if wb and wb["BlockType"] == "WORD":
+                                                    value_text += wb.get("Text", "") + " "
+
+                    if key_text.strip():
+                        kv_pairs[key_text.strip()] = {
+                            "value": value_text.strip(),
+                            "confidence": block.get("Confidence", 0),
+                        }
+
+            results["forms"] = kv_pairs
+            results["formFieldCount"] = len(kv_pairs)
+        except Exception as textract_err:
+            results["textractError"] = str(textract_err)
+
+    except Exception as e:
+        return {"error": str(e)}
+
+    return results
+
+
+def generate_plugin_config(body: dict[str, Any]) -> dict[str, Any]:
+    """Use Claude to auto-generate a plugin config from sample extraction data.
+
+    Sends the raw extraction text + form fields to Claude with existing plugin
+    examples, and gets back a draft plugin config + prompt template.
+    """
+    extracted_text = body.get("text", "")[:8000]
+    form_fields = body.get("formFields", {})
+    doc_name = body.get("name", "New Document Type")
+    page_count = body.get("pageCount", 1)
+
+    if not extracted_text and not form_fields:
+        return {"error": "No extraction data provided"}
+
+    # Build the meta-prompt
+    form_summary = "\n".join(f"  {k}: {v.get('value', '')}" for k, v in list(form_fields.items())[:50])
+
+    prompt = f"""You are an expert at configuring document extraction pipelines.
+
+Analyze this document and generate a plugin configuration for extracting structured data from it.
+
+DOCUMENT NAME: {doc_name}
+PAGE COUNT: {page_count}
+
+TEXTRACT FORM FIELDS DETECTED:
+{form_summary}
+
+SAMPLE TEXT (first pages):
+{extracted_text[:5000]}
+
+Generate a JSON response with:
+1. "pluginId": a snake_case identifier for this document type
+2. "name": human-readable name
+3. "description": what this document contains
+4. "keywords": 10-15 classification keywords that distinguish this document
+5. "fields": array of fields to extract, each with:
+   - "name": camelCase field name
+   - "label": human-readable label
+   - "type": "string" | "number" | "date" | "boolean" | "currency"
+   - "query": a Textract query question to extract this field
+   - "formKey": the Textract form key name if detected (from the form fields above)
+6. "promptRules": 5-10 normalization rules specific to this document type
+
+Return ONLY valid JSON."""
+
+    try:
+        bedrock = boto3.client("bedrock-runtime")
+        response = bedrock.invoke_model(
+            modelId="us.anthropic.claude-3-haiku-20240307-v1:0",
+            contentType="application/json",
+            accept="application/json",
+            body=json.dumps({
+                "anthropic_version": "bedrock-2023-05-31",
+                "max_tokens": 4096,
+                "temperature": 0,
+                "messages": [{"role": "user", "content": prompt}],
+            }),
+        )
+        response_body = json.loads(response["body"].read())
+        content = response_body["content"][0]["text"]
+
+        # Parse JSON from response
+        if "```json" in content:
+            content = content.split("```json")[1].split("```")[0]
+        elif "```" in content:
+            content = content.split("```")[1].split("```")[0]
+
+        generated = json.loads(content.strip())
+
+        usage = response_body.get("usage", {})
+        generated["_generation"] = {
+            "model": "claude-3-haiku",
+            "inputTokens": usage.get("input_tokens", 0),
+            "outputTokens": usage.get("output_tokens", 0),
+        }
+
+        return generated
+
+    except Exception as e:
+        return {"error": f"AI generation failed: {str(e)}"}
+
+
 def get_metrics() -> dict[str, Any]:
     """Get processing metrics and statistics."""
     table = dynamodb.Table(TABLE_NAME)
@@ -1069,6 +1233,17 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
 
         elif path == "/plugins" and http_method == "POST":
             return response(200, create_plugin_config(body or {}, user))
+
+        elif path == "/plugins/analyze" and http_method == "POST":
+            return response(200, analyze_sample_document(body or {}))
+
+        elif path == "/plugins/generate" and http_method == "POST":
+            return response(200, generate_plugin_config(body or {}))
+
+        elif path.startswith("/plugins/") and "/test" in path and http_method == "POST":
+            pid = path.split("/")[2]
+            # Test runs the full pipeline on the sample - reuse existing Step Functions
+            return response(200, {"pluginId": pid, "status": "TEST_QUEUED", "message": "Test run queued (Phase 3)"})
 
         elif path.startswith("/plugins/") and "/publish" in path and http_method == "POST":
             pid = path.split("/")[2]

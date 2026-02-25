@@ -964,6 +964,18 @@ export class DocumentProcessingStack extends cdk.Stack {
     stateMachine.grantRead(apiLambda);
     stateMachine.grantStartExecution(apiLambda);  // For re-processing rejected documents
 
+    // Plugin builder needs Textract + Bedrock for sample analysis and AI config generation
+    apiLambda.addToRolePolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: ['textract:AnalyzeDocument', 'textract:DetectDocumentText'],
+      resources: ['*'],
+    }));
+    apiLambda.addToRolePolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: ['bedrock:InvokeModel'],
+      resources: ['*'],
+    }));
+
     // ==========================================
     // API Gateway
     // ==========================================
@@ -1028,6 +1040,15 @@ export class DocumentProcessingStack extends cdk.Stack {
 
     const pluginPublishResource = pluginByIdResource.addResource('publish');
     pluginPublishResource.addMethod('POST', apiIntegration); // Publish for production
+
+    const pluginAnalyzeResource = pluginsResource.addResource('analyze');
+    pluginAnalyzeResource.addMethod('POST', apiIntegration); // Analyze sample document
+
+    const pluginGenerateResource = pluginsResource.addResource('generate');
+    pluginGenerateResource.addMethod('POST', apiIntegration); // AI-generate plugin config
+
+    const pluginTestResource = pluginByIdResource.addResource('test');
+    pluginTestResource.addMethod('POST', apiIntegration); // Run test on sample document
 
     // Review workflow routes
     const reviewResource = api.root.addResource('review');
