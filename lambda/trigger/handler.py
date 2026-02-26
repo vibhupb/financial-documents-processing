@@ -11,6 +11,7 @@ is uploaded to the ingest/ prefix. It:
 import hashlib
 import json
 import os
+import re
 import uuid
 from datetime import datetime
 from typing import Any, Optional
@@ -185,7 +186,9 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             }
 
             # Start Step Functions execution
-            execution_name = f"doc-{document_id[:8]}-{int(datetime.utcnow().timestamp())}"
+            # Sanitize name: Step Functions only allows [a-zA-Z0-9-_]
+            safe_id = re.sub(r"[^a-zA-Z0-9_-]", "_", document_id)[:8]
+            execution_name = f"doc-{safe_id}-{int(datetime.utcnow().timestamp())}"
 
             response = sfn_client.start_execution(
                 stateMachineArn=STATE_MACHINE_ARN,
