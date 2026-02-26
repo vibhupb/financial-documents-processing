@@ -1319,36 +1319,35 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
 
     print(f"Processing {http_method} {path}")
 
+    # Helper: extract and URL-decode document ID from path params or URL
+    def _doc_id() -> str:
+        raw = path_params.get("documentId") or path.split("/")[2]
+        return unquote(raw)
+
     try:
         # Route requests
         if path == "/documents" and http_method == "GET":
             return response(200, list_documents(query_params))
 
         elif path.startswith("/documents/") and "/audit" in path and http_method == "GET":
-            document_id = path_params.get("documentId") or path.split("/")[2]
-            return response(200, get_document_audit(document_id))
+            return response(200, get_document_audit(_doc_id()))
 
         elif path.startswith("/documents/") and "/status" in path and http_method == "GET":
-            document_id = path_params.get("documentId") or path.split("/")[2]
-            return response(200, get_processing_status(document_id))
+            return response(200, get_processing_status(_doc_id()))
 
         elif path.startswith("/documents/") and "/pdf" in path and http_method == "GET":
-            document_id = path_params.get("documentId") or path.split("/")[2]
-            return response(200, get_document_pdf_url(document_id))
+            return response(200, get_document_pdf_url(_doc_id()))
 
         elif path.startswith("/documents/") and "/fields" in path and http_method == "PUT":
             # PUT /documents/{documentId}/fields - Correct field values
-            document_id = path_params.get("documentId") or path.split("/")[2]
-            return response(200, correct_document_fields(document_id, body or {}))
+            return response(200, correct_document_fields(_doc_id(), body or {}))
 
         elif path.startswith("/documents/") and "/reprocess" in path and http_method == "POST":
             # POST /documents/{documentId}/reprocess - Trigger re-processing
-            document_id = path_params.get("documentId") or path.split("/")[2]
-            return response(200, reprocess_document(document_id, body or {}))
+            return response(200, reprocess_document(_doc_id(), body or {}))
 
         elif path.startswith("/documents/") and http_method == "GET":
-            document_id = path_params.get("documentId") or path.split("/")[2]
-            return response(200, get_document(document_id))
+            return response(200, get_document(_doc_id()))
 
         elif path == "/upload" and http_method == "POST":
             filename = body.get("filename", "document.pdf") if body else "document.pdf"
@@ -1396,18 +1395,15 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
 
         elif path.startswith("/review/") and "/approve" in path and http_method == "POST":
             # POST /review/{documentId}/approve
-            document_id = path_params.get("documentId") or path.split("/")[2]
-            return response(200, approve_document(document_id, body or {}))
+            return response(200, approve_document(_doc_id(), body or {}))
 
         elif path.startswith("/review/") and "/reject" in path and http_method == "POST":
             # POST /review/{documentId}/reject
-            document_id = path_params.get("documentId") or path.split("/")[2]
-            return response(200, reject_document(document_id, body or {}))
+            return response(200, reject_document(_doc_id(), body or {}))
 
         elif path.startswith("/review/") and http_method == "GET":
             # GET /review/{documentId} - Get document for review
-            document_id = path_params.get("documentId") or path.split("/")[2]
-            return response(200, get_document_for_review(document_id))
+            return response(200, get_document_for_review(_doc_id()))
 
         else:
             return response(404, {"error": "Not found", "path": path, "method": http_method})
