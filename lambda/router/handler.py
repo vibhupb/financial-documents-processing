@@ -2,12 +2,18 @@
 
 This Lambda function implements the "Router" pattern:
 1. Downloads the PDF from S3 (streaming to minimize memory)
-2. Extracts text snippets from each page using PyPDF
-3. Uses Claude 3 Haiku to classify and identify key pages
+2. Extracts text snippets from each page using double-pass parsing
+   (PyPDF first, PyMuPDF fallback for low-quality/scanned pages)
+3. Uses Claude Haiku 4.5 to classify and identify key pages
 4. Returns the page numbers for targeted extraction
 
 This is the COST OPTIMIZATION layer - we use fast, cheap Haiku
 to find the needles in the haystack before expensive extraction.
+
+Double-pass text extraction (inspired by GAIK multi-parser approach):
+  Pass 1: PyPDF — fast, lightweight text extraction
+  Pass 2: PyMuPDF (fitz) — handles custom fonts, garbled text, scanned PDFs
+  If both fail, page is marked low-quality for Textract OCR in extraction.
 
 Supports all document types defined in the classification schema:
 - Credit Agreement: Syndicated loans, ABL facilities, Term loans
@@ -31,6 +37,14 @@ from typing import Any
 import boto3
 from pypdf import PdfReader
 
+# Double-pass: PyMuPDF as second parser for low-quality pages
+try:
+    import fitz  # PyMuPDF — handles custom fonts, garbled text better than PyPDF
+    HAS_PYMUPDF = True
+except ImportError:
+    HAS_PYMUPDF = False
+    print("Warning: PyMuPDF (fitz) not available — double-pass text extraction disabled")
+
 # Initialize AWS clients
 s3_client = boto3.client("s3")
 bedrock_client = boto3.client("bedrock-runtime")
@@ -40,7 +54,7 @@ dynamodb = boto3.resource("dynamodb")
 BUCKET_NAME = os.environ.get("BUCKET_NAME")
 TABLE_NAME = os.environ.get("TABLE_NAME", "financial-documents")
 BEDROCK_MODEL_ID = os.environ.get(
-    "BEDROCK_MODEL_ID", "us.anthropic.claude-3-haiku-20240307-v1:0"
+    "BEDROCK_MODEL_ID", "us.anthropic.claude-haiku-4-5-20251001-v1:0"
 )
 
 # Text extraction settings
@@ -977,16 +991,31 @@ def identify_sections_generic(
     plugin: dict[str, Any],
     page_count: int,
 ) -> dict[str, list[int]]:
-    """Generic section identification using keyword density scoring from plugin config."""
+    """Generic section identification using keyword density scoring from plugin config.
+
+    Includes intelligent low-quality page fallback: when keyword matching
+    produces few/no results because pages have unreadable text (scanned PDFs,
+    custom fonts), those pages are added to the highest-priority section
+    for Textract OCR extraction.
+    """
     sections_config = plugin.get("sections", {})
     section_pages: dict[str, list[int]] = {sid: [] for sid in sections_config}
     section_scores: dict[str, list[tuple[int, float, int]]] = {sid: [] for sid in sections_config}
     total_pages = len(page_snippets)
 
+    # Track low-quality pages that keyword matching can't process
+    low_quality_pages = []
+
     for page in page_snippets:
-        if not page["has_text"]:
-            continue
         page_num = page["page_number"]
+        quality = page.get("text_quality", {})
+        is_readable = quality.get("is_readable", True)
+
+        if not page["has_text"] or not is_readable:
+            # Track pages where text extraction failed — need Textract OCR
+            low_quality_pages.append(page_num)
+            continue
+
         page_index = page_num - 1
         text_lower = page["snippet"].lower()
 
@@ -1021,6 +1050,79 @@ def identify_sections_generic(
         top_pages = [pn for pn, s, m in scores[:limit]]
         section_pages[section_id] = sorted(top_pages)
 
+    # =========================================================================
+    # INTELLIGENT LOW-QUALITY PAGE FALLBACK (ported from legacy path)
+    # =========================================================================
+    # When keyword matching fails because pages have garbled/no text
+    # (scanned PDFs, custom fonts that even PyMuPDF can't decode), add those
+    # pages to the highest-priority section for Textract OCR extraction.
+    #
+    # This ensures scanned documents still get processed instead of producing
+    # empty extraction plans.
+    # =========================================================================
+    all_found_pages = set()
+    for pages in section_pages.values():
+        all_found_pages.update(pages)
+
+    if low_quality_pages:
+        print(
+            f"[GenericSections] {len(low_quality_pages)} low-quality pages "
+            f"(need OCR): {sorted(low_quality_pages)}"
+        )
+        print(
+            f"[GenericSections] Keyword matching found {len(all_found_pages)} "
+            f"pages: {sorted(all_found_pages)}"
+        )
+
+        # Determine the highest-priority section from cost_budget.section_priority
+        cost_budget = plugin.get("cost_budget", {})
+        section_priority = cost_budget.get("section_priority", {})
+
+        if section_priority:
+            # Sort by priority value (1 = highest)
+            primary_section = min(
+                section_priority.keys(),
+                key=lambda s: section_priority[s],
+            )
+        else:
+            # Fallback: use the first section defined in config
+            primary_section = next(iter(sections_config), None)
+
+        if primary_section and primary_section in section_pages:
+            existing = set(section_pages[primary_section])
+            combined = sorted(existing.union(set(low_quality_pages)))
+            section_pages[primary_section] = combined
+            print(
+                f"[GenericSections] Added {len(low_quality_pages)} low-quality "
+                f"pages to '{primary_section}' for Textract OCR"
+            )
+
+    # SAFETY: If very few pages found and document has many pages,
+    # expand around found pages (±1 page) to capture nearby content
+    if len(all_found_pages) < 5 and total_pages > 10 and not low_quality_pages:
+        expanded = set()
+        for pn in all_found_pages:
+            expanded.update(range(max(1, pn - 1), min(total_pages, pn + 1) + 1))
+        new_pages = expanded - all_found_pages
+        if new_pages:
+            # Add expanded pages to the primary section
+            cost_budget = plugin.get("cost_budget", {})
+            section_priority = cost_budget.get("section_priority", {})
+            if section_priority:
+                primary_section = min(
+                    section_priority.keys(),
+                    key=lambda s: section_priority[s],
+                )
+            else:
+                primary_section = next(iter(sections_config), None)
+            if primary_section and primary_section in section_pages:
+                existing = set(section_pages[primary_section])
+                section_pages[primary_section] = sorted(existing.union(new_pages))
+                print(
+                    f"[GenericSections] Expanded {len(new_pages)} adjacent "
+                    f"pages into '{primary_section}'"
+                )
+
     return section_pages
 
 
@@ -1029,7 +1131,12 @@ def build_extraction_plan(
     classification_result: dict[str, Any],
     page_snippets: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """Build the extraction plan array that Step Functions Map state iterates over."""
+    """Build the extraction plan array that Step Functions Map state iterates over.
+
+    Includes fallback: if no sections have pages (e.g., all pages are scanned/
+    low-quality), creates a fallback plan targeting all pages for the primary
+    section so Textract OCR can still extract data.
+    """
     plugin_id = plugin["plugin_id"]
     sections_config = plugin.get("sections", {})
     classification = plugin.get("classification", {})
@@ -1084,6 +1191,46 @@ def build_extraction_plan(
                 "textractFeatures": sc.get("textract_features", ["QUERIES"]),
                 "queries": sc.get("queries", []),
             })
+
+    # =========================================================================
+    # FALLBACK: Empty extraction plan safety net
+    # =========================================================================
+    # If keyword-based section identification produced NO sections with pages
+    # (e.g., all pages are scanned/unreadable), fall back to targeting ALL pages
+    # to the highest-priority section. This ensures Textract OCR still runs
+    # instead of producing an empty extraction.
+    # =========================================================================
+    if not extraction_sections and total_pages > 0:
+        print(
+            f"[ExtractionPlan] WARNING: No sections have pages — "
+            f"creating fallback plan for all {total_pages} pages"
+        )
+        # Determine the highest-priority section
+        cost_budget = plugin.get("cost_budget", {})
+        section_priority = cost_budget.get("section_priority", {})
+        if section_priority:
+            primary_section_id = min(
+                section_priority.keys(),
+                key=lambda s: section_priority[s],
+            )
+        else:
+            primary_section_id = next(iter(sections_config), None)
+
+        if primary_section_id and primary_section_id in sections_config:
+            sc = sections_config[primary_section_id]
+            all_pages = list(range(1, total_pages + 1))
+            extraction_sections.append({
+                "sectionId": primary_section_id,
+                "sectionPages": all_pages,
+                "sectionConfig": sc,
+                "pluginId": plugin_id,
+                "textractFeatures": sc.get("textract_features", ["QUERIES"]),
+                "queries": sc.get("queries", []),
+            })
+            print(
+                f"[ExtractionPlan] Fallback: targeting all {total_pages} pages "
+                f"to '{primary_section_id}' for Textract OCR"
+            )
 
     return extraction_sections
 
@@ -1241,8 +1388,48 @@ def detect_text_quality(text: str) -> dict[str, Any]:
     }
 
 
+def _pymupdf_extract_page_text(pdf_bytes: bytes, page_index: int) -> str:
+    """Extract text from a single page using PyMuPDF (fitz).
+
+    PyMuPDF handles custom fonts, garbled text, and embedded fonts
+    significantly better than PyPDF. Used as second-pass parser
+    when PyPDF returns low-quality or empty text.
+
+    Args:
+        pdf_bytes: Raw PDF bytes
+        page_index: 0-indexed page number
+
+    Returns:
+        Extracted text string, or empty string on failure
+    """
+    if not HAS_PYMUPDF:
+        return ""
+    try:
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        if page_index >= len(doc):
+            doc.close()
+            return ""
+        page = doc[page_index]
+        # get_text("text") handles custom fonts and encoding better than PyPDF
+        text = page.get_text("text") or ""
+        doc.close()
+        return text
+    except Exception as e:
+        print(f"PyMuPDF extraction failed for page {page_index + 1}: {e}")
+        return ""
+
+
 def extract_page_snippets(pdf_stream: io.BytesIO) -> list[dict[str, Any]]:
-    """Extract text snippets from each page of the PDF with quality detection.
+    """Extract text snippets from each page using double-pass parsing.
+
+    Double-pass approach (inspired by GAIK multi-parser pattern):
+      Pass 1: PyPDF — fast, lightweight extraction
+      Pass 2: PyMuPDF (fitz) — only for pages where PyPDF returned
+              low-quality or empty text. Handles custom fonts, garbled
+              text, and embedded font encoding issues.
+
+    If both parsers fail, the page is marked as low-quality so the
+    extraction plan routes it to Textract OCR.
 
     Args:
         pdf_stream: BytesIO stream containing the PDF
@@ -1250,19 +1437,42 @@ def extract_page_snippets(pdf_stream: io.BytesIO) -> list[dict[str, Any]]:
     Returns:
         List of dicts with page number, text snippet, and quality metrics
     """
+    # Read PDF bytes once — shared between PyPDF and PyMuPDF
+    pdf_stream.seek(0)
+    pdf_bytes = pdf_stream.read()
+    pdf_stream.seek(0)
+
     reader = PdfReader(pdf_stream)
     page_snippets = []
+    pymupdf_upgraded_count = 0
 
     for i, page in enumerate(reader.pages):
         try:
-            # Extract text (PyPDF is fast for text extraction)
+            # === PASS 1: PyPDF (fast, lightweight) ===
             text = page.extract_text() or ""
-
-            # Take only the first N characters for classification
             snippet = text[:MAX_CHARS_PER_PAGE].strip()
-
-            # Detect text quality to identify garbled/corrupt text
             quality = detect_text_quality(snippet)
+            parser_used = "pypdf"
+
+            # === PASS 2: PyMuPDF fallback for low-quality pages ===
+            # If PyPDF returned unreadable text (garbled fonts, glyph indices,
+            # empty), try PyMuPDF which handles custom fonts much better.
+            if not quality["is_readable"] and HAS_PYMUPDF:
+                pymupdf_text = _pymupdf_extract_page_text(pdf_bytes, i)
+                pymupdf_snippet = pymupdf_text[:MAX_CHARS_PER_PAGE].strip()
+                pymupdf_quality = detect_text_quality(pymupdf_snippet)
+
+                # Use PyMuPDF result if it's better quality
+                if pymupdf_quality["quality_score"] > quality["quality_score"]:
+                    snippet = pymupdf_snippet
+                    quality = pymupdf_quality
+                    parser_used = "pymupdf"
+                    pymupdf_upgraded_count += 1
+                    print(
+                        f"[DoublePass] Page {i + 1}: PyMuPDF upgrade "
+                        f"(quality {quality['quality_score']:.2f}, "
+                        f"readable={quality['is_readable']})"
+                    )
 
             page_snippets.append(
                 {
@@ -1270,6 +1480,7 @@ def extract_page_snippets(pdf_stream: io.BytesIO) -> list[dict[str, Any]]:
                     "snippet": snippet,
                     "has_text": len(snippet) > 50,  # Flag if page has meaningful text
                     "text_quality": quality,  # Quality metrics for intelligent routing
+                    "parser_used": parser_used,  # Track which parser succeeded
                 }
             )
         except Exception as e:
@@ -1285,9 +1496,15 @@ def extract_page_snippets(pdf_stream: io.BytesIO) -> list[dict[str, Any]]:
                         "issues": ["extraction_error"],
                         "metrics": {},
                     },
+                    "parser_used": "none",
                     "error": str(e),
                 }
             )
+
+    if pymupdf_upgraded_count > 0:
+        print(
+            f"[DoublePass] Summary: PyMuPDF upgraded {pymupdf_upgraded_count}/{len(page_snippets)} pages"
+        )
 
     return page_snippets
 
@@ -1751,11 +1968,13 @@ Respond with ONLY valid JSON in this exact format:
 
 def classify_pages_with_bedrock(
     page_snippets: list[dict[str, Any]],
+    filename: str = "",
 ) -> dict[str, Any]:
     """Use Claude Haiku to classify pages and identify document types.
 
     Args:
         page_snippets: List of page snippets from extract_page_snippets
+        filename: Original filename (used as classification hint for scanned PDFs)
 
     Returns:
         Dict mapping document type to page number and classification metadata
@@ -1763,10 +1982,31 @@ def classify_pages_with_bedrock(
     # Filter to only pages with text
     text_pages = [p for p in page_snippets if p["has_text"]]
 
+    # If no readable text at all, include low-quality snippets as-is so the
+    # LLM at least sees something (garbled text can still give structural clues).
+    # This prevents sending an empty PAGE SNIPPETS block to the model.
+    if not text_pages:
+        print(
+            "[Classification] WARNING: No readable pages found — "
+            "including raw snippets for best-effort classification"
+        )
+        text_pages = [p for p in page_snippets if p.get("snippet", "").strip()]
+        if not text_pages:
+            # Truly empty — include all pages with a placeholder
+            text_pages = page_snippets
+
     # Format pages for the prompt
     formatted_pages = "\n\n".join(
         [f"=== PAGE {p['page_number']} ===\n{p['snippet']}" for p in text_pages]
     )
+
+    # If still no text content, add a note so model doesn't hallucinate
+    if not formatted_pages.strip():
+        formatted_pages = (
+            "(No text could be extracted from this scanned/image PDF. "
+            f"Total pages: {len(page_snippets)}. "
+            "Classify based on filename and page count if possible.)"
+        )
 
     # Build document type descriptions for the prompt
     # Merge hardcoded DOCUMENT_TYPES with plugin registry types
@@ -1799,21 +2039,34 @@ def classify_pages_with_bedrock(
 
     doc_types_text = "\n".join(doc_type_descriptions)
 
+    # Add filename hint for scanned/low-quality documents
+    filename_hint = ""
+    if filename:
+        filename_hint = f"\nFILENAME: {filename}\n"
+
     prompt = f"""You are a financial document classifier specializing in loan packages and financial documents.
 
 Analyze the following page snippets from a document package. Your task is to identify the FIRST page number where each of these document types begins:
 
 {doc_types_text}
-
+{filename_hint}
 PAGE SNIPPETS:
 {formatted_pages}
 
 IMPORTANT RULES:
 - Return ONLY the page number where each document STARTS
 - If a document type is not found, use null
-- Be conservative - only identify if you're confident
 - A document may span multiple pages; return only the first page
 - Focus on the most common financial documents first
+
+SCANNED/IMAGE PDF RULE (CRITICAL):
+If most or all page snippets are empty, garbled, or contain no readable text, this is a scanned PDF.
+In this case you MUST:
+1. Use the FILENAME to determine the document type. Match filename keywords to known document types above.
+2. Set the matching document type's start page to 1 (since text extraction failed, assume the document starts at page 1).
+3. Set primary_document_type to the matched type with confidence "medium".
+4. Do NOT return "unknown" if the filename clearly matches a known document type.
+Examples: "Loan Agreement" in filename → loan_agreement: 1, "BSA" in filename → bsa_profile: 1, "Credit Agreement" → credit_agreement: 1.
 
 CRITICAL DISTINCTION - Credit Agreement vs Loan Agreement:
 - **credit_agreement**: Complex SYNDICATED facilities with MULTIPLE LENDERS, Administrative Agent,
@@ -1928,11 +2181,17 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         s3_response = s3_client.get_object(Bucket=bucket, Key=key)
         pdf_stream = io.BytesIO(s3_response["Body"].read())
 
-        # 2. Extract page snippets (fast, no OCR) with text quality detection
-        print("Extracting page snippets...")
+        # 2. Extract page snippets using double-pass parsing
+        # Pass 1: PyPDF (fast), Pass 2: PyMuPDF for failed pages (better font handling)
+        print(f"Extracting page snippets (double-pass: PyPDF + PyMuPDF)...")
         page_snippets = extract_page_snippets(pdf_stream)
         total_pages = len(page_snippets)
-        print(f"Extracted snippets from {total_pages} pages")
+        # Log parser usage summary
+        parser_counts = {}
+        for p in page_snippets:
+            parser = p.get("parser_used", "unknown")
+            parser_counts[parser] = parser_counts.get(parser, 0) + 1
+        print(f"Extracted snippets from {total_pages} pages — parsers: {parser_counts}")
 
         # 2b. Analyze text quality across all pages
         low_quality_pages = []
@@ -1945,9 +2204,41 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             print(f"Detected {len(low_quality_pages)} pages with low text quality (need OCR): {low_quality_pages}")
 
         # 3. Classify pages using Bedrock
+        # Pass filename as hint for scanned PDFs where text extraction fails
+        filename_from_key = key.rsplit("/", 1)[-1] if "/" in key else key
         print("Classifying pages with Claude Haiku...")
-        classification = classify_pages_with_bedrock(page_snippets)
+        classification = classify_pages_with_bedrock(page_snippets, filename=filename_from_key)
         print(f"Classification result: {json.dumps(classification)}")
+
+        # Programmatic fallback: if LLM returned "unknown" but filename matches
+        # a known document type, override the classification.
+        primary_type_raw = classification.get("primary_document_type", "unknown")
+        if primary_type_raw in ("unknown", None, ""):
+            _fname_lower = filename_from_key.lower().replace("-", " ").replace("_", " ")
+            _filename_type_map = {
+                "loan agreement": "loan_agreement",
+                "credit agreement": "credit_agreement",
+                "bsa profile": "bsa_profile",
+                "bsa": "bsa_profile",
+                "loan package": "loan_package",
+                "w2": "w2",
+                "w-2": "w2",
+                "drivers license": "drivers_license",
+                "driver license": "drivers_license",
+            }
+            for pattern, doc_type in _filename_type_map.items():
+                if pattern in _fname_lower:
+                    print(
+                        f"Filename fallback: '{filename_from_key}' matches "
+                        f"'{pattern}' → overriding classification to {doc_type}"
+                    )
+                    classification["primary_document_type"] = doc_type
+                    classification["confidence"] = "medium"
+                    classification[doc_type] = 1  # Assume start page 1
+                    # Set legacy camelCase keys for backward compatibility
+                    if doc_type == "loan_agreement":
+                        classification["loanAgreement"] = 1
+                    break
 
         # Count identified documents
         identified_docs = [
@@ -2116,38 +2407,54 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                     extraction_plan = build_extraction_plan(
                         plugin, section_result, page_snippets
                     )
-                    # Inject document-level fields into each plan item
-                    # (Map state itemSelector passes these to ExtractSection Lambda)
-                    for item in extraction_plan:
-                        item["documentId"] = document_id
-                        item["bucket"] = bucket
-                        item["key"] = key
-                        item["contentHash"] = content_hash
-                        item["size"] = file_size
-                    result["extractionPlan"] = extraction_plan
-                    result["pluginId"] = plugin_id
-                    result["metadata"]["pluginId"] = plugin_id
-                    result["metadata"]["pluginVersion"] = plugin.get("plugin_version", "unknown")
 
-                    # Add backward-compatible legacy keys
-                    add_backward_compatible_keys(
-                        result, plugin_id, extraction_plan, classification
-                    )
-                    print(f"Plugin extraction plan: {len(extraction_plan)} sections for {plugin_id}")
+                    # GUARD: Only emit extractionPlan if non-empty.
+                    # An empty [] would cause Step Functions Map to run 0
+                    # iterations, producing no extraction data. Without this
+                    # key, Step Functions falls back to the legacy path.
+                    if extraction_plan:
+                        # Inject document-level fields into each plan item
+                        # (Map state itemSelector passes these to ExtractSection Lambda)
+                        for item in extraction_plan:
+                            item["documentId"] = document_id
+                            item["bucket"] = bucket
+                            item["key"] = key
+                            item["contentHash"] = content_hash
+                            item["size"] = file_size
+                        result["extractionPlan"] = extraction_plan
+                        result["pluginId"] = plugin_id
+                        result["metadata"]["pluginId"] = plugin_id
+                        result["metadata"]["pluginVersion"] = plugin.get("plugin_version", "unknown")
 
-                    # Log page-targeting event
-                    targeted_page_set = set()
-                    for sec in extraction_plan:
-                        targeted_page_set.update(sec.get("sectionPages", []))
-                    section_names = [sec.get("sectionId", "unknown") for sec in extraction_plan]
-                    append_processing_event(
-                        document_id, _existing_doc_type, "router",
-                        f"Targeted {len(targeted_page_set)}/{total_pages} pages across {len(extraction_plan)} sections",
-                    )
-                    append_processing_event(
-                        document_id, _existing_doc_type, "router",
-                        f"Extraction plan: {', '.join(section_names)}",
-                    )
+                        # Add backward-compatible legacy keys
+                        add_backward_compatible_keys(
+                            result, plugin_id, extraction_plan, classification
+                        )
+                        print(f"Plugin extraction plan: {len(extraction_plan)} sections for {plugin_id}")
+
+                        # Log page-targeting event
+                        targeted_page_set = set()
+                        for sec in extraction_plan:
+                            targeted_page_set.update(sec.get("sectionPages", []))
+                        section_names = [sec.get("sectionId", "unknown") for sec in extraction_plan]
+                        append_processing_event(
+                            document_id, _existing_doc_type, "router",
+                            f"Targeted {len(targeted_page_set)}/{total_pages} pages across {len(extraction_plan)} sections",
+                        )
+                        append_processing_event(
+                            document_id, _existing_doc_type, "router",
+                            f"Extraction plan: {', '.join(section_names)}",
+                        )
+                    else:
+                        print(
+                            f"WARNING: Plugin extraction plan is empty for "
+                            f"{plugin_id} — omitting extractionPlan key to "
+                            f"fall back to legacy path"
+                        )
+                        append_processing_event(
+                            document_id, _existing_doc_type, "router",
+                            f"Empty extraction plan for {plugin_id} — using legacy fallback",
+                        )
             except Exception as plugin_err:
                 print(f"Warning: Plugin extraction plan failed, using legacy path: {plugin_err}")
 

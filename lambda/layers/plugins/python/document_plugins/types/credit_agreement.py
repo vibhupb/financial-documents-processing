@@ -124,7 +124,7 @@ PLUGIN_CONFIG: DocumentPluginConfig = {
             "low_quality_fallback": True,
             "parallel_extraction": True,
             "extract_tables": False,
-            "extract_signatures": False,
+            "extract_signatures": True,  # Legal document signature validation
             "extraction_fields": [
                 "documentType",
                 "agreementDate",
@@ -457,7 +457,7 @@ PLUGIN_CONFIG: DocumentPluginConfig = {
                 "min_keyword_matches": 2,
                 "typical_pages": "article II and Schedules",
             },
-            "textract_features": ["QUERIES"],
+            "textract_features": ["QUERIES", "TABLES"],  # TABLES for commitment amounts, sublimits
             "queries": [
                 # Total Facility
                 "What is the Total Credit Facility amount?",
@@ -739,7 +739,7 @@ PLUGIN_CONFIG: DocumentPluginConfig = {
                 "min_keyword_matches": 2,
                 "typical_pages": "article II or separate section",
             },
-            "textract_features": ["QUERIES"],
+            "textract_features": ["QUERIES", "TABLES"],  # TABLES for fee schedules/grids
             "queries": [
                 # Commitment Fee
                 "What is the Commitment Fee?",
@@ -780,7 +780,7 @@ PLUGIN_CONFIG: DocumentPluginConfig = {
     # ------------------------------------------------------------------
     "normalization": {
         "prompt_template": "credit_agreement",
-        "llm_model": "us.anthropic.claude-3-5-haiku-20241022-v1:0",
+        "llm_model": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
         "max_tokens": 4096,
         "temperature": 0.0,
     },

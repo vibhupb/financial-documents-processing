@@ -860,7 +860,7 @@ CREDIT_AGREEMENT_SCHEMA = ExtractionSchema(
     name="Credit Agreement",
     description="Extract key terms from syndicated loan Credit Agreements",
     textract_features=["QUERIES", "TABLES"],
-    llm_model="anthropic.claude-3-5-haiku-20241022-v1:0",  # For normalization
+    llm_model="us.anthropic.claude-haiku-4-5-20251001-v1:0",  # For normalization
     fields=[
         # === Agreement Information (from loan_master_fields_section_1) ===
         ExtractionField(

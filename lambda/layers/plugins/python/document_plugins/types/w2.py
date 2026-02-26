@@ -85,7 +85,7 @@ PLUGIN_CONFIG: DocumentPluginConfig = {
 
     "normalization": {
         "prompt_template": "w2",
-        "llm_model": "us.anthropic.claude-3-5-haiku-20241022-v1:0",
+        "llm_model": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
         "max_tokens": 4096,
         "temperature": 0.0,
     },

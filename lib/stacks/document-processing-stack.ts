@@ -122,7 +122,7 @@ export class DocumentProcessingStack extends cdk.Stack {
     const pypdfLayer = new lambda.LayerVersion(this, 'PyPDFLayer', {
       code: lambda.Code.fromAsset(path.join(__dirname, '../../lambda/layers/pypdf')),
       compatibleRuntimes: [lambda.Runtime.PYTHON_3_13],
-      description: 'PyPDF library for PDF text extraction',
+      description: 'PyPDF + PyMuPDF libraries for double-pass PDF text extraction',
     });
 
     // Plugins Layer for document type configurations
@@ -147,7 +147,7 @@ export class DocumentProcessingStack extends cdk.Stack {
       environment: {
         BUCKET_NAME: documentBucket.bucketName,
         TABLE_NAME: documentTable.tableName,  // For status updates
-        BEDROCK_MODEL_ID: 'us.anthropic.claude-3-haiku-20240307-v1:0',
+        BEDROCK_MODEL_ID: 'us.anthropic.claude-haiku-4-5-20251001-v1:0',
         ROUTER_OUTPUT_FORMAT: 'dual',  // Emit both legacy keys AND extractionPlan
       },
       tracing: lambda.Tracing.ACTIVE,
@@ -217,7 +217,7 @@ export class DocumentProcessingStack extends cdk.Stack {
       environment: {
         BUCKET_NAME: documentBucket.bucketName,
         TABLE_NAME: documentTable.tableName,
-        BEDROCK_MODEL_ID: 'us.anthropic.claude-3-5-haiku-20241022-v1:0',  // Claude 3.5 Haiku for cost optimization
+        BEDROCK_MODEL_ID: 'us.anthropic.claude-haiku-4-5-20251001-v1:0',  // Claude Haiku 4.5 for normalization
       },
       tracing: lambda.Tracing.ACTIVE,
     });
@@ -855,14 +855,21 @@ export class DocumentProcessingStack extends cdk.Stack {
       )
       .otherwise(parallelMortgageExtraction);
 
-    // Primary choice: extractionPlan present -> Map; otherwise -> legacy
+    // Primary choice: extractionPlan present AND non-empty -> Map; otherwise -> legacy
+    // IMPORTANT: isPresent alone is insufficient — an empty array [] passes isPresent
+    // but causes Map to run 0 iterations, producing no extraction data.
+    // Belt-and-suspenders: router also omits the key when empty, but this guards
+    // against any edge case where an empty array slips through.
     const extractionRouteChoice = new sfn.Choice(this, 'ExtractionRouteChoice', {
-      comment: 'Blue/green: use plugin Map if router emits extractionPlan, else legacy Parallel',
+      comment: 'Blue/green: use plugin Map if router emits non-empty extractionPlan, else legacy Parallel',
     });
 
     extractionRouteChoice
       .when(
-        sfn.Condition.isPresent('$.extractionPlan'),
+        sfn.Condition.and(
+          sfn.Condition.isPresent('$.extractionPlan'),
+          sfn.Condition.isPresent('$.extractionPlan[0]'),
+        ),
         mapExtraction
       )
       .otherwise(legacyDocumentTypeChoice);

@@ -108,7 +108,7 @@ class SectionConfig(TypedDict, total=False):
 class NormalizationConfig(TypedDict, total=False):
     """How the normalizer Lambda processes raw extraction results."""
     prompt_template: str  # Filename in prompts/ directory or inline template key
-    llm_model: str  # e.g. "us.anthropic.claude-3-5-haiku-20241022-v1:0"
+    llm_model: str  # e.g. "us.anthropic.claude-haiku-4-5-20251001-v1:0"
     max_tokens: int
     temperature: float
     field_overrides: Dict[str, str]  # field_name -> override instruction

@@ -79,7 +79,7 @@ export default function ProcessingMetricsPanel({
               </h4>
 
               <div className="space-y-2">
-                {/* Router (Claude 3 Haiku) */}
+                {/* Router (Claude Haiku 4.5) */}
                 {processingCost.breakdown.router && (
                   <CostRow
                     icon={<Brain className="w-4 h-4 text-purple-500" />}
@@ -107,7 +107,7 @@ export default function ProcessingMetricsPanel({
                   />
                 )}
 
-                {/* Normalizer (Claude 3.5 Haiku) */}
+                {/* Normalizer (Claude Haiku 4.5) */}
                 {processingCost.breakdown.normalizer && (
                   <CostRow
                     icon={<Zap className="w-4 h-4 text-green-500" />}

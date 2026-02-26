@@ -74,7 +74,7 @@ PLUGIN_CONFIG: DocumentPluginConfig = {
 
     "normalization": {
         "prompt_template": "drivers_license",
-        "llm_model": "us.anthropic.claude-3-5-haiku-20241022-v1:0",
+        "llm_model": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
         "max_tokens": 2048,
         "temperature": 0.0,
     },

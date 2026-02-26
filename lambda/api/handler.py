@@ -874,7 +874,7 @@ Return ONLY valid JSON."""
     try:
         bedrock = boto3.client("bedrock-runtime")
         response = bedrock.invoke_model(
-            modelId="us.anthropic.claude-3-haiku-20240307-v1:0",
+            modelId="us.anthropic.claude-haiku-4-5-20251001-v1:0",
             contentType="application/json",
             accept="application/json",
             body=json.dumps({
@@ -897,7 +897,7 @@ Return ONLY valid JSON."""
 
         usage = response_body.get("usage", {})
         generated["_generation"] = {
-            "model": "claude-3-haiku",
+            "model": "claude-haiku-4.5",
             "inputTokens": usage.get("input_tokens", 0),
             "outputTokens": usage.get("output_tokens", 0),
         }

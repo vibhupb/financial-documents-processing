@@ -18,12 +18,12 @@ class Settings:
     # Bedrock Configuration
     router_model_id: str = field(
         default_factory=lambda: os.environ.get(
-            "BEDROCK_MODEL_ID", "us.anthropic.claude-3-haiku-20240307-v1:0"
+            "BEDROCK_MODEL_ID", "us.anthropic.claude-haiku-4-5-20251001-v1:0"
         )
     )
     normalizer_model_id: str = field(
         default_factory=lambda: os.environ.get(
-            "NORMALIZER_MODEL_ID", "us.anthropic.claude-3-5-haiku-20241022-v1:0"
+            "NORMALIZER_MODEL_ID", "us.anthropic.claude-haiku-4-5-20251001-v1:0"
         )
     )
 

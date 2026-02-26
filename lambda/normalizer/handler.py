@@ -2,12 +2,11 @@
 
 This Lambda function implements the "Closer" pattern:
 1. Receives raw Textract output from parallel extractions
-2. Uses Claude 3.5 Haiku to normalize and validate the data
+2. Uses Claude Haiku 4.5 to normalize and validate the data
 3. Stores clean JSON to DynamoDB (for app) and S3 (for audit)
 4. Ensures data conforms to expected schema
 
-Cost optimization: Claude 3.5 Haiku provides excellent normalization
-quality at ~70% lower cost than Sonnet 4 ($0.03 vs $0.09 per document).
+Cost: Claude Haiku 4.5 — $1.00/MTok input, $5.00/MTok output (~$0.013/doc).
 """
 
 import datetime
@@ -26,7 +25,7 @@ bedrock_client = boto3.client('bedrock-runtime')
 # Configuration
 BUCKET_NAME = os.environ.get('BUCKET_NAME')
 TABLE_NAME = os.environ.get('TABLE_NAME')
-BEDROCK_MODEL_ID = os.environ.get('BEDROCK_MODEL_ID', 'us.anthropic.claude-3-5-haiku-20241022-v1:0')
+BEDROCK_MODEL_ID = os.environ.get('BEDROCK_MODEL_ID', 'us.anthropic.claude-haiku-4-5-20251001-v1:0')
 
 
 def append_processing_event(document_id: str, document_type: str, stage: str, message: str):
@@ -972,7 +971,7 @@ def clean_extraction_for_normalization(extraction: Dict[str, Any], max_raw_text_
 
 
 def normalize_with_bedrock(raw_extractions: List[Dict[str, Any]], document_id: str) -> Dict[str, Any]:
-    """Use Claude 3.5 Haiku to normalize and validate extracted data.
+    """Use Claude Haiku 4.5 to normalize and validate extracted data.
 
     Args:
         raw_extractions: List of extraction results from parallel Textract operations
@@ -1021,7 +1020,7 @@ def normalize_with_bedrock(raw_extractions: List[Dict[str, Any]], document_id: s
                     if raw_text:
                         # Loan Agreement raw text - may be OCR from scanned or native PDF
                         # IMPORTANT: Use high limit to capture maturity date from later pages
-                        # Claude 3.5 Haiku can handle ~100K tokens (~400K chars) context
+                        # Claude Haiku 4.5 can handle ~100K tokens (~400K chars) context
                         # Using 50K chars to balance cost vs extraction quality
                         MAX_LOAN_AGREEMENT_RAW_TEXT = 50000
                         if len(raw_text) > MAX_LOAN_AGREEMENT_RAW_TEXT:
@@ -1550,7 +1549,7 @@ def ensure_all_table_data(
 ) -> Dict[str, Any]:
     """Post-process to ensure all table data from Textract is preserved.
 
-    Claude 3.5 Haiku sometimes truncates arrays. This function extracts data
+    Claude Haiku 4.5 sometimes truncates arrays. This function extracts data
     directly from Textract tables to ensure all rows are included.
 
     Handles multiple table types:
@@ -1979,8 +1978,8 @@ def calculate_processing_cost(
     """Calculate the total processing cost for a document including ALL AWS services.
 
     Pricing:
-    - Claude 3 Haiku (Router): $0.00025/1K input, $0.00125/1K output
-    - Claude 3.5 Haiku (Normalizer): $0.001/1K input, $0.005/1K output
+    - Claude Haiku 4.5 (Router): $0.001/1K input, $0.005/1K output
+    - Claude Haiku 4.5 (Normalizer): $0.001/1K input, $0.005/1K output
     - Textract (Tables + Queries): $0.02 per page
     - Step Functions (Standard): $0.000025 per state transition
     - Lambda: $0.0000002 per invocation + $0.0000166667 per GB-second
@@ -1997,10 +1996,9 @@ def calculate_processing_cost(
         Dict with cost breakdown and total
     """
     # Pricing constants (per 1K tokens)
-    CLAUDE_3_HAIKU_INPUT = 0.00025
-    CLAUDE_3_HAIKU_OUTPUT = 0.00125
-    CLAUDE_35_HAIKU_INPUT = 0.001
-    CLAUDE_35_HAIKU_OUTPUT = 0.005
+    # Claude Haiku 4.5: $1.00/MTok input = $0.001/1K, $5.00/MTok output = $0.005/1K
+    HAIKU_45_INPUT = 0.001
+    HAIKU_45_OUTPUT = 0.005
     TEXTRACT_PER_PAGE = 0.02  # Tables + Queries combined
 
     # Step Functions pricing (Standard Workflow)
@@ -2010,7 +2008,7 @@ def calculate_processing_cost(
     LAMBDA_PER_INVOCATION = 0.0000002  # $0.20 per million
     LAMBDA_PER_GB_SECOND = 0.0000166667
 
-    # Router cost (Claude 3 Haiku)
+    # Router cost (Claude Haiku 4.5)
     router_cost = 0.0
     router_input = 0
     router_output = 0
@@ -2019,8 +2017,8 @@ def calculate_processing_cost(
         router_input = router_tokens.get('inputTokens', 0)
         router_output = router_tokens.get('outputTokens', 0)
         router_cost = (
-            (router_input / 1000) * CLAUDE_3_HAIKU_INPUT +
-            (router_output / 1000) * CLAUDE_3_HAIKU_OUTPUT
+            (router_input / 1000) * HAIKU_45_INPUT +
+            (router_output / 1000) * HAIKU_45_OUTPUT
         )
     else:
         # Estimate router cost if not provided (~20K input, 500 output typical)
@@ -2029,16 +2027,16 @@ def calculate_processing_cost(
         router_input = 20000
         router_output = 500
         router_cost = (
-            (router_input / 1000) * CLAUDE_3_HAIKU_INPUT +
-            (router_output / 1000) * CLAUDE_3_HAIKU_OUTPUT
+            (router_input / 1000) * HAIKU_45_INPUT +
+            (router_output / 1000) * HAIKU_45_OUTPUT
         )
 
-    # Normalizer cost (Claude 3.5 Haiku)
+    # Normalizer cost (Claude Haiku 4.5)
     normalizer_input = normalizer_tokens.get('inputTokens', 0)
     normalizer_output = normalizer_tokens.get('outputTokens', 0)
     normalizer_cost = (
-        (normalizer_input / 1000) * CLAUDE_35_HAIKU_INPUT +
-        (normalizer_output / 1000) * CLAUDE_35_HAIKU_OUTPUT
+        (normalizer_input / 1000) * HAIKU_45_INPUT +
+        (normalizer_output / 1000) * HAIKU_45_OUTPUT
     )
 
     # Textract cost
@@ -2069,7 +2067,7 @@ def calculate_processing_cost(
         'totalCost': round(total_cost, 4),
         'breakdown': {
             'router': {
-                'model': 'claude-3-haiku',
+                'model': 'claude-haiku-4.5',
                 'inputTokens': router_input,
                 'outputTokens': router_output,
                 'cost': round(router_cost, 6),
@@ -2082,7 +2080,7 @@ def calculate_processing_cost(
                 'isReal': True,  # Always real - counted from extractions
             },
             'normalizer': {
-                'model': 'claude-3.5-haiku',
+                'model': 'claude-haiku-4.5',
                 'inputTokens': normalizer_input,
                 'outputTokens': normalizer_output,
                 'cost': round(normalizer_cost, 6),
@@ -2145,7 +2143,7 @@ def calculate_processing_time(
     # With 30-worker parallel Textract extraction:
     # - Router: ~45% of time (PyPDF text extraction + Claude Haiku classification)
     # - Textract: ~20% of time (parallel extraction across all sections)
-    # - Normalizer: ~35% of time (Claude 3.5 Haiku data normalization)
+    # - Normalizer: ~35% of time (Claude Haiku 4.5 data normalization)
     # NOTE: These are approximations - individual Lambda durations are not tracked
     router_seconds = total_seconds * 0.45
     textract_seconds = total_seconds * 0.20
@@ -2170,7 +2168,7 @@ def calculate_processing_time(
             },
             'normalizer': {
                 'estimatedSeconds': round(normalizer_seconds, 2),
-                'description': 'Data normalization with Claude 3.5 Haiku',
+                'description': 'Data normalization with Claude Haiku 4.5',
                 'isEstimated': True,  # Phase breakdown is approximated
             },
         },
@@ -2421,6 +2419,39 @@ def lambda_handler(event, context):
             prompt = build_normalization_prompt(plugin, raw_data)
             normalized_data, normalizer_tokens = invoke_bedrock_normalize(prompt, plugin)
             normalized_data = apply_field_overrides(normalized_data, plugin)
+
+            # Apply document-type-specific post-processing that was in the legacy path.
+            # These fix LLM truncation and apply coded defaults that the prompt alone
+            # cannot guarantee.
+            if plugin_id == "credit_agreement":
+                try:
+                    ensure_all_table_data(
+                        normalized_data,
+                        extractions_list if isinstance(extractions_list, list) else [extractions_list],
+                    )
+                except Exception as e:
+                    print(f"[PLUGIN] ensure_all_table_data failed (non-fatal): {e}")
+
+                # Amendment number cleanup: "Amended and Restated" docs sometimes
+                # get spurious amendment numbers from Textract
+                try:
+                    loan_data = normalized_data.get("loanData", {})
+                    ca_data = loan_data.get("creditAgreement", loan_data)
+                    doc_info = ca_data.get("documentInfo", ca_data.get("agreementInfo", {}))
+                    doc_title = (doc_info.get("documentType", "") or "").lower()
+                    if "amended and restated" in doc_title:
+                        amend_num = doc_info.get("amendmentNumber")
+                        if amend_num and not str(amend_num).lower().startswith("amendment no"):
+                            doc_info["amendmentNumber"] = None
+                except Exception:
+                    pass
+
+            elif plugin_id == "loan_agreement":
+                try:
+                    apply_loan_agreement_defaults(normalized_data)
+                except Exception as e:
+                    print(f"[PLUGIN] apply_loan_agreement_defaults failed (non-fatal): {e}")
+
             print(f"[PLUGIN] Normalization complete. Tokens: in={normalizer_tokens['inputTokens']}, out={normalizer_tokens['outputTokens']}")
 
             # Count normalized fields for event message
@@ -2530,7 +2561,7 @@ def lambda_handler(event, context):
     append_processing_event(document_id, _doc_type_for_events, "normalizer", "Normalizing extracted data...")
 
     try:
-        # 1. Normalize data with Bedrock (Claude 3.5 Haiku for cost optimization)
+        # 1. Normalize data with Bedrock (Claude Haiku 4.5 for cost optimization)
         print(f"Normalizing data with {BEDROCK_MODEL_ID}...")
         normalization_result = normalize_with_bedrock(extractions, document_id)
         normalized_data = normalization_result['data']
@@ -2564,7 +2595,7 @@ def lambda_handler(event, context):
                         normalized_data['loanData']['creditAgreement']['agreementInfo']['amendmentNumber'] = None
 
             # Post-processing: Ensure all pricing tiers are preserved from Textract tables
-            # Claude 3.5 Haiku sometimes truncates arrays to 3 items
+            # Claude Haiku 4.5 sometimes truncates arrays to 3 items
             normalized_data = ensure_all_pricing_tiers(normalized_data, extractions)
 
         # Post-processing for Loan Agreement defaults

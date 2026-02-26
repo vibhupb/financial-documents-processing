@@ -400,6 +400,10 @@ PLUGIN_CONFIG: DocumentPluginConfig = {
                 "What are the Remedies upon Default?",
                 "What is the Governing Law or Jurisdiction?",
                 "What is the Currency of this loan (USD, EUR, GBP)?",
+                # Legal and Operational (migrated from old CDK extractLoanAgreement)
+                "Is this loan Assignable or Transferable?",
+                "What Business Day Calendar is used (New York, London)?",
+                "What are the Reporting Requirements or Financial Statements required?",
             ],
             "include_pypdf_text": True,
             "render_as_images": True,
@@ -468,7 +472,7 @@ PLUGIN_CONFIG: DocumentPluginConfig = {
     # ------------------------------------------------------------------
     "normalization": {
         "prompt_template": "loan_agreement",
-        "llm_model": "us.anthropic.claude-3-5-haiku-20241022-v1:0",
+        "llm_model": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
         "max_tokens": 8192,
         "temperature": 0.0,
         "field_overrides": {

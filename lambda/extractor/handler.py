@@ -219,6 +219,28 @@ def extract_section_generic(
                     raw_text = raw_text[:MAX_RAW_TEXT_CHARS] + "\n\n... [TRUNCATED]"
                 results["rawText"] = raw_text
 
+        # OCR fallback for scanned/low-quality pages.
+        # If PyPDF yields very little text (<500 chars) and we have page images,
+        # fall back to Textract DetectDocumentText for OCR-based raw text.
+        # This restores the hybrid OCR logic from the legacy
+        # extract_loan_agreement_multi_page function.
+        low_quality_fallback = sc.get("low_quality_fallback", False)
+        pypdf_text_len = len(results.get("rawText", ""))
+        if low_quality_fallback and page_images and pypdf_text_len < 500:
+            print(f"OCR fallback for '{section_id}': PyPDF text too short "
+                  f"({pypdf_text_len} chars), running Textract OCR on "
+                  f"{len(page_images)} page images")
+            try:
+                ocr_text = extract_raw_text_ocr_parallel(page_images, bucket)
+                if ocr_text and len(ocr_text) > pypdf_text_len:
+                    if len(ocr_text) > MAX_RAW_TEXT_CHARS:
+                        ocr_text = ocr_text[:MAX_RAW_TEXT_CHARS] + "\n\n... [TRUNCATED]"
+                    results["rawText"] = ocr_text
+                    results["rawTextSource"] = "textract_ocr"
+                    print(f"OCR fallback produced {len(ocr_text)} chars (replaced PyPDF)")
+            except Exception as ocr_err:
+                print(f"OCR fallback failed for '{section_id}': {ocr_err}")
+
         # Cleanup
         if temp_key:
             try:

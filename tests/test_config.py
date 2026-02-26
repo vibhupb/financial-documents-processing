@@ -12,8 +12,8 @@ class TestSettings:
         """Test default configuration values."""
         settings = Settings()
 
-        assert settings.router_model_id == "anthropic.claude-3-haiku-20240307-v1:0"
-        assert settings.normalizer_model_id == "anthropic.claude-3-5-sonnet-20241022-v2:0"
+        assert settings.router_model_id == "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+        assert settings.normalizer_model_id == "us.anthropic.claude-haiku-4-5-20251001-v1:0"
         assert settings.table_name == "financial-documents"
         assert settings.max_chars_per_page == 1000
         assert settings.page_batch_size == 50
