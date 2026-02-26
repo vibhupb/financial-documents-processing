@@ -119,6 +119,8 @@ def extract_section_generic(
         pass
 
     if not pages:
+        section_name = sc.get("name", section_id)
+        append_processing_event(document_id, _doc_type_for_events, "extractor", f"Skipped section: {section_name} (no pages identified)")
         return {
             "section": section_id,
             "status": "SKIPPED",
@@ -238,6 +240,7 @@ def extract_section_generic(
 
     except Exception as e:
         print(f"Error extracting section '{section_id}': {e}")
+        append_processing_event(document_id, _doc_type_for_events, "extractor", f"Failed to extract {section_name}: {e}")
         if temp_key:
             try:
                 s3_client.delete_object(Bucket=bucket, Key=temp_key)

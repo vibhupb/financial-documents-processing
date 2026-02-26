@@ -37,7 +37,7 @@ export interface EnrichedStatusResponse {
 
 export interface Document {
   documentId: string;
-  documentType: 'LOAN_PACKAGE' | 'CREDIT_AGREEMENT' | 'LOAN_AGREEMENT';
+  documentType: string;
   status: ProcessingStatus;
   reviewStatus?: ReviewStatus;
   createdAt: string;
@@ -45,7 +45,7 @@ export interface Document {
   fileName?: string;
   totalPages?: number;
   pdfUrl?: string;
-  extractedData?: LoanData | CreditAgreementData;
+  extractedData?: LoanData | CreditAgreementData | Record<string, unknown>;
   data?: LoanData;
   validation?: ValidationResult;
   signatureValidation?: SignatureValidation;
@@ -472,7 +472,7 @@ export interface ReviewDocumentResponse {
   document: Document;
   pdfUrl?: string;
   reviewStatus?: ReviewStatus;
-  extractedData?: LoanData | CreditAgreementData;
+  extractedData?: LoanData | CreditAgreementData | Record<string, unknown>;
   validation?: ValidationResult;
   corrections?: Record<string, unknown>;
 }

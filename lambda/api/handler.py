@@ -428,19 +428,35 @@ def get_processing_status(document_id: str) -> dict[str, Any]:
         extraction_status = "PENDING"
         extraction_progress: dict[str, Any] = {"completed": 0, "total": None, "currentSection": None}
         if extractor_events:
+            # Count all section starts: "Processing section:" and "Skipped section:"
+            started_sections = [e for e in extractor_events if "Processing section:" in e.get("message", "") or "Skipped section:" in e.get("message", "")]
+            # Count all section completions: "Extracted data from" and "Skipped section:"
+            finished_sections = [e for e in extractor_events if "Extracted data from" in e.get("message", "") or "Skipped section:" in e.get("message", "")]
+            # Count only actively processed (non-skipped) for user-facing progress
+            active_sections = [e for e in extractor_events if "Processing section:" in e.get("message", "")]
             completed_sections = [e for e in extractor_events if "Extracted data from" in e.get("message", "")]
-            processing_sections = [e for e in extractor_events if "Processing section:" in e.get("message", "")]
-            extraction_progress["completed"] = len(completed_sections)
-            extraction_progress["total"] = len(processing_sections) if processing_sections else None
+            failed_sections = [e for e in extractor_events if "Failed to extract" in e.get("message", "")]
 
-            if completed_sections and extraction_progress["total"] and len(completed_sections) >= extraction_progress["total"]:
+            extraction_progress["completed"] = len(completed_sections)
+            extraction_progress["total"] = len(active_sections) if active_sections else None
+
+            # All sections finished (completed + skipped + failed >= total started)
+            if started_sections and len(finished_sections) + len(failed_sections) >= len(started_sections):
                 extraction_status = "COMPLETED"
             elif extractor_events:
                 extraction_status = "IN_PROGRESS"
-                # Get the latest "Processing section" that hasn't completed
-                for evt in reversed(processing_sections):
+                # Get the latest "Processing section" that hasn't completed or failed
+                completed_names = set()
+                for c in completed_sections + failed_sections:
+                    # Extract section name from "Extracted data from <name> (...)" or "Failed to extract <name>: ..."
+                    msg = c.get("message", "")
+                    if "Extracted data from " in msg:
+                        completed_names.add(msg.split("Extracted data from ")[1].split(" (")[0])
+                    elif "Failed to extract " in msg:
+                        completed_names.add(msg.split("Failed to extract ")[1].split(":")[0])
+                for evt in reversed(active_sections):
                     section_name = evt.get("message", "").replace("Processing section: ", "")
-                    if not any(section_name in c.get("message", "") for c in completed_sections):
+                    if section_name not in completed_names:
                         extraction_progress["currentSection"] = section_name
                         break
 
@@ -470,6 +486,19 @@ def get_processing_status(document_id: str) -> dict[str, Any]:
         if sections:
             classification_result["sections"] = sections
 
+        # Calculate elapsed time per stage from event timestamps
+        def _stage_elapsed(stage_events: list) -> float | None:
+            if len(stage_events) < 2:
+                return None
+            try:
+                first_ts = stage_events[0].get("ts", "")
+                last_ts = stage_events[-1].get("ts", "")
+                t0 = datetime.fromisoformat(first_ts)
+                t1 = datetime.fromisoformat(last_ts)
+                return round((t1 - t0).total_seconds(), 1)
+            except (ValueError, TypeError):
+                return None
+
         return {
             "documentId": document_id,
             "status": status,
@@ -477,14 +506,17 @@ def get_processing_status(document_id: str) -> dict[str, Any]:
             "stages": {
                 "classification": {
                     "status": classification_status,
+                    "elapsed": _stage_elapsed(router_events),
                     "result": classification_result if classification_result else None,
                 },
                 "extraction": {
                     "status": extraction_status,
+                    "elapsed": _stage_elapsed(extractor_events),
                     "progress": extraction_progress,
                 },
                 "normalization": {
                     "status": normalization_status,
+                    "elapsed": _stage_elapsed(normalizer_events),
                 },
             },
             "events": events,
