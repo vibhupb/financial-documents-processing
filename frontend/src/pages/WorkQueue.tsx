@@ -1,10 +1,11 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { Search, SlidersHorizontal, FileText } from 'lucide-react';
 import { format } from 'date-fns';
 import clsx from 'clsx';
 import { api } from '../services/api';
+import { optimisticUploads } from '../services/optimistic-uploads';
 import type { Document, ProcessingStatus } from '../types';
 import UploadBar from '../components/UploadBar';
 import MetricsStrip from '../components/MetricsStrip';
@@ -82,9 +83,17 @@ export default function WorkQueue() {
     refetchInterval: (query) => {
       const docs = query.state.data?.documents;
       if (docs?.some(isProcessing)) return 5000;
+      if (optimisticUploads.hasPending()) return 3000;
       return 15000;
     },
   });
+
+  // Resolve optimistic placeholders once real data arrives from the server
+  useEffect(() => {
+    if (data?.documents) {
+      optimisticUploads.resolve(data.documents.map((d) => d.documentId));
+    }
+  }, [data?.documents]);
 
   // Fetch plugins for type filter dropdown
   const { data: pluginsData } = useQuery({
@@ -105,6 +114,11 @@ export default function WorkQueue() {
   // Filter and sort documents
   const sortedDocuments = useMemo(() => {
     let docs = data?.documents ?? [];
+
+    // Merge optimistic placeholders not yet in server data
+    const serverIds = new Set(docs.map((d) => d.documentId));
+    const pending = optimisticUploads.getPending().filter((d) => !serverIds.has(d.documentId));
+    if (pending.length) docs = [...pending, ...docs];
 
     // Client-side search filter
     if (searchQuery) {

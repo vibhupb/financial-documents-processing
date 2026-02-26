@@ -4,6 +4,8 @@ import { useDropzone } from 'react-dropzone';
 import { Upload, CheckCircle, AlertCircle, Loader2 } from 'lucide-react';
 import clsx from 'clsx';
 import { api } from '../services/api';
+import { optimisticUploads } from '../services/optimistic-uploads';
+import type { Document } from '../types';
 
 type UploadBarStatus = 'idle' | 'uploading' | 'success' | 'error';
 
@@ -38,9 +40,36 @@ export default function UploadBar() {
       await api.uploadFile(urlResponse.uploadUrl, urlResponse.fields, file);
       return urlResponse;
     },
-    onSuccess: () => {
+    onSuccess: (data, file) => {
       setStatus('success');
-      queryClient.invalidateQueries({ queryKey: ['documents'] });
+
+      // Optimistic placeholder so the row appears instantly in Work Queue
+      const placeholder: Document = {
+        documentId: data.documentId,
+        documentType: '' as Document['documentType'],
+        status: 'PENDING',
+        createdAt: new Date().toISOString(),
+        fileName: file.name,
+        latestEvent: {
+          ts: new Date().toISOString(),
+          stage: 'trigger',
+          message: 'Waiting for processing pipeline...',
+        },
+      };
+
+      // Store in optimistic tracker (survives across refetches)
+      optimisticUploads.add(placeholder);
+
+      // Inject into query cache for immediate rendering
+      queryClient.setQueriesData<{ documents: Document[]; count: number }>(
+        { queryKey: ['documents'] },
+        (old) => {
+          if (!old) return { documents: [placeholder], count: 1 };
+          if (old.documents.some((d) => d.documentId === placeholder.documentId)) return old;
+          return { ...old, documents: [placeholder, ...old.documents], count: old.count + 1 };
+        }
+      );
+
       queryClient.invalidateQueries({ queryKey: ['metrics'] });
     },
     onError: (error: Error) => {
