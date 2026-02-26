@@ -92,6 +92,15 @@ docs/*.md
 # Keep architecture diagrams
 !docs/aws-architecture*.png
 
+# Loan/test documents — never commit client or sample PDFs
+docs/1. Loan AI UI Booking Automation/
+*.xlsx
+
+# Sample/test documents (PDFs, scanned images)
+tests/sample-documents/*.pdf
+tests/sample-documents/*.png
+tests/sample-documents/*.jpg
+
 # Playwright MCP
 .playwright-mcp/
 
