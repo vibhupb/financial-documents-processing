@@ -112,7 +112,7 @@ with Diagram(
 
             with Cluster("1. Router", graph_attr=ai_style):
                 router = Lambda("Classify")
-                haiku1 = Bedrock("Haiku\n$0.006")
+                haiku1 = Bedrock("Haiku 4.5\n$0.023")
 
             with Cluster("2. Extractor", graph_attr=ai_style):
                 extractor = Lambda("Extract")
@@ -120,7 +120,7 @@ with Diagram(
 
             with Cluster("3. Normalizer", graph_attr=ai_style):
                 normalizer = Lambda("Normalize")
-                haiku2 = Bedrock("Haiku\n$0.03")
+                haiku2 = Bedrock("Haiku 4.5\n$0.013")
 
         # Storage
         with Cluster("Storage", graph_attr=storage_style):

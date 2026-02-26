@@ -40,10 +40,10 @@ A production-ready AWS serverless architecture for processing high-volume financ
                         │  │                 (Orchestrator)                      │ │
                         │  │                                                     │ │
                         │  │  ┌─────────────────────────────────────────────┐   │ │
-                        │  │  │  ROUTER: Classification (Claude 3 Haiku)   │   │ │
-                        │  │  │  - PyPDF text extraction (all pages)       │   │ │
-                        │  │  │  - Identify document types & page numbers  │   │ │
-                        │  │  │  - Cost: ~$0.006 per document              │   │ │
+                        │  │  │  ROUTER: Classification (Claude Haiku 4.5)  │   │ │
+                        │  │  │  - Double-pass text extraction (PyPDF +    │   │ │
+                        │  │  │    PyMuPDF) with filename fallback         │   │ │
+                        │  │  │  - Cost: ~$0.023 per document              │   │ │
                         │  │  └─────────────────────────────────────────────┘   │ │
                         │  │                       │                            │ │
                         │  │  ┌─────────────────────────────────────────────┐   │ │
@@ -54,11 +54,11 @@ A production-ready AWS serverless architecture for processing high-volume financ
                         │  │  └─────────────────────────────────────────────┘   │ │
                         │  │                       │                            │ │
                         │  │  ┌─────────────────────────────────────────────┐   │ │
-                        │  │  │  NORMALIZER: Claude 3.5 Haiku              │   │ │
+                        │  │  │  NORMALIZER: Claude Haiku 4.5               │   │ │
                         │  │  │  - Normalize rates, names, dates           │   │ │
                         │  │  │  - Cross-reference validation              │   │ │
                         │  │  │  - Schema-compliant JSON output            │   │ │
-                        │  │  │  - Cost: ~$0.03 per document               │   │ │
+                        │  │  │  - Cost: ~$0.013 per document              │   │ │
                         │  │  └─────────────────────────────────────────────┘   │ │
                         │  └──────────────────────────────────────────────────┘ │
                         │                          │                             │
@@ -205,7 +205,7 @@ financial-documents-processing/
 │   ├── extractor/                    # Data extraction
 │   │   └── handler.py                # Textract targeted extraction
 │   ├── normalizer/                   # Data normalization
-│   │   └── handler.py                # Claude 3.5 Haiku normalization
+│   │   └── handler.py                # Claude Haiku 4.5 normalization
 │   └── layers/
 │       └── pypdf/                    # PyPDF Lambda layer
 ├── frontend/                         # React Dashboard
@@ -252,9 +252,9 @@ financial-documents-processing/
 
 | Component | Service | Details | Cost |
 |-----------|---------|---------|------|
-| **Router** | Claude 3 Haiku | ~20K input + 500 output tokens | ~$0.006 |
+| **Router** | Claude Haiku 4.5 | ~20K input + 500 output tokens | ~$0.023 |
 | **Extractor** | Textract | ~15 pages (Tables + Queries) | ~$0.30 |
-| **Normalizer** | Claude 3.5 Haiku | ~10K input + 4K output tokens | ~$0.03 |
+| **Normalizer** | Claude Haiku 4.5 | ~6K input + 1.4K output tokens | ~$0.013 |
 | **Total** | | | **~$0.34** |
 
 ### Savings vs Brute Force
@@ -262,7 +262,7 @@ financial-documents-processing/
 | Approach | Cost | Savings |
 |----------|------|---------|
 | Brute Force (OCR all pages) | ~$4.55 | - |
-| Router Pattern | ~$0.34 | **92.5%** |
+| Router Pattern | ~$0.34 | **~93%** |
 
 ### Monthly Cost Estimates
 
@@ -284,19 +284,19 @@ Many document processing solutions use expensive foundation models (Claude Opus 
 | **GPT-4 Turbo** (function calling) | ~$8-15 | Same issues; rate limits at high volume |
 | **Bedrock Data Automation (BDA)** | ~$2-5 | Better, but still processes entire document; limited customization |
 | **Full Textract OCR** | ~$4.55 | Brute force all pages; no intelligence about relevance |
-| **Router Pattern** | **~$0.34** | **92.5% cheaper**; surgical precision |
+| **Router Pattern** | **~$0.34** | **~93% cheaper**; surgical precision |
 
 ### Router Pattern: Key Technical Differentiators
 
 #### 1. **Intelligent Page Selection** (Not Brute Force)
 Instead of feeding an entire 300-page Credit Agreement to an expensive model, the Router Pattern:
-- Uses **cheap Claude 3 Haiku** (~$0.006) to classify and identify relevant pages
+- Uses **Claude Haiku 4.5** (~$0.023) to classify and identify relevant pages
 - Extracts **only 15-30 pages** that contain actual data (vs 300 pages)
 - Reduces downstream processing by **90%+**
 
 ```
 Traditional: 300 pages × $0.015/page = $4.50
-Router Pattern: 15 pages × $0.02/page = $0.30 (+ $0.04 for classification/normalization)
+Router Pattern: 15 pages × $0.02/page = $0.30 (+ $0.036 for classification/normalization)
 ```
 
 #### 2. **Specialized Tools for Each Stage**
@@ -304,9 +304,9 @@ The pattern uses the **right tool for each job**, not a single expensive model:
 
 | Stage | Tool | Why This Choice |
 |-------|------|-----------------|
-| **Classification** | Claude 3 Haiku | Fast, cheap, excellent at understanding document structure |
+| **Classification** | Claude Haiku 4.5 | Fast, excellent at understanding document structure |
 | **OCR/Extraction** | Amazon Textract | Purpose-built for tables, forms, queries; better than LLM vision |
-| **Normalization** | Claude 3.5 Haiku | Great at data cleanup, schema compliance, cross-validation |
+| **Normalization** | Claude Haiku 4.5 | Great at data cleanup, schema compliance, cross-validation |
 
 #### 3. **Why Not Just Use Opus 4.5 or BDA?**
 
@@ -388,9 +388,9 @@ The result: **Enterprise-grade document processing at startup costs**.
 | Orchestration | AWS Step Functions | Workflow management |
 | Storage | Amazon S3 | Document storage & audit trail |
 | Database | Amazon DynamoDB | Extracted data & metadata |
-| Classification | Amazon Bedrock (Claude 3 Haiku) | Fast document routing |
+| Classification | Amazon Bedrock (Claude Haiku 4.5) | Fast document routing |
 | Extraction | Amazon Textract | Visual document extraction |
-| Normalization | Amazon Bedrock (Claude 3.5 Haiku) | Data refinement |
+| Normalization | Amazon Bedrock (Claude Haiku 4.5) | Data refinement |
 | API | API Gateway + Lambda | REST API |
 | Frontend | React + TypeScript + Vite | Dashboard UI |
 | PDF Viewing | react-pdf | In-browser PDF rendering |
@@ -423,9 +423,9 @@ The result: **Enterprise-grade document processing at startup costs**.
 
 | Stage | Time | Description |
 |-------|------|-------------|
-| Router (Classification) | ~10-12s | PyPDF extraction + Claude 3 Haiku |
+| Router (Classification) | ~10-12s | Double-pass extraction + Claude Haiku 4.5 |
 | Extractor (Parallel) | ~11-15s | 30-worker parallel Textract calls |
-| Normalizer | ~12-15s | Claude 3.5 Haiku normalization |
+| Normalizer | ~12-15s | Claude Haiku 4.5 normalization |
 | **Total** | **~35s** | End-to-end processing |
 
 ## License

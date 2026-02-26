@@ -153,7 +153,7 @@ with Diagram(
                 # Router Stage
                 with Cluster("1. ROUTER: Classification", graph_attr=ai_cluster_style):
                     router_lambda = Lambda("Router Lambda")
-                    bedrock_haiku = Bedrock("Claude 3 Haiku\n~$0.006/doc")
+                    bedrock_haiku = Bedrock("Claude Haiku 4.5\n~$0.023/doc")
 
                 # Extractor Stage
                 with Cluster("2. EXTRACTOR: Targeted Pages", graph_attr=ai_cluster_style):
@@ -163,7 +163,7 @@ with Diagram(
                 # Normalizer Stage
                 with Cluster("3. NORMALIZER: Refinement", graph_attr=ai_cluster_style):
                     normalizer_lambda = Lambda("Normalizer Lambda")
-                    bedrock_haiku_norm = Bedrock("Claude 3.5 Haiku\n~$0.03/doc")
+                    bedrock_haiku_norm = Bedrock("Claude Haiku 4.5\n~$0.013/doc")
 
         # Data Storage
         with Cluster("Data Storage", graph_attr=storage_cluster_style):
