@@ -183,12 +183,15 @@ export default function PluginList() {
                       to={`/config/${plugin.pluginId}`}
                       className="flex items-center gap-1.5 text-sm text-primary-600 hover:text-primary-700 font-medium"
                     >
-                      <Pencil className="w-3.5 h-3.5" /> Edit Draft
+                      <Pencil className="w-3.5 h-3.5" /> {statusKey === 'DRAFT' ? 'Edit Draft' : 'Edit'}
                     </Link>
                   ) : (
-                    <span className="text-xs text-gray-300">
-                      ID: <code className="bg-gray-50 px-1 rounded">{plugin.pluginId}</code>
-                    </span>
+                    <Link
+                      to={`/config/${plugin.pluginId}`}
+                      className="flex items-center gap-1.5 text-sm text-gray-400 hover:text-gray-600 font-medium"
+                    >
+                      View
+                    </Link>
                   )}
                   <button
                     onClick={() => setExpandedSchema(isExpanded ? null : plugin.pluginId)}

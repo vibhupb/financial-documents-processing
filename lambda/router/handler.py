@@ -95,12 +95,11 @@ def append_processing_event(document_id: str, document_type: str, stage: str, me
         pass  # Non-critical — don't fail processing if event logging fails
 
 
-# Credit Agreement section definitions for targeted extraction
-# Keywords are derived from the actual fields we need to extract (from loan_prompts_map):
-# - Loan Master Fields: effective_date, maturity_date, pricing_option, instrument_type
-# - Loan Accrual Fields: base_rate, spread_rate, rate_index, year_basis
-# - Schedules/Repayment: billing_frequency, payment_amount
-# NOTE: agreementInfo is ALWAYS first 5 pages - no keyword matching needed
+# DEPRECATED: Legacy hardcoded section definitions — now in plugin configs:
+#   lambda/layers/plugins/python/document_plugins/types/credit_agreement.py
+#   lambda/layers/plugins/python/document_plugins/types/loan_agreement.py
+# Kept only for ROUTER_OUTPUT_FORMAT=legacy fallback. Will be removed once
+# all environments are running in "dual" or "plugin" mode.
 CREDIT_AGREEMENT_SECTIONS = {
     "agreementInfo": {
         "name": "Agreement Information",
@@ -427,9 +426,7 @@ CREDIT_AGREEMENT_SECTIONS = {
     },
 }
 
-# Loan Agreement section definitions for targeted extraction
-# Simple business/personal loans have fewer sections than Credit Agreements
-# Keywords derived from loan_prompts_map field specifications
+# DEPRECATED: See CREDIT_AGREEMENT_SECTIONS deprecation note above.
 LOAN_AGREEMENT_SECTIONS = {
     "loanTerms": {
         "name": "Loan Terms & Principal",
@@ -1572,7 +1569,10 @@ def extract_page_snippets(pdf_stream: io.BytesIO) -> list[dict[str, Any]]:
 def identify_credit_agreement_sections(
     page_snippets: list[dict[str, Any]],
 ) -> dict[str, list[int]]:
-    """Identify Credit Agreement sections using intelligent keyword density scoring.
+    """DEPRECATED: Use identify_sections_generic() with credit_agreement plugin config.
+    Kept for ROUTER_OUTPUT_FORMAT=legacy fallback only.
+
+    Identify Credit Agreement sections using intelligent keyword density scoring.
 
     COST-OPTIMIZED APPROACH:
     - Score each page by keyword density (matches / total keywords)
@@ -1707,7 +1707,10 @@ def identify_credit_agreement_sections(
 def identify_loan_agreement_sections(
     page_snippets: list[dict[str, Any]],
 ) -> dict[str, list[int]]:
-    """Identify Loan Agreement sections using intelligent keyword density scoring.
+    """DEPRECATED: Use identify_sections_generic() with loan_agreement plugin config.
+    Kept for ROUTER_OUTPUT_FORMAT=legacy fallback only.
+
+    Identify Loan Agreement sections using intelligent keyword density scoring.
 
     COST-OPTIMIZED APPROACH (same pattern as Credit Agreement):
     - Score each page by keyword density (matches / total keywords)
@@ -1894,7 +1897,11 @@ def classify_credit_agreement_with_bedrock(
     page_snippets: list[dict[str, Any]],
     candidate_sections: dict[str, list[int]],
 ) -> dict[str, Any]:
-    """Use Claude Haiku to refine Credit Agreement section identification.
+    """DEPRECATED: The generic plugin path handles section identification.
+    This function makes an extra Bedrock API call (~$0.006/doc) that is redundant
+    when ROUTER_OUTPUT_FORMAT=dual. Kept for legacy fallback only.
+
+    Use Claude Haiku to refine Credit Agreement section identification.
 
     Args:
         page_snippets: List of page snippets from extract_page_snippets
@@ -2327,67 +2334,61 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             f"Classified as {primary_type} (confidence: {confidence_str})",
         )
 
-        # 4. If Credit Agreement detected, identify sections with page ranges
+        # Determine output format early — controls whether legacy or plugin path runs
+        router_output_format = os.environ.get("ROUTER_OUTPUT_FORMAT", "legacy")
+
+        # 4. Section identification for Credit Agreement / Loan Agreement
         credit_agreement_sections = None
-        if classification.get("credit_agreement") is not None:
-            print("Credit Agreement detected - identifying sections...")
-
-            # Fast keyword-based pre-pass
-            candidate_sections = identify_credit_agreement_sections(page_snippets)
-            print(f"Candidate sections from keyword matching: {json.dumps(candidate_sections)}")
-
-            # LLM-refined section identification
-            credit_agreement_sections = classify_credit_agreement_with_bedrock(
-                page_snippets, candidate_sections
-            )
-            print(f"Refined Credit Agreement sections: {json.dumps(credit_agreement_sections)}")
-
-            # VALIDATION: Check if this is really a syndicated Credit Agreement
-            # Real Credit Agreements have multiple sections with content (rates, lenders, etc.)
-            # If only agreementInfo has pages and other critical sections are empty,
-            # this is likely a simple Loan Agreement that was misclassified
-            if credit_agreement_sections:
-                sections = credit_agreement_sections.get("sections", {})
-                # Key sections that must have content for a real Credit Agreement
-                critical_sections = ["applicableRates", "facilityTerms", "lenderCommitments"]
-                has_critical_content = any(
-                    len(sections.get(section, [])) > 0 for section in critical_sections
-                )
-
-                # Count how many sections have actual pages
-                sections_with_content = sum(
-                    1 for pages in sections.values() if len(pages) > 0
-                )
-
-                if not has_critical_content or sections_with_content <= 1:
-                    print(f"WARNING: Credit Agreement sections mostly empty ({sections_with_content} sections with content)")
-                    print(f"Critical sections present: {has_critical_content}")
-
-                    # This is likely a simple Loan Agreement misclassified as Credit Agreement
-                    # Reclassify as Loan Agreement regardless of whether loan_agreement was detected
-                    print("Reclassifying as Loan Agreement (Credit Agreement sections insufficient)")
-                    credit_agreement_sections = None
-                    # Clear credit_agreement from classification to prevent Credit Agreement path
-                    classification["credit_agreement"] = None
-                    # Set loan_agreement page (use page 1 as the starting page)
-                    classification["loan_agreement"] = 1
-                    classification["loanAgreement"] = 1
-                    classification["primary_document_type"] = "loan_agreement"
-
-        # 4b. If Loan Agreement detected (and not a Credit Agreement), identify sections with page ranges
         loan_agreement_sections = None
-        if classification.get("loan_agreement") is not None and credit_agreement_sections is None:
-            print("Loan Agreement detected - identifying sections...")
 
-            # Fast keyword-based section identification
-            loan_agreement_sections = identify_loan_agreement_sections(page_snippets)
-            print(f"Loan Agreement sections: {json.dumps(loan_agreement_sections)}")
+        if router_output_format == "dual":
+            # PLUGIN PATH: Skip legacy section identification — the generic plugin
+            # pipeline (identify_sections_generic + build_extraction_plan) handles this.
+            # Saves a Bedrock API call (~$0.006/doc) for Credit Agreements.
+            print(f"[Plugin path] Skipping legacy section identification (ROUTER_OUTPUT_FORMAT=dual)")
+        else:
+            # LEGACY PATH: Use hardcoded section identification functions
+            if classification.get("credit_agreement") is not None:
+                print("Credit Agreement detected - identifying sections...")
 
-            # Calculate total targeted pages
-            all_section_pages = set()
-            for pages in loan_agreement_sections.values():
-                all_section_pages.update(pages)
-            print(f"Loan Agreement: {len(all_section_pages)} targeted pages identified")
+                # Fast keyword-based pre-pass
+                candidate_sections = identify_credit_agreement_sections(page_snippets)
+                print(f"Candidate sections from keyword matching: {json.dumps(candidate_sections)}")
+
+                # LLM-refined section identification
+                credit_agreement_sections = classify_credit_agreement_with_bedrock(
+                    page_snippets, candidate_sections
+                )
+                print(f"Refined Credit Agreement sections: {json.dumps(credit_agreement_sections)}")
+
+                # VALIDATION: Reclassify as Loan Agreement if critical sections are empty
+                if credit_agreement_sections:
+                    sections = credit_agreement_sections.get("sections", {})
+                    critical_sections = ["applicableRates", "facilityTerms", "lenderCommitments"]
+                    has_critical_content = any(
+                        len(sections.get(section, [])) > 0 for section in critical_sections
+                    )
+                    sections_with_content = sum(
+                        1 for pages in sections.values() if len(pages) > 0
+                    )
+                    if not has_critical_content or sections_with_content <= 1:
+                        print(f"WARNING: Credit Agreement sections mostly empty ({sections_with_content} sections with content)")
+                        print("Reclassifying as Loan Agreement (Credit Agreement sections insufficient)")
+                        credit_agreement_sections = None
+                        classification["credit_agreement"] = None
+                        classification["loan_agreement"] = 1
+                        classification["loanAgreement"] = 1
+                        classification["primary_document_type"] = "loan_agreement"
+
+            # 4b. If Loan Agreement detected (and not a Credit Agreement), identify sections
+            if classification.get("loan_agreement") is not None and credit_agreement_sections is None:
+                print("Loan Agreement detected - identifying sections...")
+                loan_agreement_sections = identify_loan_agreement_sections(page_snippets)
+                print(f"Loan Agreement sections: {json.dumps(loan_agreement_sections)}")
+                all_section_pages = set()
+                for pages in loan_agreement_sections.values():
+                    all_section_pages.update(pages)
+                print(f"Loan Agreement: {len(all_section_pages)} targeted pages identified")
 
         # 5. Aggregate REAL token usage from all Bedrock calls
         # Classification call token usage
@@ -2437,10 +2438,10 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         }
 
         # ============================================================
-        # Plugin-driven extraction plan (dual-format output)
-        # When ROUTER_OUTPUT_FORMAT=dual, emit extractionPlan alongside legacy keys
+        # Plugin-driven extraction plan
+        # When ROUTER_OUTPUT_FORMAT=dual, emit extractionPlan for the Map state.
+        # Legacy keys (creditAgreementSections, etc.) are only emitted as fallback.
         # ============================================================
-        router_output_format = os.environ.get("ROUTER_OUTPUT_FORMAT", "legacy")
         if router_output_format == "dual":
             try:
                 from document_plugins.registry import get_all_plugins
@@ -2461,6 +2462,36 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                             page_snippets, plugin, total_pages
                         )
                         section_result = {"sections": keyword_sections}
+
+                        # RECLASSIFICATION SAFETY: If classified as credit_agreement
+                        # but critical sections are empty, reclassify as loan_agreement.
+                        # Replicates the legacy validation that previously ran via
+                        # classify_credit_agreement_with_bedrock().
+                        if plugin_id == "credit_agreement":
+                            critical_sections = ["applicableRates", "facilityTerms", "lenderCommitments"]
+                            has_critical = any(
+                                len(keyword_sections.get(s, [])) > 0 for s in critical_sections
+                            )
+                            sections_with_content = sum(
+                                1 for pages in keyword_sections.values() if len(pages) > 0
+                            )
+                            if not has_critical or sections_with_content <= 1:
+                                print(f"[Plugin path] Credit Agreement sections mostly empty "
+                                      f"({sections_with_content} with content) — reclassifying as loan_agreement")
+                                classification["credit_agreement"] = None
+                                classification["loan_agreement"] = 1
+                                classification["loanAgreement"] = 1
+                                classification["primary_document_type"] = "loan_agreement"
+                                # Re-resolve plugin and re-run section identification
+                                plugin = _resolve_plugin(classification, all_plugins)
+                                if plugin:
+                                    plugin_id = plugin["plugin_id"]
+                                    plugin_cls = plugin.get("classification", {})
+                                    if plugin_cls.get("has_sections") or plugin.get("sections"):
+                                        keyword_sections = identify_sections_generic(
+                                            page_snippets, plugin, total_pages
+                                        )
+                                        section_result = {"sections": keyword_sections}
                     else:
                         section_result = classification
 
@@ -2490,7 +2521,7 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                         result["metadata"]["pluginId"] = plugin_id
                         result["metadata"]["pluginVersion"] = plugin.get("plugin_version", "unknown")
 
-                        # Add backward-compatible legacy keys
+                        # Add backward-compatible legacy keys for Step Functions
                         add_backward_compatible_keys(
                             result, plugin_id, extraction_plan, classification
                         )
@@ -2522,38 +2553,37 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             except Exception as plugin_err:
                 print(f"Warning: Plugin extraction plan failed, using legacy path: {plugin_err}")
 
-        # Add Credit Agreement section details if detected
-        if credit_agreement_sections:
-            result["creditAgreementSections"] = credit_agreement_sections
-            # Calculate targeted pages for cost estimate
-            all_section_pages = set()
-            for pages in credit_agreement_sections.get("sections", {}).values():
-                all_section_pages.update(pages)
-            result["metadata"]["creditAgreementTargetedPages"] = len(all_section_pages)
-            result["metadata"]["creditAgreementSubtype"] = credit_agreement_sections.get(
-                "documentSubtype", "unknown"
-            )
-            # Log legacy page-targeting event for Credit Agreement
-            num_ca_sections = sum(1 for p in credit_agreement_sections.get("sections", {}).values() if p)
-            append_processing_event(
-                document_id, _existing_doc_type, "router",
-                f"Targeted {len(all_section_pages)}/{total_pages} pages across {num_ca_sections} sections",
-            )
+        # Add legacy section details only when legacy path was used (no extractionPlan).
+        # When extractionPlan is present, add_backward_compatible_keys() already sets
+        # these keys from the extraction plan, so this block is skipped to avoid
+        # overwriting the plugin-derived values.
+        if not result.get("extractionPlan"):
+            if credit_agreement_sections:
+                result["creditAgreementSections"] = credit_agreement_sections
+                all_section_pages = set()
+                for pages in credit_agreement_sections.get("sections", {}).values():
+                    all_section_pages.update(pages)
+                result["metadata"]["creditAgreementTargetedPages"] = len(all_section_pages)
+                result["metadata"]["creditAgreementSubtype"] = credit_agreement_sections.get(
+                    "documentSubtype", "unknown"
+                )
+                num_ca_sections = sum(1 for p in credit_agreement_sections.get("sections", {}).values() if p)
+                append_processing_event(
+                    document_id, _existing_doc_type, "router",
+                    f"[Legacy] Targeted {len(all_section_pages)}/{total_pages} pages across {num_ca_sections} sections",
+                )
 
-        # Add Loan Agreement section details if detected
-        if loan_agreement_sections:
-            result["loanAgreementSections"] = {"sections": loan_agreement_sections}
-            # Calculate targeted pages for cost estimate
-            all_section_pages = set()
-            for pages in loan_agreement_sections.values():
-                all_section_pages.update(pages)
-            result["metadata"]["loanAgreementTargetedPages"] = len(all_section_pages)
-            # Log legacy page-targeting event for Loan Agreement
-            num_la_sections = sum(1 for p in loan_agreement_sections.values() if p)
-            append_processing_event(
-                document_id, _existing_doc_type, "router",
-                f"Targeted {len(all_section_pages)}/{total_pages} pages across {num_la_sections} sections",
-            )
+            if loan_agreement_sections:
+                result["loanAgreementSections"] = {"sections": loan_agreement_sections}
+                all_section_pages = set()
+                for pages in loan_agreement_sections.values():
+                    all_section_pages.update(pages)
+                result["metadata"]["loanAgreementTargetedPages"] = len(all_section_pages)
+                num_la_sections = sum(1 for p in loan_agreement_sections.values() if p)
+                append_processing_event(
+                    document_id, _existing_doc_type, "router",
+                    f"[Legacy] Targeted {len(all_section_pages)}/{total_pages} pages across {num_la_sections} sections",
+                )
 
         # Update DynamoDB status to CLASSIFIED for progress tracking
         # Note: Table has composite key (documentId + documentType), so we query first

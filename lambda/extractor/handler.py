@@ -352,9 +352,9 @@ def extract_section_generic(
 
 
 # COMPREHENSIVE Credit Agreement section-specific queries
-# Optimized for both speed AND extraction quality based on ground truth analysis
-# Key insight: Specific queries get higher confidence than consolidated "or" queries
-# Updated to fix: borrower identification, rate index, effective date, missing facilities
+# DEPRECATED: Legacy hardcoded queries — now in plugin config:
+#   lambda/layers/plugins/python/document_plugins/types/credit_agreement.py
+# Kept only for backward compatibility with legacy Step Functions parallel branches.
 CREDIT_AGREEMENT_QUERIES = {
     "agreementInfo": [
         # Document identification - SPECIFIC queries work better than consolidated
@@ -1004,7 +1004,10 @@ def extract_credit_agreement_section(
     page_numbers: List[int],
     pdf_stream: io.BytesIO,
 ) -> Dict[str, Any]:
-    """Extract a specific section from a Credit Agreement document.
+    """DEPRECATED: Use extract_section_generic() with plugin-driven sectionConfig.
+    Kept for backward compatibility with legacy Step Functions parallel branches.
+
+    Extract a specific section from a Credit Agreement document.
 
     Uses PyPDF to extract ONLY the specified pages, then renders to images
     for Textract processing. Image-based extraction is more reliable than
@@ -1985,7 +1988,10 @@ def extract_loan_agreement_multi_page(
     router_token_usage: Optional[Dict[str, int]] = None,
     low_quality_pages: Optional[List[int]] = None,
 ) -> Dict[str, Any]:
-    """Extract data from multiple pages of a Loan Agreement using HYBRID approach.
+    """DEPRECATED: Use extract_section_generic() with plugin-driven sectionConfig.
+    Kept for backward compatibility with legacy Step Functions parallel branches.
+
+    Extract data from multiple pages of a Loan Agreement using HYBRID approach.
 
     HYBRID EXTRACTION STRATEGY:
     1. First try PyPDF text extraction (fast, free, works for native PDFs)

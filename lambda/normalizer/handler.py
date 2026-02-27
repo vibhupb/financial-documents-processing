@@ -202,7 +202,10 @@ def convert_floats_to_decimal(obj):
 
 
 def build_credit_agreement_prompt(raw_text_sections: Dict[str, str]) -> str:
-    """Build a specialized prompt for Credit Agreement raw text extraction.
+    """DEPRECATED: Use build_normalization_prompt() with plugin-provided prompt template.
+    Kept for backward compatibility with legacy extraction path only.
+
+    Build a specialized prompt for Credit Agreement raw text extraction.
 
     Uses the field-by-field extraction approach with specific keywords and value mappings.
 
@@ -473,7 +476,10 @@ Output the JSON now:"""
 
 
 def build_loan_agreement_prompt(raw_text: str, textract_query_results: Optional[Dict[str, Any]] = None) -> str:
-    """Build a specialized prompt for Loan Agreement raw text extraction.
+    """DEPRECATED: Use build_normalization_prompt() with plugin-provided prompt template.
+    Kept for backward compatibility with legacy extraction path only.
+
+    Build a specialized prompt for Loan Agreement raw text extraction.
 
     Uses detailed field definitions with extraction logic, formats, and valid values
     based on loan_prompts_map specifications. This is the HYBRID approach:

@@ -6,6 +6,7 @@ import WorkQueue from './pages/WorkQueue';
 import DocumentDetail from './pages/DocumentDetail';
 import PluginList from './pages/PluginList';
 import PluginWizard from './pages/PluginWizard';
+import PluginEditor from './pages/PluginEditor';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, isLoading } = useAuth();
@@ -62,6 +63,14 @@ function AppRoutes() {
         element={
           <ProtectedRoute>
             <Layout><PluginWizard /></Layout>
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/config/:pluginId"
+        element={
+          <ProtectedRoute>
+            <Layout><PluginEditor /></Layout>
           </ProtectedRoute>
         }
       />
