@@ -101,8 +101,8 @@ def invoke_bedrock_normalize(
     """Invoke Bedrock and return (parsed_data, token_usage)."""
     normalization_config = plugin.get("normalization", {})
     model_id = normalization_config.get("llm_model", BEDROCK_MODEL_ID)
-    max_tokens = normalization_config.get("max_tokens", 8192)
-    temperature = normalization_config.get("temperature", 0.0)
+    max_tokens = int(normalization_config.get("max_tokens", 8192))
+    temperature = float(normalization_config.get("temperature", 0.0))
 
     response = bedrock_client.invoke_model(
         modelId=model_id,
@@ -2227,11 +2227,17 @@ def store_to_dynamodb(
         print(f"Warning: Error cleaning up old record: {str(cleanup_err)}")
         # Continue anyway - the put_item will create the new record
 
-    # Store main loan data record
+    # Store main data record
+    # Legacy plugins use 'loanData' wrapper; dynamic plugins may use flat structure
+    extracted = normalized_data.get('loanData', None)
+    if extracted is None:
+        # Dynamic plugin: use full output minus validation/audit/signatureValidation
+        extracted = {k: v for k, v in normalized_data.items()
+                     if k not in ('validation', 'audit', 'signatureValidation')}
     item = {
         'documentId': document_id,
         'documentType': document_type,
-        'extractedData': convert_floats_to_decimal(normalized_data.get('loanData', {})),
+        'extractedData': convert_floats_to_decimal(extracted),
         'validation': convert_floats_to_decimal(normalized_data.get('validation', {})),
         'audit': convert_floats_to_decimal(normalized_data.get('audit', {})),
         'status': 'PROCESSED',

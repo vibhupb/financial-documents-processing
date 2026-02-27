@@ -955,9 +955,9 @@ export class DocumentProcessingStack extends cdk.Stack {
       runtime: lambda.Runtime.PYTHON_3_13,
       handler: 'handler.lambda_handler',
       code: lambda.Code.fromAsset(path.join(__dirname, '../../lambda/api')),
-      layers: [pluginsLayer],
-      memorySize: 512,
-      timeout: cdk.Duration.seconds(30),
+      layers: [pypdfLayer, pluginsLayer],
+      memorySize: 1024,  // Plugin builder needs memory for PDF analysis
+      timeout: cdk.Duration.seconds(60),  // Plugin analysis + AI generation can take time
       environment: {
         BUCKET_NAME: documentBucket.bucketName,
         TABLE_NAME: documentTable.tableName,

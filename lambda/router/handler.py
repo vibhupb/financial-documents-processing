@@ -34,8 +34,21 @@ import re
 from datetime import datetime
 from typing import Any
 
+from decimal import Decimal
+
 import boto3
 from pypdf import PdfReader
+
+
+def _decimal_to_native(obj: Any) -> Any:
+    """Recursively convert DynamoDB Decimal values to int/float for JSON serialization."""
+    if isinstance(obj, Decimal):
+        return int(obj) if obj == int(obj) else float(obj)
+    elif isinstance(obj, dict):
+        return {k: _decimal_to_native(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [_decimal_to_native(v) for v in obj]
+    return obj
 
 # Double-pass: PyMuPDF as second parser for low-quality pages
 try:
@@ -1024,7 +1037,7 @@ def identify_sections_generic(
             keywords = hints.get("keywords", [])
 
             if not keywords:
-                max_p = hints.get("max_pages", section_config.get("max_pages", 5))
+                max_p = int(hints.get("max_pages", section_config.get("max_pages", 5)))
                 if page_num <= max_p:
                     section_pages[section_id].append(page_num)
                 continue
@@ -1035,7 +1048,7 @@ def identify_sections_generic(
                 for rule in hints.get("page_bonus_rules", [])
             )
             score = matches + bonus
-            min_matches = hints.get("min_keyword_matches", 2)
+            min_matches = int(hints.get("min_keyword_matches", 2))
             if score >= min_matches:
                 section_scores[section_id].append((page_num, score, matches))
 
@@ -1044,9 +1057,9 @@ def identify_sections_generic(
             continue
         scores.sort(key=lambda x: (-x[1], x[0]))
         section_config = sections_config[section_id]
-        limit = section_config.get("classification_hints", {}).get(
+        limit = int(section_config.get("classification_hints", {}).get(
             "max_pages", section_config.get("max_pages", 5)
-        )
+        ))
         top_pages = [pn for pn, s, m in scores[:limit]]
         section_pages[section_id] = sorted(top_pages)
 
@@ -1057,8 +1070,10 @@ def identify_sections_generic(
     # (scanned PDFs, custom fonts that even PyMuPDF can't decode), add those
     # pages to the highest-priority section for Textract OCR extraction.
     #
-    # This ensures scanned documents still get processed instead of producing
-    # empty extraction plans.
+    # IMPORTANT: Only add low-quality pages when keyword matching found very
+    # few pages. For documents where keyword matching already identified
+    # plenty of pages, the low-quality pages are likely signature pages,
+    # exhibits, or appendices that aren't useful for extraction.
     # =========================================================================
     all_found_pages = set()
     for pages in section_pages.values():
@@ -1074,38 +1089,54 @@ def identify_sections_generic(
             f"pages: {sorted(all_found_pages)}"
         )
 
-        # Determine the highest-priority section from cost_budget.section_priority
-        cost_budget = plugin.get("cost_budget", {})
-        section_priority = cost_budget.get("section_priority", {})
+        # Only add low-quality pages if keyword matching found very few pages.
+        # If keyword matching already found >= 10 pages, the pipeline has
+        # enough content — low-quality pages are likely exhibits/signatures.
+        MIN_PAGES_FOR_SKIP = 10
+        MAX_LOW_QUALITY_FALLBACK = 5  # Never add more than 5 low-quality pages
 
-        if section_priority:
-            # Sort by priority value (1 = highest)
-            primary_section = min(
-                section_priority.keys(),
-                key=lambda s: section_priority[s],
-            )
+        if len(all_found_pages) < MIN_PAGES_FOR_SKIP:
+            cost_budget = plugin.get("cost_budget", {})
+            section_priority = cost_budget.get("section_priority", {})
+
+            if section_priority:
+                primary_section = min(
+                    section_priority.keys(),
+                    key=lambda s: section_priority[s],
+                )
+            else:
+                primary_section = next(iter(sections_config), None)
+
+            if primary_section and primary_section in section_pages:
+                # Only add early low-quality pages (likely body, not exhibits)
+                capped = sorted(low_quality_pages)[:MAX_LOW_QUALITY_FALLBACK]
+                existing = set(section_pages[primary_section])
+                combined = sorted(existing.union(set(capped)))
+                section_pages[primary_section] = combined
+                print(
+                    f"[GenericSections] Added {len(capped)} low-quality "
+                    f"pages to '{primary_section}' for Textract OCR "
+                    f"(capped from {len(low_quality_pages)})"
+                )
         else:
-            # Fallback: use the first section defined in config
-            primary_section = next(iter(sections_config), None)
-
-        if primary_section and primary_section in section_pages:
-            existing = set(section_pages[primary_section])
-            combined = sorted(existing.union(set(low_quality_pages)))
-            section_pages[primary_section] = combined
             print(
-                f"[GenericSections] Added {len(low_quality_pages)} low-quality "
-                f"pages to '{primary_section}' for Textract OCR"
+                f"[GenericSections] Skipping low-quality fallback — keyword "
+                f"matching already found {len(all_found_pages)} pages "
+                f"(>= {MIN_PAGES_FOR_SKIP})"
             )
 
     # SAFETY: If very few pages found and document has many pages,
     # expand around found pages (±1 page) to capture nearby content
+    all_found_pages = set()
+    for pages in section_pages.values():
+        all_found_pages.update(pages)
+
     if len(all_found_pages) < 5 and total_pages > 10 and not low_quality_pages:
         expanded = set()
         for pn in all_found_pages:
             expanded.update(range(max(1, pn - 1), min(total_pages, pn + 1) + 1))
         new_pages = expanded - all_found_pages
         if new_pages:
-            # Add expanded pages to the primary section
             cost_budget = plugin.get("cost_budget", {})
             section_priority = cost_budget.get("section_priority", {})
             if section_priority:
@@ -1122,6 +1153,35 @@ def identify_sections_generic(
                     f"[GenericSections] Expanded {len(new_pages)} adjacent "
                     f"pages into '{primary_section}'"
                 )
+
+    # =========================================================================
+    # CROSS-SECTION PAGE DEDUPLICATION
+    # =========================================================================
+    # Each page should only be extracted ONCE. If the same page was selected
+    # by multiple sections (due to keyword overlap), keep it in the highest-
+    # priority section and remove it from lower-priority ones. This prevents
+    # Textract from processing the same page multiple times.
+    # =========================================================================
+    cost_budget = plugin.get("cost_budget", {})
+    section_priority = cost_budget.get("section_priority", {})
+    if section_priority:
+        # Sort sections by priority (1 = highest priority = keeps pages)
+        priority_order = sorted(
+            section_pages.keys(),
+            key=lambda s: section_priority.get(s, 999),
+        )
+        claimed_pages: set[int] = set()
+        for section_id in priority_order:
+            original = section_pages[section_id]
+            deduped = [p for p in original if p not in claimed_pages]
+            removed = len(original) - len(deduped)
+            if removed > 0:
+                print(
+                    f"[GenericSections] Dedup: removed {removed} duplicate "
+                    f"pages from '{section_id}'"
+                )
+            section_pages[section_id] = deduped
+            claimed_pages.update(deduped)
 
     return section_pages
 
@@ -1146,7 +1206,7 @@ def build_extraction_plan(
     if classification.get("target_all_pages"):
         all_pages = list(range(1, total_pages + 1))
         for section_id, section_config in sections_config.items():
-            max_p = section_config.get("max_pages", total_pages)
+            max_p = int(section_config.get("max_pages", total_pages))
             extraction_sections.append({
                 "sectionId": section_id,
                 "sectionPages": all_pages[:max_p],
@@ -1166,7 +1226,7 @@ def build_extraction_plan(
             if sname not in sections_config:
                 continue
             sc = sections_config[sname]
-            max_p = sc.get("max_pages", 10)
+            max_p = int(sc.get("max_pages", 10))
             end = starts[i + 1][1] - 1 if i + 1 < len(starts) else total_pages
             end = min(end, start_page + max_p - 1)
             extraction_sections.append({
@@ -2413,6 +2473,10 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                     # iterations, producing no extraction data. Without this
                     # key, Step Functions falls back to the legacy path.
                     if extraction_plan:
+                        # Convert DynamoDB Decimals to native types for JSON serialization
+                        # (dynamic plugins from DynamoDB have Decimal values)
+                        extraction_plan = _decimal_to_native(extraction_plan)
+
                         # Inject document-level fields into each plan item
                         # (Map state itemSelector passes these to ExtractSection Lambda)
                         for item in extraction_plan:

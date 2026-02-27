@@ -48,6 +48,7 @@ dev-dependencies = [
     "black>=24.0.0",
     "ruff>=0.2.0",
     "mypy>=1.8.0",
+    "fpdf2>=2.8.6",
 ]
 
 [tool.ruff]

@@ -560,6 +560,17 @@ def get_registered_plugins() -> dict[str, Any]:
 PLUGIN_CONFIGS_TABLE = os.environ.get("PLUGIN_CONFIGS_TABLE", "document-plugin-configs")
 
 
+def _convert_floats_to_decimal(obj: Any) -> Any:
+    """Recursively convert float values to Decimal for DynamoDB compatibility."""
+    if isinstance(obj, float):
+        return Decimal(str(obj))
+    elif isinstance(obj, dict):
+        return {k: _convert_floats_to_decimal(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [_convert_floats_to_decimal(v) for v in obj]
+    return obj
+
+
 def create_plugin_config(body: dict[str, Any], user: Any) -> dict[str, Any]:
     """Create a new draft plugin configuration."""
     plugin_id = body.get("pluginId", "").strip().lower().replace(" ", "_")
@@ -567,7 +578,7 @@ def create_plugin_config(body: dict[str, Any], user: Any) -> dict[str, Any]:
         return {"error": "pluginId is required"}
 
     name = body.get("name", plugin_id)
-    config = body.get("config", {})
+    config = _convert_floats_to_decimal(body.get("config", {}))
     prompt_template = body.get("promptTemplate", "")
     timestamp = datetime.utcnow().isoformat() + "Z"
 
@@ -637,7 +648,7 @@ def update_plugin_config(plugin_id: str, body: dict[str, Any], user: Any) -> dic
             "status": "DRAFT",
             "name": body.get("name", latest.get("name", "")),
             "description": body.get("description", latest.get("description", "")),
-            "config": body.get("config", latest.get("config", {})),
+            "config": _convert_floats_to_decimal(body.get("config", latest.get("config", {}))),
             "promptTemplate": body.get("promptTemplate", latest.get("promptTemplate", "")),
             "createdBy": getattr(user, 'email', 'unknown') if user else 'unknown',
             "createdAt": timestamp,
@@ -652,7 +663,7 @@ def update_plugin_config(plugin_id: str, body: dict[str, Any], user: Any) -> dic
     update_fields = {}
     for key in ["name", "description", "config", "promptTemplate", "sampleDocumentKey"]:
         if key in body:
-            update_fields[key] = body[key]
+            update_fields[key] = _convert_floats_to_decimal(body[key]) if key == "config" else body[key]
     update_fields["updatedAt"] = timestamp
 
     expr_parts = []
@@ -833,12 +844,24 @@ def generate_plugin_config(body: dict[str, Any]) -> dict[str, Any]:
     examples, and gets back a draft plugin config + prompt template.
     """
     extracted_text = body.get("text", "")[:8000]
-    form_fields = body.get("formFields", {})
+    form_fields_raw = body.get("formFields", {})
     doc_name = body.get("name", "New Document Type")
     page_count = body.get("pageCount", 1)
 
-    if not extracted_text and not form_fields:
+    if not extracted_text and not form_fields_raw:
         return {"error": "No extraction data provided"}
+
+    # Normalize form_fields: accept both dict and list formats
+    if isinstance(form_fields_raw, list):
+        # Frontend sends [{key, value}, ...] — convert to dict
+        form_fields = {
+            f.get("key", ""): {"value": f.get("value", "")}
+            for f in form_fields_raw if f.get("key")
+        }
+    elif isinstance(form_fields_raw, dict):
+        form_fields = form_fields_raw
+    else:
+        form_fields = {}
 
     # Build the meta-prompt
     form_summary = "\n".join(f"  {k}: {v.get('value', '')}" for k, v in list(form_fields.items())[:50])
