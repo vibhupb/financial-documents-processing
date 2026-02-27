@@ -114,6 +114,10 @@ PLUGIN_CONFIG: DocumentPluginConfig = {
                 "What is the Amendment Number in the document title?",
                 "Is this document titled as an amendment? What number?",
                 "Is this an amendment and restatement?",
+                # Jurisdiction
+                "What state or jurisdiction is the borrower organized in?",
+                "What is the governing law jurisdiction?",
+                "What state or jurisdiction is the borrower incorporated in?",
                 # Currency
                 "What is the currency of this loan?",
                 "What currency are amounts denominated in?",
@@ -663,9 +667,10 @@ PLUGIN_CONFIG: DocumentPluginConfig = {
             "name": "Financial Covenants",
             "description": (
                 "Fixed charge coverage ratio, leverage ratio, interest "
-                "coverage, liquidity requirements, and testing periods."
+                "coverage, liquidity requirements, asset coverage, "
+                "borrowing base utilization, and testing periods."
             ),
-            "max_pages": 3,
+            "max_pages": 4,
             "classification_hints": {
                 "keywords": [
                     "fixed charge coverage ratio",
@@ -676,6 +681,23 @@ PLUGIN_CONFIG: DocumentPluginConfig = {
                     "minimum fixed charge",
                     "leverage ratio",
                     "debt to ebitda",
+                    # RBL-specific covenants
+                    "current ratio",
+                    "asset coverage ratio",
+                    "borrowing base utilization",
+                    "net worth",
+                    "minimum net worth",
+                    "tangible net worth",
+                    "consolidated net income",
+                    "total net leverage",
+                    "senior secured leverage",
+                    "interest coverage ratio",
+                    "debt service coverage",
+                    "financial covenants",
+                    "section 6",
+                    "section 7",
+                    "article vi",
+                    "article vii",
                 ],
                 "min_keyword_matches": 2,
                 "typical_pages": "articles VI-VII",
@@ -685,21 +707,20 @@ PLUGIN_CONFIG: DocumentPluginConfig = {
                 # Fixed Charge Coverage
                 "What is the Fixed Charge Coverage Ratio (FCCR) requirement?",
                 # Leverage
-                "What is the maximum Leverage Ratio?",
-                "What is the Debt to EBITDA requirement?",
+                "What is the maximum Leverage Ratio or Debt to EBITDA requirement?",
                 "What is the Total Net Leverage Ratio?",
-                "What is the Consolidated Leverage Ratio?",
-                # Interest Coverage
+                # Coverage ratios
                 "What is the Interest Coverage Ratio requirement?",
-                # Liquidity
-                "What is the minimum Liquidity requirement?",
-                "What is the minimum Cash requirement?",
+                "What is the Current Ratio requirement?",
+                "What is the Asset Coverage Ratio?",
+                # Net worth / liquidity
+                "What is the minimum Net Worth or Tangible Net Worth requirement?",
+                "What is the minimum Liquidity or Cash requirement?",
                 # General covenants
-                "What are the financial maintenance covenants?",
-                "What are the affirmative covenants?",
+                "What are the financial maintenance covenants and their required levels?",
                 "What are the negative covenants?",
                 # Testing
-                "What is the testing period for covenants?",
+                "What is the testing period for financial covenants?",
             ],
             "include_pypdf_text": False,
             "render_as_images": True,
@@ -781,7 +802,7 @@ PLUGIN_CONFIG: DocumentPluginConfig = {
     "normalization": {
         "prompt_template": "credit_agreement",
         "llm_model": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
-        "max_tokens": 4096,
+        "max_tokens": 8192,
         "temperature": 0.0,
     },
 

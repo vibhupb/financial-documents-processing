@@ -2407,6 +2407,18 @@ def lambda_handler(event, context):
             if isinstance(extractions_list, list):
                 for ext in extractions_list:
                     if isinstance(ext, dict):
+                        # Hydrate S3-offloaded results
+                        if "resultsS3Key" in ext and "results" not in ext:
+                            s3_key = ext["resultsS3Key"]
+                            s3_bucket = ext.get("resultsS3Bucket", BUCKET_NAME)
+                            print(f"[PLUGIN] Hydrating S3-offloaded results: s3://{s3_bucket}/{s3_key}")
+                            try:
+                                s3_obj = s3_client.get_object(Bucket=s3_bucket, Key=s3_key)
+                                full_result = json.loads(s3_obj["Body"].read().decode("utf-8"))
+                                ext = full_result  # Replace compact ref with full data
+                            except Exception as s3_err:
+                                print(f"[PLUGIN] Failed to hydrate S3 results: {s3_err}")
+
                         section = ext.get("section") or ext.get("creditAgreementSection")
                         if section:
                             raw_data["sections"][section] = ext.get("results", ext)

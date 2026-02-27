@@ -56,7 +56,7 @@ IMAGE_DPI = int(os.environ.get('IMAGE_DPI', '150'))
 # Leave ~100KB for other data (tables, queries, metadata), so cap rawText at 150KB.
 # The normalizer uses MAX_LOAN_AGREEMENT_RAW_TEXT = 50000, but we can be more generous at extractor level
 # since Step Functions combines multiple extraction results in parallel state.
-MAX_RAW_TEXT_CHARS = int(os.environ.get('MAX_RAW_TEXT_CHARS', '80000'))  # ~80KB max for rawText
+MAX_RAW_TEXT_CHARS = int(os.environ.get('MAX_RAW_TEXT_CHARS', '50000'))  # ~50KB max for rawText (leave headroom for queries+tables in 256KB SFN limit)
 S3_EXTRACTION_PREFIX = os.environ.get('S3_EXTRACTION_PREFIX', 'extractions/')
 TABLE_NAME = os.environ.get('TABLE_NAME', 'financial-documents')
 
@@ -84,6 +84,48 @@ def append_processing_event(document_id: str, document_type: str, stage: str, me
 # ==========================================
 # Plugin-Driven Generic Section Extraction
 # ==========================================
+
+
+def _strip_textract_metadata(results: Dict[str, Any]) -> Dict[str, Any]:
+    """Strip geometry/bounding box metadata from Textract results.
+
+    Keeps answers, confidence scores, table rows, and rawText.
+    Removes geometry polygons and bounding boxes that bloat the payload.
+    This typically reduces section payloads from 30-60KB to 5-15KB.
+    """
+    stripped = {}
+    for key, val in results.items():
+        if key == "queries" and isinstance(val, dict):
+            # Strip geometry from each query result, keep answer + confidence
+            stripped["queries"] = {}
+            for q_key, q_val in val.items():
+                if isinstance(q_val, dict):
+                    stripped["queries"][q_key] = {
+                        "answer": q_val.get("answer"),
+                        "confidence": q_val.get("confidence"),
+                    }
+                else:
+                    stripped["queries"][q_key] = q_val
+        elif key == "tables" and isinstance(val, dict):
+            # Keep table rows and count, strip cell-level geometry
+            stripped["tables"] = {
+                "tables": val.get("tables", []),
+                "tableCount": val.get("tableCount", 0),
+            }
+        elif key == "signatures" and isinstance(val, dict):
+            # Keep signature presence info, strip detailed geometry
+            sigs = val.get("signatures", [])
+            stripped["signatures"] = {
+                "signatureCount": val.get("signatureCount", len(sigs)),
+                "hasSignatures": val.get("hasSignatures", len(sigs) > 0),
+                "signatures": [
+                    {"confidence": s.get("confidence"), "page": s.get("page")}
+                    for s in sigs if isinstance(s, dict)
+                ],
+            }
+        else:
+            stripped[key] = val
+    return stripped
 
 
 def extract_section_generic(
@@ -250,15 +292,48 @@ def extract_section_generic(
 
         processing_time = time.time() - section_start
         append_processing_event(document_id, _doc_type_for_events, "extractor", f"Extracted data from {section_name} ({len(pages)} pages, {round(processing_time, 1)}s)")
-        return {
+
+        # Strip Textract metadata (geometry, bounding boxes) to reduce payload.
+        # The normalizer only needs answers, confidence, and table rows — not
+        # pixel coordinates. This keeps payloads well under the 256KB SFN limit.
+        stripped_results = _strip_textract_metadata(results)
+
+        response_payload = {
             "section": section_id,
             "status": "EXTRACTED" if not textract_failed else "PARTIAL_EXTRACTION",
             "pageNumbers": pages,
             "pageCount": len(pages),
             "pagesProcessed": len(page_images) if page_images else 1,
-            "results": results,
+            "results": stripped_results,
             "processingTimeSeconds": round(processing_time, 2),
         }
+
+        # Safety net: offload to S3 only if still over limit after stripping.
+        payload_json = json.dumps(response_payload, default=str)
+        payload_size = len(payload_json.encode('utf-8'))
+        S3_OFFLOAD_THRESHOLD = 30_000  # 30KB per section → 7 × 30KB = 210KB < 256KB
+
+        if payload_size > S3_OFFLOAD_THRESHOLD:
+            s3_results_key = f"{S3_EXTRACTION_PREFIX}{document_id}/{section_id}.json"
+            print(f"Section '{section_id}' payload {payload_size} bytes > {S3_OFFLOAD_THRESHOLD}, offloading to S3: {s3_results_key}")
+            s3_client.put_object(
+                Bucket=bucket,
+                Key=s3_results_key,
+                Body=payload_json,
+                ContentType='application/json',
+            )
+            return {
+                "section": section_id,
+                "status": response_payload["status"],
+                "pageNumbers": pages,
+                "pageCount": len(pages),
+                "pagesProcessed": response_payload["pagesProcessed"],
+                "processingTimeSeconds": round(processing_time, 2),
+                "resultsS3Key": s3_results_key,
+                "resultsS3Bucket": bucket,
+            }
+
+        return response_payload
 
     except Exception as e:
         print(f"Error extracting section '{section_id}': {e}")

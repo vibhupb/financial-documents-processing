@@ -1250,7 +1250,9 @@ def reprocess_document(document_id: str, body: dict[str, Any]) -> dict[str, Any]
             return {"error": "Original document not found", "documentId": document_id}
 
         # Start new Step Functions execution
-        execution_name = f"{document_id[:8]}-reprocess-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
+        # Sanitize name: Step Functions only allows [a-zA-Z0-9-_]
+        safe_id = re.sub(r"[^a-zA-Z0-9_-]", "_", document_id)[:8]
+        execution_name = f"{safe_id}-reprocess-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
 
         sfn_response = sfn_client.start_execution(
             stateMachineArn=STATE_MACHINE_ARN,

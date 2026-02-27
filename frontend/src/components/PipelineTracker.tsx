@@ -25,14 +25,19 @@ const stageConfigs: StageConfig[] = [
 function getStatusIcon(status: StageInfo['status']) {
   switch (status) {
     case 'COMPLETED':
-      return <CheckCircle className="w-5 h-5 text-green-600" />;
+      return <CheckCircle className="w-7 h-7 text-green-600" />;
     case 'IN_PROGRESS':
-      return <Loader2 className="w-5 h-5 text-primary-600 animate-spin" />;
+      return (
+        <div className="relative">
+          <div className="absolute inset-0 w-7 h-7 rounded-full bg-primary-400 opacity-30 animate-ping" />
+          <Loader2 className="w-7 h-7 text-primary-600 animate-spin" />
+        </div>
+      );
     case 'FAILED':
-      return <XCircle className="w-5 h-5 text-red-600" />;
+      return <XCircle className="w-7 h-7 text-red-600" />;
     case 'PENDING':
     default:
-      return <Circle className="w-5 h-5 text-gray-300" />;
+      return <Circle className="w-7 h-7 text-gray-300" />;
   }
 }
 
@@ -79,7 +84,7 @@ export default function PipelineTracker({ stages }: PipelineTrackerProps) {
             {showLineBefore && (
               <div
                 className={clsx(
-                  'w-8 h-0.5 flex-shrink-0',
+                  'w-10 h-1 rounded-full flex-shrink-0 transition-colors duration-500',
                   prevCompleted ? 'bg-green-400' : 'bg-gray-200'
                 )}
               />
@@ -88,15 +93,16 @@ export default function PipelineTracker({ stages }: PipelineTrackerProps) {
             {/* Stage node */}
             <div
               className={clsx(
-                'flex items-center gap-2 px-3 py-2 rounded-lg transition-colors',
-                isPending && 'opacity-50'
+                'flex items-center gap-2.5 px-3 py-2 rounded-lg transition-all duration-300',
+                isPending && 'opacity-40',
+                stage.status === 'IN_PROGRESS' && 'bg-primary-50 ring-1 ring-primary-200'
               )}
             >
               {getStatusIcon(stage.status)}
               <div className="min-w-0">
                 <p
                   className={clsx(
-                    'text-xs font-medium whitespace-nowrap',
+                    'text-sm font-semibold whitespace-nowrap',
                     isPending ? 'text-gray-400' : 'text-gray-900'
                   )}
                 >
@@ -105,8 +111,8 @@ export default function PipelineTracker({ stages }: PipelineTrackerProps) {
                 {detail && (
                   <p
                     className={clsx(
-                      'text-xs whitespace-nowrap',
-                      isCompleted ? 'text-green-600' : 'text-gray-500'
+                      'text-sm whitespace-nowrap',
+                      isCompleted ? 'text-green-600 font-medium' : 'text-gray-500'
                     )}
                   >
                     {detail}

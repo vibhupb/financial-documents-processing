@@ -253,7 +253,10 @@ export default function WorkQueue() {
         <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
           {isLoading ? (
             <div className="flex items-center justify-center h-64">
-              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600" />
+              <div className="relative w-12 h-12">
+                <div className="absolute inset-0 rounded-full border-4 border-primary-100" />
+                <div className="animate-spin rounded-full h-12 w-12 border-4 border-transparent border-t-primary-600" />
+              </div>
             </div>
           ) : error ? (
             <div className="text-center py-12">
@@ -314,12 +317,12 @@ export default function WorkQueue() {
                             {doc.documentId.slice(0, 12)}
                           </p>
                           {isProcessing(doc) && doc.latestEvent && (
-                            <div className="flex items-center gap-1.5 mt-1">
-                              <span className="relative flex h-2 w-2">
+                            <div className="flex items-center gap-2 mt-1.5">
+                              <span className="relative flex h-3 w-3 flex-shrink-0">
                                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75" />
-                                <span className="relative inline-flex rounded-full h-2 w-2 bg-blue-500" />
+                                <span className="relative inline-flex rounded-full h-3 w-3 bg-blue-500" />
                               </span>
-                              <span className="text-xs text-blue-600 truncate">
+                              <span className="text-sm text-blue-600 truncate font-medium">
                                 {doc.latestEvent.message}
                               </span>
                             </div>

@@ -38,23 +38,26 @@ export default function LiveResultsStream({ events, startedAt }: LiveResultsStre
   return (
     <div
       ref={scrollRef}
-      className="bg-gray-900 rounded-lg p-3 max-h-64 overflow-y-auto font-mono text-xs leading-relaxed"
+      className="bg-gray-900 rounded-lg p-4 max-h-96 overflow-y-auto font-mono text-sm leading-relaxed"
     >
       {events.length === 0 ? (
-        <p className="text-gray-500 text-center py-4">
-          Waiting for processing events...
-        </p>
+        <div className="text-center py-8">
+          <div className="inline-flex items-center gap-2 text-gray-400">
+            <div className="h-2 w-2 rounded-full bg-gray-500 animate-pulse" />
+            <span>Waiting for processing events...</span>
+          </div>
+        </div>
       ) : (
-        <div className="space-y-0.5">
+        <div className="space-y-1">
           {events.map((event, index) => (
-            <div key={index} className="flex gap-2">
-              <span className="text-gray-600 flex-shrink-0">
+            <div key={index} className="flex gap-2.5">
+              <span className="text-gray-500 flex-shrink-0 tabular-nums">
                 [{formatElapsedTimestamp(event.ts, startedAt)}]
               </span>
-              <span className={clsx('flex-shrink-0', stageColors[event.stage] || 'text-gray-400')}>
+              <span className={clsx('flex-shrink-0 font-semibold uppercase', stageColors[event.stage] || 'text-gray-400')}>
                 {event.stage}:
               </span>
-              <span className="text-gray-300 break-words">
+              <span className="text-gray-200 break-words">
                 {event.message}
               </span>
             </div>

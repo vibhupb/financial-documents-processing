@@ -166,14 +166,20 @@ CREDIT AGREEMENT FIELD-BY-FIELD EXTRACTION:
 
 === LENDER COMMITMENTS (from Schedule 2.01 or Lender table) ===
 
-23. **Lender Commitments**
+23. **Lender Commitments** (CRITICAL - extract ALL rows from the lender/commitment table)
     - Keywords: "Schedule 2.01", "Lender", "Commitment", "Applicable Percentage"
-    - For each lender extract:
+    - IMPORTANT: Look in BOTH query results AND table data. The lender schedule is often
+      extracted as a TABLE with columns like "Name of Lender", "Applicable Percentage",
+      "Elected Revolving Credit Commitment", etc. Extract EVERY lender row from the table.
+    - For each lender extract (excluding the TOTAL row):
       - lenderName: Full legal name
       - applicablePercentage: Decimal (e.g., 0.216 for 21.60%)
-      - revolvingCreditCommitment: Number
-      - termCommitment: Number (if applicable)
+      - revolvingCreditCommitment: Number (from "Elected Revolving Credit Commitment" column)
+      - electedRevolvingCreditCommitment: Number (same as revolvingCreditCommitment)
+      - maxRevolvingCreditAmount: Number (from "Maximum Revolving Credit Amount" column)
+      - termCommitment: Number (from "Term Commitment" column, if applicable)
     - Note: Percentages should sum to 100% (1.0)
+    - Note: Dollar amounts in tables may have OCR artifacts (e.g., "1:34", "Dank") — strip these
 
 === OUTPUT FORMAT ===
 

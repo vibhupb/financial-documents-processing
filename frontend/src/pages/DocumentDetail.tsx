@@ -151,8 +151,11 @@ export default function DocumentDetail() {
     return (
       <div className="flex items-center justify-center h-full">
         <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary-600 mx-auto" />
-          <p className="mt-4 text-gray-500">Loading document...</p>
+          <div className="relative mx-auto w-16 h-16">
+            <div className="absolute inset-0 rounded-full border-4 border-primary-100" />
+            <div className="animate-spin rounded-full h-16 w-16 border-4 border-transparent border-t-primary-600" />
+          </div>
+          <p className="mt-4 text-base text-gray-600 font-medium">Loading document...</p>
         </div>
       </div>
     );
@@ -164,17 +167,23 @@ export default function DocumentDetail() {
     return (
       <div className="flex items-center justify-center h-full">
         <div className="text-center max-w-md">
-          <div className="relative">
-            <div className="animate-spin rounded-full h-16 w-16 border-4 border-primary-200 border-t-primary-600 mx-auto" />
-            <Clock className="w-6 h-6 text-primary-600 absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2" />
+          <div className="relative mx-auto w-20 h-20">
+            <div className="absolute inset-0 rounded-full bg-primary-100 animate-pulse" />
+            <div className="absolute inset-0 animate-spin rounded-full border-4 border-transparent border-t-primary-600" />
+            <Clock className="w-8 h-8 text-primary-600 absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2" />
           </div>
           <h3 className="text-xl font-semibold text-gray-900 mt-6 mb-2">
             Initializing Document
           </h3>
-          <p className="text-gray-500 mb-2">
+          <p className="text-base text-gray-500 mb-2">
             Your document is being uploaded and initialized...
           </p>
-          <p className="text-sm text-gray-400 font-mono">ID: {documentId}</p>
+          <div className="flex items-center justify-center gap-1.5 mt-3">
+            <div className="h-1.5 w-1.5 rounded-full bg-primary-400 animate-bounce" style={{ animationDelay: '0ms' }} />
+            <div className="h-1.5 w-1.5 rounded-full bg-primary-400 animate-bounce" style={{ animationDelay: '150ms' }} />
+            <div className="h-1.5 w-1.5 rounded-full bg-primary-400 animate-bounce" style={{ animationDelay: '300ms' }} />
+          </div>
+          <p className="text-sm text-gray-400 font-mono mt-3">ID: {documentId}</p>
         </div>
       </div>
     );
@@ -264,7 +273,7 @@ export default function DocumentDetail() {
 
           {/* Live results stream */}
           <div className="px-6 py-4">
-            <h3 className="text-sm font-medium text-gray-700 mb-2">
+            <h3 className="text-base font-semibold text-gray-800 mb-3">
               Processing Log
             </h3>
             <LiveResultsStream
@@ -363,8 +372,11 @@ export default function DocumentDetail() {
 
         <div className="flex-1 flex items-center justify-center">
           <div className="text-center">
-            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary-600 mx-auto" />
-            <p className="mt-4 text-gray-500">Loading document viewer...</p>
+            <div className="relative mx-auto w-16 h-16">
+              <div className="absolute inset-0 rounded-full border-4 border-primary-100" />
+              <div className="animate-spin rounded-full h-16 w-16 border-4 border-transparent border-t-primary-600" />
+            </div>
+            <p className="mt-4 text-base text-gray-600 font-medium">Loading document viewer...</p>
           </div>
         </div>
       </div>
