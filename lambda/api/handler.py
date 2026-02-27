@@ -931,6 +931,85 @@ Return ONLY valid JSON."""
         return {"error": f"AI generation failed: {str(e)}"}
 
 
+def refine_plugin_config(body: dict[str, Any]) -> dict[str, Any]:
+    """Use Claude to refine a plugin config based on a plain-English instruction.
+
+    Takes the current config and user instruction, returns an updated config
+    with the requested changes applied.
+    """
+    current_config = body.get("config", {})
+    instruction = body.get("instruction", "").strip()
+
+    if not instruction:
+        return {"error": "No instruction provided"}
+    if not current_config:
+        return {"error": "No current config provided"}
+
+    # Serialize current config for the prompt
+    config_json = json.dumps(current_config, indent=2, default=str)
+
+    prompt = f"""You are an expert at configuring document extraction pipelines.
+
+Below is the current plugin configuration for a document type. The user wants to modify it.
+
+CURRENT CONFIGURATION:
+```json
+{config_json}
+```
+
+USER INSTRUCTION:
+{instruction}
+
+Apply the user's requested changes to the configuration. Rules:
+- Return the COMPLETE updated configuration (not just the diff)
+- For new fields: use camelCase "name", descriptive "label", appropriate "type" (string|number|date|boolean|currency), and a Textract "query" question
+- For keyword changes: maintain 10-15 relevant classification keywords
+- For rule changes: keep rules specific and actionable for LLM normalization
+- Preserve all existing fields/rules that the user didn't ask to change
+- If the instruction is ambiguous, make reasonable assumptions
+
+Return ONLY valid JSON — no explanation, no markdown fences."""
+
+    try:
+        bedrock = boto3.client("bedrock-runtime")
+        response = bedrock.invoke_model(
+            modelId="us.anthropic.claude-haiku-4-5-20251001-v1:0",
+            contentType="application/json",
+            accept="application/json",
+            body=json.dumps({
+                "anthropic_version": "bedrock-2023-05-31",
+                "max_tokens": 4096,
+                "temperature": 0,
+                "messages": [{"role": "user", "content": prompt}],
+            }),
+        )
+        response_body = json.loads(response["body"].read())
+        content = response_body["content"][0]["text"]
+
+        # Parse JSON from response (handle markdown fences just in case)
+        if "```json" in content:
+            content = content.split("```json")[1].split("```")[0]
+        elif "```" in content:
+            content = content.split("```")[1].split("```")[0]
+
+        updated = json.loads(content.strip())
+
+        usage = response_body.get("usage", {})
+        updated["_refinement"] = {
+            "model": "claude-haiku-4.5",
+            "instruction": instruction,
+            "inputTokens": usage.get("input_tokens", 0),
+            "outputTokens": usage.get("output_tokens", 0),
+        }
+
+        return updated
+
+    except json.JSONDecodeError as e:
+        return {"error": f"AI returned invalid JSON: {str(e)}"}
+    except Exception as e:
+        return {"error": f"AI refinement failed: {str(e)}"}
+
+
 def get_metrics() -> dict[str, Any]:
     """Get processing metrics and statistics."""
     table = dynamodb.Table(TABLE_NAME)
@@ -1392,6 +1471,9 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
 
         elif path == "/plugins/generate" and http_method == "POST":
             return response(200, generate_plugin_config(body or {}))
+
+        elif path == "/plugins/refine" and http_method == "POST":
+            return response(200, refine_plugin_config(body or {}))
 
         elif path.startswith("/plugins/") and "/test" in path and http_method == "POST":
             pid = path.split("/")[2]

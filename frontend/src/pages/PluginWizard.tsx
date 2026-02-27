@@ -9,6 +9,7 @@ import clsx from 'clsx';
 import { api } from '../services/api';
 import WizardSteps from '../components/wizard/WizardSteps';
 import FieldEditor, { type FieldDef } from '../components/wizard/FieldEditor';
+import AiRefineBar from '../components/wizard/AiRefineBar';
 
 interface AnalysisResult {
   pages: { page: number; text: string; charCount: number }[];
@@ -443,6 +444,26 @@ export default function PluginWizard() {
             />
           </div>
 
+          {/* AI Refine bar for fields + rules */}
+          <AiRefineBar
+            getConfig={() => ({
+              pluginId,
+              name: docName,
+              description,
+              keywords: keywords.split(',').map(k => k.trim()).filter(Boolean),
+              fields,
+              promptRules,
+            })}
+            onRefined={(updated) => {
+              if (updated.fields) setFields(updated.fields);
+              if (updated.promptRules) setPromptRules(updated.promptRules);
+              if (updated.keywords) setKeywords(updated.keywords.join(', '));
+              if (updated.description) setDescription(updated.description);
+              if (updated.pluginId) setPluginId(updated.pluginId);
+            }}
+            placeholder='e.g. "Add a tracking number field" or "Split address into street, city, state, zip"'
+          />
+
           <div className="flex justify-between">
             <button onClick={() => setStep(1)} className="btn-secondary flex items-center gap-1">
               <ArrowLeft className="w-4 h-4" /> Back
@@ -524,6 +545,26 @@ export default function PluginWizard() {
               </div>
             </div>
           </div>
+
+          {/* AI Refine bar for config + rules */}
+          <AiRefineBar
+            getConfig={() => ({
+              pluginId,
+              name: docName,
+              description,
+              keywords: keywords.split(',').map(k => k.trim()).filter(Boolean),
+              fields,
+              promptRules,
+            })}
+            onRefined={(updated) => {
+              if (updated.fields) setFields(updated.fields);
+              if (updated.promptRules) setPromptRules(updated.promptRules);
+              if (updated.keywords) setKeywords(updated.keywords.join(', '));
+              if (updated.description) setDescription(updated.description);
+              if (updated.name) setDocName(updated.name);
+            }}
+            placeholder='e.g. "Add a rule to normalize all phone numbers to E.164 format" or "Change keywords to focus on insurance claims"'
+          />
 
           <div className="card bg-gray-50">
             <h3 className="text-sm font-medium text-gray-700 mb-2">Summary</h3>

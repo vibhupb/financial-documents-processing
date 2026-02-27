@@ -1056,6 +1056,9 @@ export class DocumentProcessingStack extends cdk.Stack {
     const pluginGenerateResource = pluginsResource.addResource('generate');
     pluginGenerateResource.addMethod('POST', apiIntegration); // AI-generate plugin config
 
+    const pluginRefineResource = pluginsResource.addResource('refine');
+    pluginRefineResource.addMethod('POST', apiIntegration); // AI-refine plugin config from instruction
+
     const pluginTestResource = pluginByIdResource.addResource('test');
     pluginTestResource.addMethod('POST', apiIntegration); // Run test on sample document
 

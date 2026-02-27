@@ -7,6 +7,7 @@ import {
 import clsx from 'clsx';
 import { api } from '../services/api';
 import FieldEditor, { type FieldDef } from '../components/wizard/FieldEditor';
+import AiRefineBar from '../components/wizard/AiRefineBar';
 
 type EditorTab = 'overview' | 'fields' | 'rules' | 'schema';
 
@@ -449,6 +450,27 @@ export default function PluginEditor() {
               </div>
             )}
           </div>
+
+          {isEditable && (
+            <AiRefineBar
+              getConfig={() => ({
+                pluginId,
+                name,
+                description,
+                keywords: keywords.split(',').map(k => k.trim()).filter(Boolean),
+                fields,
+                promptRules,
+              })}
+              onRefined={(updated) => {
+                if (updated.fields) { setFields(updated.fields); markDirty(); }
+                if (updated.promptRules) { setPromptRules(updated.promptRules); markDirty(); }
+                if (updated.keywords) { setKeywords(updated.keywords.join(', ')); markDirty(); }
+                if (updated.description) { setDescription(updated.description); markDirty(); }
+                if (updated.name) { setName(updated.name); markDirty(); }
+              }}
+              placeholder='e.g. "Add a tracking number field" or "Split address into street, city, state, zip"'
+            />
+          )}
         </div>
       )}
 
@@ -509,6 +531,27 @@ export default function PluginEditor() {
               </button>
             )}
           </div>
+
+          {isEditable && (
+            <AiRefineBar
+              getConfig={() => ({
+                pluginId,
+                name,
+                description,
+                keywords: keywords.split(',').map(k => k.trim()).filter(Boolean),
+                fields,
+                promptRules,
+              })}
+              onRefined={(updated) => {
+                if (updated.fields) { setFields(updated.fields); markDirty(); }
+                if (updated.promptRules) { setPromptRules(updated.promptRules); markDirty(); }
+                if (updated.keywords) { setKeywords(updated.keywords.join(', ')); markDirty(); }
+                if (updated.description) { setDescription(updated.description); markDirty(); }
+                if (updated.name) { setName(updated.name); markDirty(); }
+              }}
+              placeholder='e.g. "Add a rule to mask all SSN fields" or "Normalize currency to 2 decimal places"'
+            />
+          )}
         </div>
       )}
 

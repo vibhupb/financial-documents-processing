@@ -108,6 +108,8 @@ export const api = {
     fetchApi<any>('/plugins/analyze', { method: 'POST', body: JSON.stringify(data) }),
   generatePluginConfig: (data: { text: string; formFields: any; name: string; pageCount: number }) =>
     fetchApi<any>('/plugins/generate', { method: 'POST', body: JSON.stringify(data) }),
+  refinePluginConfig: (data: { config: any; instruction: string }) =>
+    fetchApi<any>('/plugins/refine', { method: 'POST', body: JSON.stringify(data) }),
   testPlugin: (pluginId: string) =>
     fetchApi<any>(`/plugins/${pluginId}/test`, { method: 'POST' }),
 
