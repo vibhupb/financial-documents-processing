@@ -231,6 +231,35 @@ export class DocumentProcessingStack extends cdk.Stack {
     }));
 
     // ==========================================
+    // Layer 5: PageIndex Lambda (Tree Building)
+    // ==========================================
+
+    const pageIndexLambda = new lambda.Function(this, 'PageIndexLambda', {
+      functionName: 'doc-processor-pageindex',
+      runtime: lambda.Runtime.PYTHON_3_13,
+      handler: 'handler.lambda_handler',
+      code: lambda.Code.fromAsset(path.join(__dirname, '../../lambda/pageindex')),
+      layers: [pypdfLayer, pluginsLayer],
+      memorySize: 2048,  // 2GB = 1 vCPU for PDF text extraction + concurrent LLM calls
+      timeout: cdk.Duration.minutes(10),  // Large docs (300+ pages) need multiple LLM rounds
+      environment: {
+        BUCKET_NAME: documentBucket.bucketName,
+        TABLE_NAME: documentTable.tableName,
+        BEDROCK_MODEL_ID: 'us.anthropic.claude-haiku-4-5-20251001-v1:0',
+      },
+      tracing: lambda.Tracing.ACTIVE,
+    });
+
+    documentBucket.grantRead(pageIndexLambda);
+    documentBucket.grantWrite(pageIndexLambda);  // For S3 audit trail
+    documentTable.grantReadWriteData(pageIndexLambda);
+    pageIndexLambda.addToRolePolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: ['bedrock:InvokeModel'],
+      resources: ['*'],
+    }));
+
+    // ==========================================
     // Step Functions State Machine
     // ==========================================
 
@@ -874,7 +903,56 @@ export class DocumentProcessingStack extends cdk.Stack {
       )
       .otherwise(legacyDocumentTypeChoice);
 
-    const definition = classifyDocument.next(extractionRouteChoice);
+    // ==========================================
+    // PageIndex Integration (Tree Building)
+    // ==========================================
+
+    // PageIndex Lambda invocation — builds hierarchical tree index
+    const buildPageIndex = new tasks.LambdaInvoke(this, 'BuildPageIndex', {
+      lambdaFunction: pageIndexLambda,
+      outputPath: '$.Payload',
+      retryOnServiceExceptions: true,
+    });
+
+    // Route choice: unstructured docs go through PageIndex, structured forms skip it
+    const pageIndexRouteChoice = new sfn.Choice(this, 'PageIndexRouteChoice', {
+      comment: 'Route unstructured docs (has_sections) through PageIndex tree building',
+    });
+
+    // After PageIndex: check if extraction should run now or be deferred
+    const extractionModeChoice = new sfn.Choice(this, 'ExtractionModeChoice', {
+      comment: 'Extract immediately or defer (understand-only mode)',
+    });
+
+    // For understand-only mode: mark document as INDEXED and complete
+    const indexingComplete = new sfn.Succeed(this, 'IndexingComplete', {
+      comment: 'Document indexed (tree built), extraction deferred',
+    });
+
+    // Wire PageIndex flow
+    pageIndexRouteChoice
+      .when(
+        sfn.Condition.booleanEquals('$.classification.has_sections', true),
+        buildPageIndex
+      )
+      .otherwise(extractionRouteChoice);
+
+    buildPageIndex.next(extractionModeChoice);
+
+    extractionModeChoice
+      .when(
+        sfn.Condition.stringEquals('$.processingMode', 'understand'),
+        indexingComplete
+      )
+      .otherwise(extractionRouteChoice);
+
+    // Add error handling for PageIndex
+    buildPageIndex.addCatch(handleError, {
+      resultPath: '$.error',
+    });
+
+    // Updated definition: classify -> PageIndex route -> extraction route
+    const definition = classifyDocument.next(pageIndexRouteChoice);
 
     // Normalize leads to processing complete
     normalizeData.next(processingComplete);
@@ -1268,6 +1346,7 @@ function handler(event) {
     pluginConfigsTable.grantReadData(routerLambda);
     pluginConfigsTable.grantReadData(extractorLambda);
     pluginConfigsTable.grantReadData(normalizerLambda);
+    pluginConfigsTable.grantReadData(pageIndexLambda);
 
     // ==========================================
     // Outputs

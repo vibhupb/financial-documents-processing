@@ -142,6 +142,28 @@ class CostBudget(TypedDict, total=False):
 
 
 # ---------------------------------------------------------------------------
+# PageIndex Config
+# ---------------------------------------------------------------------------
+
+class PageIndexConfig(TypedDict, total=False):
+    """Configuration for PageIndex tree building.
+
+    Controls whether a document type uses PageIndex for structural
+    understanding and tree-assisted extraction. Auto-derived from
+    classification if not explicitly set:
+      has_sections=True  → enabled=True
+      target_all_pages   → enabled=False
+    """
+    enabled: bool              # True for unstructured docs, False for structured forms
+    model: str                 # LLM model for tree building (default: Haiku 4.5)
+    max_page_num_each_node: int   # Max pages per leaf node before splitting (default: 10)
+    max_token_num_each_node: int  # Max tokens per leaf node before splitting (default: 20000)
+    toc_check_page_num: int    # Pages to scan for TOC (default: 20)
+    generate_summaries: bool   # Generate per-node summaries (default: True)
+    generate_description: bool # Generate one-sentence doc description (default: True)
+
+
+# ---------------------------------------------------------------------------
 # Top-Level Plugin Config
 # ---------------------------------------------------------------------------
 
@@ -165,5 +187,6 @@ class DocumentPluginConfig(TypedDict, total=False):
     supports_deduplication: bool
     supports_review_workflow: bool
     requires_signatures: bool
+    page_index: PageIndexConfig
     # Legacy section name mappings for backward compatibility during transition
     legacy_section_map: Dict[str, str]
