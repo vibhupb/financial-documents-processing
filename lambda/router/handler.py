@@ -1310,6 +1310,157 @@ def build_extraction_plan(
     return extraction_sections
 
 
+# ---------------------------------------------------------------------------
+# Tree-assisted extraction plan (Phase 3: PageIndex integration)
+# ---------------------------------------------------------------------------
+
+def build_extraction_plan_from_tree(
+    plugin: dict[str, Any],
+    page_index_tree: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Build extraction plan using PageIndex tree node page ranges.
+
+    Instead of keyword-density matching, maps plugin sections to tree nodes
+    by matching section keywords against node titles. The tree's start_index/
+    end_index provide precise page ranges, eliminating the need for keyword
+    scoring, uncovered pages fallback, and position-based bonus rules.
+
+    Falls back to build_extraction_plan() if tree matching fails.
+    """
+    plugin_id = plugin["plugin_id"]
+    sections_config = plugin.get("sections", {})
+    tree_nodes = _flatten_tree(page_index_tree.get("structure", []))
+    total_pages = page_index_tree.get("total_pages", 0)
+
+    if not tree_nodes:
+        print(f"[TreePlan] No tree nodes available, cannot build tree-assisted plan")
+        return []
+
+    extraction_sections = []
+    used_pages: set[int] = set()  # track assigned pages for dedup
+
+    for section_id, section_config in sections_config.items():
+        hints = section_config.get("classification_hints", {})
+        keywords = hints.get("keywords", [])
+        max_pages = int(section_config.get("max_pages", 30))
+
+        if not keywords:
+            continue
+
+        # Match section keywords against tree node titles + summaries
+        matched_nodes = _match_section_to_tree_nodes(keywords, tree_nodes)
+
+        if matched_nodes:
+            pages: set[int] = set()
+            matched_node_ids = []
+            for node in matched_nodes:
+                start = int(node.get("start_index", 1))
+                end = int(node.get("end_index", start))
+                pages.update(range(start, end + 1))
+                matched_node_ids.append(node.get("node_id", "?"))
+
+            # Dedup: remove pages already assigned to higher-priority sections
+            pages -= used_pages
+            # Respect max_pages
+            sorted_pages = sorted(pages)[:max_pages]
+            used_pages.update(sorted_pages)
+
+            if sorted_pages:
+                extraction_sections.append({
+                    "sectionId": section_id,
+                    "sectionPages": sorted_pages,
+                    "sectionConfig": section_config,
+                    "pluginId": plugin_id,
+                    "textractFeatures": section_config.get("textract_features", ["QUERIES"]),
+                    "queries": section_config.get("queries", []),
+                    "treeNodeIds": matched_node_ids,
+                })
+                print(
+                    f"[TreePlan] {section_id}: {len(sorted_pages)} pages from "
+                    f"tree nodes {matched_node_ids}"
+                )
+
+    # Handle sections with special targeting (last_n_pages, etc.)
+    for section_id, section_config in sections_config.items():
+        if section_id in {s["sectionId"] for s in extraction_sections}:
+            continue  # already matched
+
+        hints = section_config.get("classification_hints", {})
+        bonus_rules = hints.get("page_bonus_rules", [])
+        has_last_n = any(r.get("condition") == "last_n_pages" for r in bonus_rules)
+
+        if has_last_n and total_pages > 0:
+            # Signature-style sections: target last N pages
+            max_pages_sec = int(section_config.get("max_pages", 10))
+            start_page = max(1, total_pages - max_pages_sec + 1)
+            pages = list(range(start_page, total_pages + 1))
+            pages = [p for p in pages if p not in used_pages]
+
+            if pages:
+                extraction_sections.append({
+                    "sectionId": section_id,
+                    "sectionPages": pages,
+                    "sectionConfig": section_config,
+                    "pluginId": plugin_id,
+                    "textractFeatures": section_config.get("textract_features", ["QUERIES"]),
+                    "queries": section_config.get("queries", []),
+                    "treeNodeIds": ["last_n_pages"],
+                })
+                used_pages.update(pages)
+                print(f"[TreePlan] {section_id}: {len(pages)} pages (last_n_pages rule)")
+
+    if extraction_sections:
+        total_targeted = sum(len(s["sectionPages"]) for s in extraction_sections)
+        print(
+            f"[TreePlan] Complete: {len(extraction_sections)} sections, "
+            f"{total_targeted}/{total_pages} pages targeted"
+        )
+
+    return extraction_sections
+
+
+def _flatten_tree(nodes: list[dict]) -> list[dict]:
+    """Flatten tree to list (depth-first)."""
+    flat = []
+    for node in nodes:
+        flat.append(node)
+        if node.get("nodes"):
+            flat.extend(_flatten_tree(node["nodes"]))
+    return flat
+
+
+def _match_section_to_tree_nodes(
+    keywords: list[str],
+    tree_nodes: list[dict],
+    min_score: int = 2,
+) -> list[dict]:
+    """Match plugin section keywords against tree node titles and summaries.
+
+    Returns nodes sorted by match score (highest first), filtered by min_score.
+    """
+    scored: list[tuple[int, dict]] = []
+
+    for node in tree_nodes:
+        title = (node.get("title") or "").lower()
+        summary = (node.get("summary") or "").lower()
+        searchable = f"{title} {summary}"
+
+        score = 0
+        for kw in keywords:
+            kw_lower = kw.lower()
+            if kw_lower in title:
+                score += 3  # title match is strong
+            elif kw_lower in summary:
+                score += 1  # summary match is weaker
+
+        if score >= min_score:
+            scored.append((score, node))
+
+    # Sort by score descending, take top matches
+    scored.sort(key=lambda x: -x[0])
+    return [node for _, node in scored]
+
+
 def _resolve_plugin(
     classification_result: dict[str, Any],
     all_plugins: dict[str, Any],
@@ -2431,6 +2582,7 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             "contentHash": content_hash,  # Pass through for deduplication
             "size": file_size,
             "uploadedAt": uploaded_at,
+            "processingMode": event.get("processingMode", "extract"),
             "totalPages": total_pages,
             "classification": classification,
             "identifiedDocuments": identified_docs,
@@ -2513,9 +2665,28 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                     else:
                         section_result = classification
 
-                    extraction_plan = build_extraction_plan(
-                        plugin, section_result, page_snippets
-                    )
+                    # TREE-ASSISTED EXTRACTION: If PageIndex tree is
+                    # available (from a prior run or re-extraction), use
+                    # tree node page ranges instead of keyword density.
+                    page_index_tree = event.get("pageIndexTree")
+                    if page_index_tree and page_index_tree.get("structure"):
+                        print(f"[Plugin path] Using tree-assisted extraction plan "
+                              f"(PageIndex tree has {len(page_index_tree.get('structure', []))} root nodes)")
+                        extraction_plan = build_extraction_plan_from_tree(
+                            plugin, page_index_tree
+                        )
+                        # Fall back to keyword-density if tree matching
+                        # produced no sections
+                        if not extraction_plan:
+                            print(f"[Plugin path] Tree-assisted plan empty, "
+                                  f"falling back to keyword-density")
+                            extraction_plan = build_extraction_plan(
+                                plugin, section_result, page_snippets
+                            )
+                    else:
+                        extraction_plan = build_extraction_plan(
+                            plugin, section_result, page_snippets
+                        )
 
                     # GUARD: Only emit extractionPlan if non-empty.
                     # An empty [] would cause Step Functions Map to run 0

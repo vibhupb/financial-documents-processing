@@ -174,6 +174,17 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 document_id = str(uuid.uuid4())
                 print(f"Generated new document ID (unexpected path format): {document_id}")
 
+            # Read processing mode from S3 object metadata
+            # (set by frontend upload: "extract", "understand", or "both")
+            processing_mode = "extract"  # default
+            try:
+                head_resp = s3_client.head_object(Bucket=bucket, Key=key)
+                processing_mode = head_resp.get("Metadata", {}).get(
+                    "processing-mode", "extract"
+                )
+            except Exception as e:
+                print(f"Warning: Could not read S3 metadata: {e}")
+
             # Prepare input for Step Functions
             sfn_input = {
                 "documentId": document_id,
@@ -182,6 +193,7 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 "size": actual_size,
                 "contentHash": content_hash,
                 "uploadedAt": datetime.utcnow().isoformat() + "Z",
+                "processingMode": processing_mode,
                 "source": "s3-trigger",
             }
 
