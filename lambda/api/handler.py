@@ -1151,6 +1151,275 @@ Return ONLY valid JSON — no explanation, no markdown fences."""
         return {"error": f"AI refinement failed: {str(e)}"}
 
 
+# ---------------------------------------------------------------------------
+# PageIndex endpoints
+# ---------------------------------------------------------------------------
+
+def get_document_tree(document_id: str) -> dict[str, Any]:
+    """GET /documents/{id}/tree — return cached PageIndex tree."""
+    table = dynamodb.Table(TABLE_NAME)
+    doc = _get_document_item(table, document_id)
+    if not doc:
+        return {"error": "Document not found"}
+
+    tree = doc.get("pageIndexTree")
+    if not tree:
+        return {
+            "documentId": document_id,
+            "pageIndexTree": None,
+            "message": "No PageIndex tree available for this document",
+        }
+
+    return {
+        "documentId": document_id,
+        "documentType": doc.get("documentType"),
+        "status": doc.get("status"),
+        "pageIndexTree": convert_decimals(tree),
+    }
+
+
+def trigger_document_extraction(document_id: str) -> dict[str, Any]:
+    """POST /documents/{id}/extract — trigger deferred extraction.
+
+    For documents in INDEXED status (tree built, extraction deferred).
+    Starts a new Step Functions execution that uses the cached tree.
+    """
+    table = dynamodb.Table(TABLE_NAME)
+    doc = _get_document_item(table, document_id)
+    if not doc:
+        return {"error": "Document not found"}
+
+    status = doc.get("status", "")
+    if status not in ("INDEXED", "COMPLETED"):
+        return {"error": f"Document not ready for extraction (status: {status})"}
+
+    tree = doc.get("pageIndexTree")
+    bucket = doc.get("bucket", os.environ.get("BUCKET_NAME", ""))
+    key = doc.get("originalS3Key", "")
+    plugin_id = doc.get("pluginId", "")
+
+    if not key:
+        return {"error": "Document has no S3 key for extraction"}
+
+    # Start Step Functions execution with cached tree + skip flags
+    sfn_input = {
+        "documentId": document_id,
+        "bucket": bucket,
+        "key": key,
+        "contentHash": doc.get("contentHash", ""),
+        "size": doc.get("fileSize", 0),
+        "processingMode": "extract",
+        "pageIndexTree": convert_decimals(tree) if tree else None,
+        "pluginId": plugin_id,
+        "source": "deferred-extraction",
+    }
+
+    state_machine_arn = os.environ.get("STATE_MACHINE_ARN", "")
+    if not state_machine_arn:
+        return {"error": "STATE_MACHINE_ARN not configured"}
+
+    try:
+        import re as _re
+        safe_id = _re.sub(r"[^a-zA-Z0-9_-]", "_", document_id)[:8]
+        from datetime import datetime as _dt
+        exec_name = f"extract-{safe_id}-{int(_dt.utcnow().timestamp())}"
+        sfn_client = boto3.client("stepfunctions")
+        resp = sfn_client.start_execution(
+            stateMachineArn=state_machine_arn,
+            name=exec_name,
+            input=json.dumps(sfn_input, default=str),
+        )
+        # Update status
+        table.update_item(
+            Key={"documentId": document_id, "documentType": doc["documentType"]},
+            UpdateExpression="SET #s = :s, updatedAt = :now",
+            ExpressionAttributeNames={"#s": "status"},
+            ExpressionAttributeValues={
+                ":s": "EXTRACTING",
+                ":now": _dt.utcnow().isoformat() + "Z",
+            },
+        )
+        return {
+            "documentId": document_id,
+            "status": "EXTRACTING",
+            "executionArn": resp["executionArn"],
+        }
+    except Exception as e:
+        return {"error": f"Failed to start extraction: {str(e)}"}
+
+
+def ask_document(document_id: str, body: dict[str, Any]) -> dict[str, Any]:
+    """POST /documents/{id}/ask — Q&A over cached PageIndex tree.
+
+    Uses LLM reasoning to navigate the tree, find relevant pages,
+    and generate an answer from those pages.
+    """
+    question = (body.get("question") or "").strip()
+    if not question:
+        return {"error": "Question is required"}
+
+    table = dynamodb.Table(TABLE_NAME)
+    doc = _get_document_item(table, document_id)
+    if not doc:
+        return {"error": "Document not found"}
+
+    tree = doc.get("pageIndexTree")
+    if not tree or not tree.get("structure"):
+        return {"error": "No PageIndex tree available for Q&A"}
+
+    bucket = doc.get("bucket", os.environ.get("BUCKET_NAME", ""))
+    key = doc.get("originalS3Key", "")
+
+    try:
+        bedrock_client = boto3.client("bedrock-runtime")
+        model_id = os.environ.get(
+            "BEDROCK_MODEL_ID", "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+        )
+
+        # Step 1: Navigate tree to find relevant nodes
+        tree_structure = json.dumps(
+            convert_decimals(tree["structure"]), default=str
+        )
+        nav_prompt = (
+            "You are given a query and a document's hierarchical tree structure. "
+            "Find all nodes most likely to contain the answer.\n\n"
+            f"Query: {question}\n\n"
+            f"Document: {tree.get('doc_description', 'Unknown document')}\n"
+            f"Tree structure:\n{tree_structure}\n\n"
+            'Return JSON: {"thinking": "<reasoning>", "node_ids": ["0001", "0005"]}'
+        )
+
+        nav_resp = bedrock_client.converse(
+            modelId=model_id,
+            messages=[{"role": "user", "content": [{"text": nav_prompt}]}],
+            inferenceConfig={"temperature": 0, "maxTokens": 1024},
+        )
+        nav_text = nav_resp["output"]["message"]["content"][0]["text"]
+
+        # Parse node IDs
+        node_ids = []
+        try:
+            nav_json = json.loads(
+                nav_text.replace("```json", "").replace("```", "").strip()
+            )
+            node_ids = nav_json.get("node_ids", nav_json.get("node_list", []))
+        except json.JSONDecodeError:
+            import re
+            node_ids = re.findall(r'"(\d{4})"', nav_text)
+
+        if not node_ids:
+            return {
+                "answer": "I couldn't identify relevant sections for this question.",
+                "sourceNodes": [],
+                "sourcePages": [],
+            }
+
+        # Step 2: Gather page text from relevant nodes
+        all_nodes = _flatten_tree_nodes(tree["structure"])
+        node_map = {n.get("node_id"): n for n in all_nodes}
+        relevant_pages: set[int] = set()
+        for nid in node_ids:
+            node = node_map.get(nid)
+            if node:
+                start = int(node.get("start_index", 0))
+                end = int(node.get("end_index", start))
+                relevant_pages.update(range(start, end + 1))
+
+        # Limit to 20 pages to keep prompt manageable
+        sorted_pages = sorted(relevant_pages)[:20]
+
+        # Download PDF and extract text from relevant pages
+        page_texts = _extract_pages_for_qa(bucket, key, sorted_pages)
+
+        # Step 3: Generate answer
+        answer_prompt = (
+            "Answer the following question using ONLY the document text below. "
+            "Be specific and cite page numbers. If the answer is not in the text, "
+            "say so.\n\n"
+            f"Question: {question}\n\n"
+            f"Document text (from pages {sorted_pages}):\n{page_texts}\n\n"
+            "Answer:"
+        )
+
+        answer_resp = bedrock_client.converse(
+            modelId=model_id,
+            messages=[{"role": "user", "content": [{"text": answer_prompt}]}],
+            inferenceConfig={"temperature": 0, "maxTokens": 2048},
+        )
+        answer = answer_resp["output"]["message"]["content"][0]["text"]
+
+        return {
+            "answer": answer,
+            "sourceNodes": node_ids,
+            "sourcePages": sorted_pages,
+            "question": question,
+        }
+
+    except Exception as e:
+        return {"error": f"Q&A failed: {str(e)}"}
+
+
+def _get_document_item(table: Any, document_id: str) -> dict | None:
+    """Query DynamoDB for a document by ID (any documentType)."""
+    resp = table.query(
+        KeyConditionExpression=boto3.dynamodb.conditions.Key("documentId").eq(document_id),
+        Limit=1,
+    )
+    items = resp.get("Items", [])
+    return items[0] if items else None
+
+
+def _flatten_tree_nodes(nodes: list) -> list:
+    """Flatten a nested tree structure to a flat list."""
+    flat = []
+    for node in nodes:
+        flat.append(node)
+        if node.get("nodes"):
+            flat.extend(_flatten_tree_nodes(node["nodes"]))
+    return flat
+
+
+def _extract_pages_for_qa(
+    bucket: str, key: str, page_numbers: list[int]
+) -> str:
+    """Download PDF and extract text from specific pages for Q&A."""
+    try:
+        from io import BytesIO
+        resp = s3_client.get_object(Bucket=bucket, Key=key)
+        pdf_bytes = resp["Body"].read()
+
+        # Try PyPDF2 first
+        try:
+            from PyPDF2 import PdfReader
+            reader = PdfReader(BytesIO(pdf_bytes))
+            parts = []
+            for pn in page_numbers:
+                if 1 <= pn <= len(reader.pages):
+                    text = reader.pages[pn - 1].extract_text() or ""
+                    parts.append(f"--- Page {pn} ---\n{text[:3000]}")
+            return "\n\n".join(parts)
+        except Exception:
+            pass
+
+        # Fallback to PyMuPDF
+        try:
+            import fitz
+            doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+            parts = []
+            for pn in page_numbers:
+                if 1 <= pn <= len(doc):
+                    text = doc[pn - 1].get_text() or ""
+                    parts.append(f"--- Page {pn} ---\n{text[:3000]}")
+            doc.close()
+            return "\n\n".join(parts)
+        except Exception:
+            pass
+
+        return "(Could not extract page text)"
+    except Exception as e:
+        return f"(Error reading PDF: {e})"
+
+
 def get_metrics() -> dict[str, Any]:
     """Get processing metrics and statistics."""
     table = dynamodb.Table(TABLE_NAME)
@@ -1590,6 +1859,18 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         elif path.startswith("/documents/") and "/reprocess" in path and http_method == "POST":
             # POST /documents/{documentId}/reprocess - Trigger re-processing
             return response(200, reprocess_document(_doc_id(), body or {}))
+
+        elif path.startswith("/documents/") and "/tree" in path and http_method == "GET":
+            # GET /documents/{documentId}/tree - Get PageIndex tree
+            return response(200, get_document_tree(_doc_id()))
+
+        elif path.startswith("/documents/") and "/extract" in path and http_method == "POST":
+            # POST /documents/{documentId}/extract - Trigger deferred extraction
+            return response(200, trigger_document_extraction(_doc_id()))
+
+        elif path.startswith("/documents/") and "/ask" in path and http_method == "POST":
+            # POST /documents/{documentId}/ask - Q&A over document tree
+            return response(200, ask_document(_doc_id(), body or {}))
 
         elif path.startswith("/documents/") and http_method == "GET":
             return response(200, get_document(_doc_id()))

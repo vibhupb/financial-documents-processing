@@ -1041,6 +1041,7 @@ export class DocumentProcessingStack extends cdk.Stack {
         TABLE_NAME: documentTable.tableName,
         STATE_MACHINE_ARN: stateMachine.stateMachineArn,
         PLUGIN_CONFIGS_TABLE: 'document-plugin-configs',
+        BEDROCK_MODEL_ID: 'us.anthropic.claude-haiku-4-5-20251001-v1:0',
         CORS_ORIGIN: '*',
       },
       tracing: lambda.Tracing.ACTIVE,
