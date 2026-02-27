@@ -13,17 +13,19 @@ import clsx from 'clsx';
 import type { ProcessingCost, ProcessingTime } from '../types';
 
 interface ProcessingMetricsPanelProps {
-  processingCost?: ProcessingCost;
-  processingTime?: ProcessingTime;
+  processingCost?: ProcessingCost | null;
+  processingTime?: ProcessingTime | null;
   className?: string;
+  defaultCollapsed?: boolean;
 }
 
 export default function ProcessingMetricsPanel({
   processingCost,
   processingTime,
   className,
+  defaultCollapsed = false,
 }: ProcessingMetricsPanelProps) {
-  const [isExpanded, setIsExpanded] = useState(true);
+  const [isExpanded, setIsExpanded] = useState(!defaultCollapsed);
 
   if (!processingCost && !processingTime) {
     return null;

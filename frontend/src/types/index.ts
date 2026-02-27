@@ -35,6 +35,27 @@ export interface EnrichedStatusResponse {
   completedAt?: string;
 }
 
+// PageIndex tree types
+export interface PageIndexNode {
+  title: string;
+  node_id: string;
+  start_index: number;
+  end_index: number;
+  summary?: string;
+  nodes?: PageIndexNode[];
+}
+
+export interface PageIndexTree {
+  doc_name?: string;
+  doc_description?: string;
+  structure: PageIndexNode[];
+  total_pages?: number;
+  model?: string;
+  build_cost?: number;
+  build_duration_seconds?: number;
+  verification_accuracy?: number;
+}
+
 export interface Document {
   documentId: string;
   documentType: string;
@@ -50,6 +71,8 @@ export interface Document {
   validation?: ValidationResult;
   signatureValidation?: SignatureValidation;
   classification?: DocumentClassification;
+  pageIndexTree?: PageIndexTree;
+  processingMode?: 'extract' | 'understand' | 'both';
   reviewedBy?: string;
   reviewedAt?: string;
   reviewNotes?: string;

@@ -3,7 +3,13 @@ import { PanelLeftClose, PanelRightClose, Columns } from 'lucide-react';
 import clsx from 'clsx';
 import PDFViewer from './PDFViewer';
 import ExtractedValuesPanel from './ExtractedValuesPanel';
-import type { Document } from '../types';
+import DataViewTabs, { type DataViewTab } from './DataViewTabs';
+import DocumentTreeView from './DocumentTreeView';
+import DocumentQA from './DocumentQA';
+import RawJsonView from './RawJsonView';
+import ExtractionTrigger from './ExtractionTrigger';
+import ProcessingMetricsPanel from './ProcessingMetricsPanel';
+import type { Document, LoanData } from '../types';
 
 interface DocumentViewerProps {
   document: Document;
@@ -25,6 +31,15 @@ export default function DocumentViewer({
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [totalPages, setTotalPages] = useState<number>(0);
 
+  // Determine default tab based on available data
+  const hasTree = !!(document.pageIndexTree?.structure?.length);
+  const hasExtractedData = !!(document.extractedData || document.data);
+  const defaultTab: DataViewTab = hasExtractedData ? 'extracted' : hasTree ? 'summary' : 'extracted';
+  const [activeTab, setActiveTab] = useState<DataViewTab>(defaultTab);
+
+  // API base URL from env
+  const apiBaseUrl = (import.meta as unknown as { env: Record<string, string> }).env?.VITE_API_URL || '';
+
   // Handle field click from extracted values panel
   const handleFieldClick = useCallback((pageNumber: number, fieldName: string) => {
     console.log(`Navigating to page ${pageNumber} for field: ${fieldName}`);
@@ -36,10 +51,17 @@ export default function DocumentViewer({
     }
   }, [layout]);
 
+  // Handle page click from tree view or Q&A
+  const handlePageClick = useCallback((pageNumber: number) => {
+    setHighlightedPage(pageNumber);
+    if (layout === 'data-only') {
+      setLayout('split');
+    }
+  }, [layout]);
+
   // Handle page change from PDF viewer
   const handlePageChange = useCallback((page: number) => {
     setCurrentPage(page);
-    // Clear highlight when user manually navigates
     if (highlightedPage && page !== highlightedPage) {
       setHighlightedPage(undefined);
     }
@@ -49,6 +71,9 @@ export default function DocumentViewer({
   const handleDocumentLoad = useCallback((numPages: number) => {
     setTotalPages(numPages);
   }, []);
+
+  // Determine what JSON to show in Raw JSON tab
+  const rawJsonData = document.extractedData || document.data || document.pageIndexTree || null;
 
   return (
     <div className={clsx('flex flex-col h-full', className)}>
@@ -126,23 +151,77 @@ export default function DocumentViewer({
           </div>
         )}
 
-        {/* Extracted Values Panel (Right Panel) */}
+        {/* Right Panel: Tabs + Content */}
         {(layout === 'split' || layout === 'data-only') && (
           <div
             className={clsx(
-              'transition-all duration-300 overflow-hidden',
+              'flex flex-col transition-all duration-300 overflow-hidden',
               layout === 'split' ? 'w-1/2' : 'w-full'
             )}
           >
-            <ExtractedValuesPanel
-              data={(document.extractedData as import('../types').LoanData) || document.data || null}
-              validation={document.validation}
-              signatureValidation={document.signatureValidation}
-              classification={document.classification}
+            {/* View Tabs */}
+            <DataViewTabs
+              activeTab={activeTab}
+              onTabChange={setActiveTab}
+              hasTree={hasTree}
+              hasExtractedData={hasExtractedData}
+            />
+
+            {/* Tab Content */}
+            <div className="flex-1 overflow-auto">
+              {activeTab === 'summary' && (
+                <div className="flex flex-col h-full">
+                  <div className="flex-1 overflow-auto">
+                    <DocumentTreeView
+                      tree={document.pageIndexTree!}
+                      onPageClick={handlePageClick}
+                    />
+                  </div>
+                  {/* Q&A at bottom of summary tab */}
+                  {hasTree && (
+                    <DocumentQA
+                      documentId={document.documentId}
+                      apiBaseUrl={apiBaseUrl}
+                      onPageClick={handlePageClick}
+                    />
+                  )}
+                </div>
+              )}
+
+              {activeTab === 'extracted' && (
+                hasExtractedData ? (
+                  <ExtractedValuesPanel
+                    data={(document.extractedData as LoanData) || document.data || null}
+                    validation={document.validation}
+                    signatureValidation={document.signatureValidation}
+                    classification={document.classification}
+                    processingCost={undefined}
+                    processingTime={undefined}
+                    onFieldClick={handleFieldClick}
+                    className="h-full"
+                  />
+                ) : (
+                  <ExtractionTrigger
+                    documentId={document.documentId}
+                    apiBaseUrl={apiBaseUrl}
+                    onExtractionStarted={() => window.location.reload()}
+                  />
+                )
+              )}
+
+              {activeTab === 'json' && (
+                <RawJsonView
+                  data={rawJsonData}
+                  label={document.extractedData ? 'Extracted Data' : 'PageIndex Tree'}
+                />
+              )}
+            </div>
+
+            {/* Processing Metrics — always visible, collapsed by default */}
+            <ProcessingMetricsPanel
               processingCost={document.processingCost}
               processingTime={document.processingTime}
-              onFieldClick={handleFieldClick}
-              className="h-full"
+              defaultCollapsed
             />
           </div>
         )}
@@ -178,7 +257,7 @@ export default function DocumentViewer({
           )}
           {document.processingCost && (
             <span>
-              Processing Cost:{' '}
+              Cost:{' '}
               <strong className="text-green-600">
                 ${document.processingCost.totalCost.toFixed(4)}
               </strong>
