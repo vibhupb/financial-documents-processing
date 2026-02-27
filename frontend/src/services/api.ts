@@ -61,10 +61,10 @@ export const api = {
     ),
 
   // Upload
-  createUploadUrl: (filename: string) =>
+  createUploadUrl: (filename: string, processingMode: string = 'extract') =>
     fetchApi<UploadResponse>('/upload', {
       method: 'POST',
-      body: JSON.stringify({ filename }),
+      body: JSON.stringify({ filename, processingMode }),
     }),
 
   uploadFile: async (uploadUrl: string, fields: Record<string, string>, file: File) => {
@@ -93,6 +93,24 @@ export const api = {
 
     return true;
   },
+
+  // PageIndex
+  getDocumentTree: (documentId: string) =>
+    fetchApi<{ documentId: string; pageIndexTree: any; status: string }>(
+      `/documents/${documentId}/tree`
+    ),
+
+  triggerExtraction: (documentId: string) =>
+    fetchApi<{ documentId: string; status: string; executionArn?: string }>(
+      `/documents/${documentId}/extract`,
+      { method: 'POST' }
+    ),
+
+  askDocument: (documentId: string, question: string) =>
+    fetchApi<{ answer: string; sourceNodes: string[]; sourcePages: number[]; question: string }>(
+      `/documents/${documentId}/ask`,
+      { method: 'POST', body: JSON.stringify({ question }) }
+    ),
 
   // Metrics
   getMetrics: () => fetchApi<Metrics>('/metrics'),

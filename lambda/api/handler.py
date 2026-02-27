@@ -251,15 +251,22 @@ def get_document_audit(document_id: str) -> dict[str, Any]:
         return {"error": f"Failed to get audit trail: {str(e)}"}
 
 
-def create_upload_url(filename: str) -> dict[str, Any]:
+def create_upload_url(filename: str, processing_mode: str = "extract") -> dict[str, Any]:
     """Generate a presigned POST URL for document upload.
 
     Uses presigned POST instead of PUT for better CORS support with
     private S3 buckets. Uses regional S3 endpoint to avoid 307 redirects
     which break CORS in browsers.
+
+    Args:
+        filename: Original filename
+        processing_mode: "extract" (default), "understand", or "both"
     """
     document_id = str(uuid.uuid4())
     key = f"ingest/{document_id}/{filename}"
+    # Validate processing mode
+    if processing_mode not in ("extract", "understand", "both"):
+        processing_mode = "extract"
 
     try:
         # Use presigned POST which has better CORS support
@@ -268,9 +275,11 @@ def create_upload_url(filename: str) -> dict[str, Any]:
             Key=key,
             Fields={
                 "Content-Type": "application/pdf",
+                "x-amz-meta-processing-mode": processing_mode,
             },
             Conditions=[
                 {"Content-Type": "application/pdf"},
+                {"x-amz-meta-processing-mode": processing_mode},
                 ["content-length-range", 1, 52428800],  # 1 byte to 50MB
             ],
             ExpiresIn=3600,  # 1 hour
@@ -1877,7 +1886,8 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
 
         elif path == "/upload" and http_method == "POST":
             filename = body.get("filename", "document.pdf") if body else "document.pdf"
-            return response(200, create_upload_url(filename))
+            processing_mode = body.get("processingMode", "extract") if body else "extract"
+            return response(200, create_upload_url(filename, processing_mode))
 
         elif path == "/metrics" and http_method == "GET":
             return response(200, get_metrics())
