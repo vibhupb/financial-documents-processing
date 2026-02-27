@@ -551,6 +551,8 @@ def get_registered_plugins() -> dict[str, Any]:
                 "sections": list(config.get("sections", {}).keys()),
                 "hasPiiFields": len(config.get("pii_paths", [])) > 0,
                 "requiresSignatures": config.get("requires_signatures", False),
+                "_source": config.get("_source", "file"),
+                "_dynamodb_item": config.get("_dynamodb_item"),
             }
         return {"plugins": result, "count": len(result)}
     except (ImportError, Exception) as e:
@@ -601,26 +603,95 @@ def create_plugin_config(body: dict[str, Any], user: Any) -> dict[str, Any]:
     return {"pluginId": plugin_id, "version": "v1", "status": "DRAFT"}
 
 
+def _extract_fields_from_plugin(plugin_config: dict) -> list[dict]:
+    """Extract FieldDef list from a file-based plugin config for the editor."""
+    fields = []
+    output_schema = plugin_config.get("output_schema", {})
+    properties = output_schema.get("properties", {})
+    for _section_key, section_schema in properties.items():
+        if isinstance(section_schema, dict) and "properties" in section_schema:
+            for field_key, field_schema in section_schema.get("properties", {}).items():
+                schema_type = field_schema.get("type", "string")
+                if schema_type in ("number", "integer"):
+                    field_type = "number"
+                elif schema_type == "boolean":
+                    field_type = "boolean"
+                else:
+                    field_type = "string"
+                fields.append({
+                    "name": field_key,
+                    "label": field_schema.get("description", field_key),
+                    "type": field_type,
+                    "query": "",
+                })
+    return fields
+
+
 def get_plugin_config(plugin_id: str) -> dict[str, Any]:
-    """Get a plugin config with all versions."""
+    """Get a plugin config with all versions.
+
+    Returns DynamoDB versions if they exist. For file-based plugins with no
+    DynamoDB entry, returns a synthetic version so the editor can populate
+    and allow editing (first save creates a DynamoDB override).
+    """
     table = dynamodb.Table(PLUGIN_CONFIGS_TABLE)
     result = table.query(
         KeyConditionExpression=boto3.dynamodb.conditions.Key("pluginId").eq(plugin_id),
         ScanIndexForward=False,  # Latest version first
     )
     items = result.get("Items", [])
-    if not items:
-        return {"error": "Plugin not found", "pluginId": plugin_id}
-    return {
-        "pluginId": plugin_id,
-        "versions": items,
-        "latestVersion": items[0].get("version"),
-        "latestStatus": items[0].get("status"),
-    }
+    if items:
+        return {
+            "pluginId": plugin_id,
+            "versions": items,
+            "latestVersion": items[0].get("version"),
+            "latestStatus": items[0].get("status"),
+        }
+
+    # Not in DynamoDB — try file-based registry and return synthetic version
+    # with the FULL extraction pipeline config so edits preserve sections/queries
+    try:
+        from document_plugins.registry import get_plugin
+        file_config = get_plugin(plugin_id)
+
+        # Deep copy the full config, removing internal registry metadata
+        full_config = copy.deepcopy(file_config)
+        for k in ("_source", "_version", "_dynamodb_item", "_prompt_template_text"):
+            full_config.pop(k, None)
+
+        # Add wizard-friendly fields for the editor UI (in addition to the full config)
+        full_config["fields"] = _extract_fields_from_plugin(file_config)
+        full_config["keywords"] = file_config.get("classification", {}).get("keywords", [])
+        full_config["promptRules"] = []
+
+        synthetic_version = {
+            "pluginId": plugin_id,
+            "version": "file",
+            "status": "PUBLISHED",
+            "name": file_config.get("name", plugin_id),
+            "description": file_config.get("description", ""),
+            "config": _convert_floats_to_decimal(full_config),
+            "_source": "file",
+        }
+        return {
+            "pluginId": plugin_id,
+            "versions": [synthetic_version],
+            "latestVersion": "file",
+            "latestStatus": "PUBLISHED",
+            "_source": "file",
+        }
+    except (KeyError, ImportError):
+        pass
+
+    return {"error": "Plugin not found", "pluginId": plugin_id}
 
 
 def update_plugin_config(plugin_id: str, body: dict[str, Any], user: Any) -> dict[str, Any]:
-    """Update a draft plugin configuration (creates new version if published)."""
+    """Update a draft plugin configuration (creates new version if published).
+
+    If no DynamoDB entry exists (file-based plugin being edited for the first
+    time), creates a new v1 DRAFT entry as a customized override.
+    """
     table = dynamodb.Table(PLUGIN_CONFIGS_TABLE)
     timestamp = datetime.utcnow().isoformat() + "Z"
 
@@ -632,7 +703,22 @@ def update_plugin_config(plugin_id: str, body: dict[str, Any], user: Any) -> dic
     )
     items = result.get("Items", [])
     if not items:
-        return {"error": "Plugin not found"}
+        # First edit of a file-based plugin — create DynamoDB override entry
+        item = {
+            "pluginId": plugin_id,
+            "version": "v1",
+            "status": "DRAFT",
+            "name": body.get("name", plugin_id),
+            "description": body.get("description", ""),
+            "config": _convert_floats_to_decimal(body.get("config", {})),
+            "promptTemplate": body.get("promptTemplate", ""),
+            "createdBy": getattr(user, 'email', 'unknown') if user else 'unknown',
+            "createdAt": timestamp,
+            "updatedAt": timestamp,
+            "testResults": [],
+        }
+        table.put_item(Item=item)
+        return {"pluginId": plugin_id, "version": "v1", "status": "DRAFT", "created": True}
 
     latest = items[0]
     current_version = latest["version"]
@@ -734,12 +820,16 @@ def publish_plugin_config(plugin_id: str, user: Any) -> dict[str, Any]:
 
 
 def delete_plugin_config(plugin_id: str) -> dict[str, Any]:
-    """Delete all versions of a dynamic plugin (cannot delete file-based)."""
+    """Delete DynamoDB overrides for a plugin.
+
+    For plugins with a file-based baseline, this reverts to the original
+    built-in defaults. For purely dynamic plugins, this deletes permanently.
+    """
+    has_file_source = False
     try:
         from document_plugins.registry import get_plugin
         existing = get_plugin(plugin_id)
-        if existing.get("_source") == "file":
-            return {"error": "Cannot delete file-based plugin"}
+        has_file_source = existing.get("_source") == "file"
     except (KeyError, ImportError):
         pass
 
@@ -747,12 +837,18 @@ def delete_plugin_config(plugin_id: str) -> dict[str, Any]:
     result = table.query(
         KeyConditionExpression=boto3.dynamodb.conditions.Key("pluginId").eq(plugin_id),
     )
+    items = result.get("Items", [])
+
+    if not items and has_file_source:
+        return {"error": "No customizations to delete — plugin uses built-in defaults"}
+
     deleted = 0
-    for item in result.get("Items", []):
+    for item in items:
         table.delete_item(Key={"pluginId": plugin_id, "version": item["version"]})
         deleted += 1
 
-    return {"pluginId": plugin_id, "deletedVersions": deleted}
+    message = "Reverted to built-in defaults" if has_file_source else "Plugin deleted"
+    return {"pluginId": plugin_id, "deletedVersions": deleted, "message": message}
 
 
 def analyze_sample_document(body: dict[str, Any]) -> dict[str, Any]:
@@ -931,11 +1027,23 @@ Return ONLY valid JSON."""
         return {"error": f"AI generation failed: {str(e)}"}
 
 
+def _deep_merge_configs(base: dict, override: dict) -> dict:
+    """Deep merge override into base. Override values win on conflict."""
+    result = copy.deepcopy(base)
+    for key, value in override.items():
+        if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+            result[key] = _deep_merge_configs(result[key], value)
+        else:
+            result[key] = copy.deepcopy(value) if isinstance(value, (dict, list)) else value
+    return result
+
+
 def refine_plugin_config(body: dict[str, Any]) -> dict[str, Any]:
     """Use Claude to refine a plugin config based on a plain-English instruction.
 
-    Takes the current config and user instruction, returns an updated config
-    with the requested changes applied.
+    For large configs (full extraction pipeline configs), uses a diff-based approach:
+    the LLM returns only the changed/added parts, which are deep-merged into the
+    original config. This avoids the LLM having to reproduce the entire config.
     """
     current_config = body.get("config", {})
     instruction = body.get("instruction", "").strip()
@@ -947,8 +1055,35 @@ def refine_plugin_config(body: dict[str, Any]) -> dict[str, Any]:
 
     # Serialize current config for the prompt
     config_json = json.dumps(current_config, indent=2, default=str)
+    is_large_config = len(config_json) > 5000
 
-    prompt = f"""You are an expert at configuring document extraction pipelines.
+    if is_large_config:
+        prompt = f"""You are an expert at configuring document extraction pipelines.
+
+Below is the current plugin configuration for a document type. The user wants to modify it.
+
+CURRENT CONFIGURATION:
+```json
+{config_json}
+```
+
+USER INSTRUCTION:
+{instruction}
+
+IMPORTANT: This config is large. Return ONLY the JSON keys/sections that need to change or be added.
+The response will be deep-merged into the original config, so:
+- Include only changed/new top-level keys and their complete values
+- For nested objects like "sections", "output_schema": include the full subtree that changed
+- For arrays like "fields": include the COMPLETE updated array (not partial)
+- Do NOT include unchanged keys — they will be preserved from the original
+
+For new fields in the "fields" array: use camelCase "name", descriptive "label", appropriate "type" (string|number|date|boolean|currency), and a Textract "query" question.
+For new Textract queries in "sections.*.queries": add the query string to the section's queries array.
+For new schema fields in "output_schema": add them to the appropriate section's properties.
+
+Return ONLY valid JSON with the changed parts — no explanation, no markdown fences."""
+    else:
+        prompt = f"""You are an expert at configuring document extraction pipelines.
 
 Below is the current plugin configuration for a document type. The user wants to modify it.
 
@@ -978,7 +1113,7 @@ Return ONLY valid JSON — no explanation, no markdown fences."""
             accept="application/json",
             body=json.dumps({
                 "anthropic_version": "bedrock-2023-05-31",
-                "max_tokens": 4096,
+                "max_tokens": 8192,
                 "temperature": 0,
                 "messages": [{"role": "user", "content": prompt}],
             }),
@@ -992,7 +1127,13 @@ Return ONLY valid JSON — no explanation, no markdown fences."""
         elif "```" in content:
             content = content.split("```")[1].split("```")[0]
 
-        updated = json.loads(content.strip())
+        changes = json.loads(content.strip())
+
+        # For large configs, deep-merge the changes into the original
+        if is_large_config:
+            updated = _deep_merge_configs(current_config, changes)
+        else:
+            updated = changes
 
         usage = response_body.get("usage", {})
         updated["_refinement"] = {

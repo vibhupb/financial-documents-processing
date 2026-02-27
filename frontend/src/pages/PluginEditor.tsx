@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
   ArrowLeft, Save, Loader2, AlertCircle, Trash2, Rocket,
-  Pencil, Eye, Plus, X, Tag, FileText, Settings, BookOpen,
+  Pencil, Plus, X, Tag, FileText, Settings, BookOpen,
 } from 'lucide-react';
 import clsx from 'clsx';
 import { api } from '../services/api';
@@ -43,6 +43,8 @@ export default function PluginEditor() {
   const [keywords, setKeywords] = useState('');
   const [fields, setFields] = useState<FieldDef[]>([]);
   const [promptRules, setPromptRules] = useState<string[]>([]);
+  // Full config (preserves extraction pipeline config: sections, classification, etc.)
+  const [fullConfig, setFullConfig] = useState<Record<string, any>>({});
 
   // Actions
   const [saving, setSaving] = useState(false);
@@ -60,24 +62,12 @@ export default function PluginEditor() {
     setLoading(true);
     setError('');
     try {
-      // Try DynamoDB-based plugin first
       const data = await api.getPluginConfig(pluginId!);
       if (data.error) {
-        // Might be a file-based plugin — load from registry
-        const registry = await api.getPlugins();
-        const filePlugin = registry.plugins?.[pluginId!];
-        if (filePlugin) {
-          setIsFilePlugin(true);
-          setName(filePlugin.name || pluginId!);
-          setDescription(filePlugin.description || '');
-          setKeywords((filePlugin.classification?.keywords || []).join(', '));
-          setFields(extractFieldsFromSchema(filePlugin.outputSchema));
-          setVersions([]);
-          setLatest(null);
-        } else {
-          setError(`Plugin "${pluginId}" not found`);
-        }
+        setError(`Plugin "${pluginId}" not found`);
       } else {
+        // API returns versions for both DynamoDB and file-based plugins
+        setIsFilePlugin(data._source === 'file');
         setVersions(data.versions || []);
         const latestVer = data.versions?.[0];
         setLatest(latestVer || null);
@@ -94,41 +84,30 @@ export default function PluginEditor() {
 
   function populateFromVersion(ver: PluginVersion) {
     const config = ver.config || {};
+    setFullConfig(config);
     setName(ver.name || config.name || '');
     setDescription(ver.description || config.description || '');
-    setKeywords((config.keywords || []).join(', '));
+    setKeywords((config.keywords || config.classification?.keywords || []).join(', '));
     setFields(config.fields || []);
     setPromptRules(config.promptRules || []);
     setDirty(false);
   }
 
-  function extractFieldsFromSchema(schema: any): FieldDef[] {
-    if (!schema?.properties) return [];
-    const result: FieldDef[] = [];
-    for (const [, section] of Object.entries(schema.properties) as [string, any][]) {
-      if (section?.properties) {
-        for (const [fieldKey, field] of Object.entries(section.properties) as [string, any][]) {
-          result.push({
-            name: fieldKey,
-            label: field.description || fieldKey,
-            type: mapSchemaType(field.type),
-            query: '',
-          });
-        }
-      }
-    }
-    return result;
-  }
-
-  function mapSchemaType(t: string): FieldDef['type'] {
-    if (t === 'number' || t === 'integer') return 'number';
-    if (t === 'boolean') return 'boolean';
-    return 'string';
-  }
-
   function markDirty() {
     if (!dirty) setDirty(true);
     if (successMsg) setSuccessMsg('');
+  }
+
+  /** Build the config for save — overlays wizard edits onto the full extraction config. */
+  function buildSaveConfig() {
+    return {
+      ...fullConfig,
+      name,
+      description,
+      keywords: keywords.split(',').map((k) => k.trim()).filter(Boolean),
+      fields,
+      promptRules,
+    };
   }
 
   // --- Save ---
@@ -137,13 +116,7 @@ export default function PluginEditor() {
     setError('');
     setSuccessMsg('');
     try {
-      const config = {
-        name,
-        description,
-        keywords: keywords.split(',').map((k) => k.trim()).filter(Boolean),
-        fields,
-        promptRules,
-      };
+      const config = buildSaveConfig();
       await api.updatePluginConfig(pluginId!, { name, description, config });
       setDirty(false);
       setSuccessMsg('Changes saved');
@@ -164,13 +137,7 @@ export default function PluginEditor() {
     try {
       // Save first if dirty
       if (dirty) {
-        const config = {
-          name,
-          description,
-          keywords: keywords.split(',').map((k) => k.trim()).filter(Boolean),
-          fields,
-          promptRules,
-        };
+        const config = buildSaveConfig();
         await api.updatePluginConfig(pluginId!, { name, description, config });
       }
       await api.publishPlugin(pluginId!);
@@ -197,7 +164,7 @@ export default function PluginEditor() {
     }
   }
 
-  const isEditable = !isFilePlugin;
+  const isEditable = true; // All plugins are editable — file-based plugins get a DynamoDB override on save
   const isDraft = latest?.status === 'DRAFT';
 
   const tabs: { id: EditorTab; label: string; icon: typeof Settings }[] = [
@@ -225,7 +192,7 @@ export default function PluginEditor() {
         <div className="flex-1">
           <div className="flex items-center gap-3">
             <h1 className="text-2xl font-bold text-gray-900">
-              {isFilePlugin ? <Eye className="w-5 h-5 inline mr-2 text-gray-400" /> : <Pencil className="w-5 h-5 inline mr-2 text-primary-600" />}
+              <Pencil className="w-5 h-5 inline mr-2 text-primary-600" />
               {name || pluginId}
             </h1>
             {latest && (
@@ -252,7 +219,7 @@ export default function PluginEditor() {
           <p className="text-sm text-gray-500 mt-0.5">
             <code className="bg-gray-100 px-1.5 py-0.5 rounded text-xs">{pluginId}</code>
             {latest?.version && <span className="ml-2 text-gray-400">({latest.version})</span>}
-            {isFilePlugin && <span className="ml-2">Read-only: file-based plugin</span>}
+            {isFilePlugin && !dirty && <span className="ml-2 text-blue-600">Edits create a customized override</span>}
           </p>
         </div>
 
@@ -454,6 +421,7 @@ export default function PluginEditor() {
           {isEditable && (
             <AiRefineBar
               getConfig={() => ({
+                ...fullConfig,
                 pluginId,
                 name,
                 description,
@@ -462,6 +430,8 @@ export default function PluginEditor() {
                 promptRules,
               })}
               onRefined={(updated) => {
+                // Update full config (preserves sections, classification, etc.)
+                setFullConfig((prev) => ({ ...prev, ...updated }));
                 if (updated.fields) { setFields(updated.fields); markDirty(); }
                 if (updated.promptRules) { setPromptRules(updated.promptRules); markDirty(); }
                 if (updated.keywords) { setKeywords(updated.keywords.join(', ')); markDirty(); }
@@ -535,6 +505,7 @@ export default function PluginEditor() {
           {isEditable && (
             <AiRefineBar
               getConfig={() => ({
+                ...fullConfig,
                 pluginId,
                 name,
                 description,
@@ -543,6 +514,8 @@ export default function PluginEditor() {
                 promptRules,
               })}
               onRefined={(updated) => {
+                // Update full config (preserves sections, classification, etc.)
+                setFullConfig((prev) => ({ ...prev, ...updated }));
                 if (updated.fields) { setFields(updated.fields); markDirty(); }
                 if (updated.promptRules) { setPromptRules(updated.promptRules); markDirty(); }
                 if (updated.keywords) { setKeywords(updated.keywords.join(', ')); markDirty(); }
@@ -580,12 +553,15 @@ export default function PluginEditor() {
               onClick={() => setConfirmDelete(true)}
               className="flex items-center gap-1.5 text-sm text-red-500 hover:text-red-700 font-medium"
             >
-              <Trash2 className="w-4 h-4" /> Delete this plugin
+              <Trash2 className="w-4 h-4" /> {isFilePlugin ? 'Revert to built-in defaults' : 'Delete this plugin'}
             </button>
           ) : (
             <div className="flex items-center gap-3">
               <p className="text-sm text-red-600">
-                This will permanently delete all versions of <strong>{pluginId}</strong>. Are you sure?
+                {isFilePlugin
+                  ? <>This will remove all customizations and revert <strong>{pluginId}</strong> to its built-in defaults. Are you sure?</>
+                  : <>This will permanently delete all versions of <strong>{pluginId}</strong>. Are you sure?</>
+                }
               </p>
               <button
                 onClick={handleDelete}
@@ -593,7 +569,7 @@ export default function PluginEditor() {
                 className="flex items-center gap-1.5 px-3 py-1.5 bg-red-600 text-white rounded-lg text-sm font-medium hover:bg-red-700 disabled:opacity-50"
               >
                 {deleting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
-                Confirm Delete
+                {isFilePlugin ? 'Confirm Revert' : 'Confirm Delete'}
               </button>
               <button
                 onClick={() => setConfirmDelete(false)}

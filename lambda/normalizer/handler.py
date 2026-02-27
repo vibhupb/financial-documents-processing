@@ -88,6 +88,32 @@ def build_normalization_prompt(
     prompt = preamble.replace("{extraction_data}", extraction_json)
     if plugin_template:
         prompt += "\n\n" + plugin_template
+
+    # Inject dynamic fields and prompt rules from admin edits (Plugin Editor).
+    # These are stored in DynamoDB when an admin customizes a plugin, and get
+    # deep-merged into the plugin config via the registry.
+    dynamic_fields = plugin.get("fields", [])
+    prompt_rules = plugin.get("promptRules", [])
+    if dynamic_fields or prompt_rules:
+        prompt += "\n\n=== ADDITIONAL EXTRACTION FIELDS (Admin-Configured) ===\n"
+        prompt += "Extract these additional fields and include them in the output JSON "
+        prompt += "under the appropriate section (or at the top level of loanData if no section matches).\n\n"
+        if dynamic_fields:
+            for field in dynamic_fields:
+                fname = field.get("name", "")
+                ftype = field.get("type", "string")
+                fdesc = field.get("description", "")
+                freq = field.get("required", False)
+                prompt += f"- **{fname}** ({ftype}{'required' if freq else ', optional'})"
+                if fdesc:
+                    prompt += f": {fdesc}"
+                prompt += "\n"
+        if prompt_rules:
+            prompt += "\nAdditional extraction rules:\n"
+            for rule in prompt_rules:
+                prompt += f"- {rule}\n"
+        print(f"[PLUGIN] Injected {len(dynamic_fields)} dynamic fields, {len(prompt_rules)} prompt rules")
+
     prompt += "\n\n" + footer
 
     print(f"Built normalization prompt: {len(prompt)} chars")

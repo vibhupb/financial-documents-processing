@@ -1,14 +1,18 @@
 """Plugin Registry - Dual-source auto-discovery of document type plugins.
 
 Two sources, loaded in order:
-  1. File-based plugins (types/ subpackage) -- immutable baseline, always win on collision
-  2. DynamoDB dynamic plugins (PUBLISHED status) -- created via self-service wizard
+  1. File-based plugins (types/ subpackage) -- baseline defaults
+  2. DynamoDB dynamic plugins (PUBLISHED status) -- override file-based on collision
+
+DynamoDB wins on collision so user edits via Plugin Studio take precedence
+over built-in defaults. File-based plugins serve as the fallback baseline.
 
 Adding a new document type:
   - Developer: create types/{doc}.py + prompts/{doc}.txt (file-based)
   - Analyst: use the plugin builder UI (DynamoDB-backed, no code needed)
 """
 
+import copy
 import importlib
 import json
 import os
@@ -29,8 +33,9 @@ PLUGIN_CONFIGS_TABLE = os.environ.get("PLUGIN_CONFIGS_TABLE", "document-plugin-c
 def _discover_plugins() -> None:
     """Two-phase plugin discovery: files first, then DynamoDB.
 
-    File-based plugins are the immutable baseline. DynamoDB dynamic plugins
-    (PUBLISHED status) are loaded second and cannot override file-based ones.
+    File-based plugins are loaded first as defaults. DynamoDB dynamic plugins
+    (PUBLISHED status) are loaded second and override file-based ones on
+    collision, so user edits via Plugin Studio take precedence.
     """
     global _DISCOVERED
     if _DISCOVERED:
@@ -62,8 +67,29 @@ def _discover_plugins() -> None:
     _DISCOVERED = True
 
 
+def _deep_merge(base: dict, override: dict) -> dict:
+    """Deep merge override into base. Override values win on conflict.
+
+    Preserves nested dicts from base that aren't present in override,
+    so extraction pipeline config (sections, classification, etc.) survives
+    when a DynamoDB edit only contains wizard-level fields.
+    """
+    result = copy.deepcopy(base)
+    for key, value in override.items():
+        if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+            result[key] = _deep_merge(result[key], value)
+        else:
+            result[key] = copy.deepcopy(value)
+    return result
+
+
 def _discover_dynamic_plugins() -> None:
-    """Load PUBLISHED plugins from DynamoDB. File-based plugins always win on collision."""
+    """Load PUBLISHED plugins from DynamoDB. DynamoDB overrides file-based on collision.
+
+    For overrides of file-based plugins, deep-merges DynamoDB edits ON TOP of
+    the file-based baseline so extraction pipeline config (sections, classification,
+    page targeting, Textract features) is preserved while user edits take effect.
+    """
     try:
         import boto3
         from boto3.dynamodb.conditions import Key
@@ -81,15 +107,19 @@ def _discover_dynamic_plugins() -> None:
             if not plugin_id:
                 continue
 
-            # File-based plugins always win
-            if plugin_id in _REGISTRY:
-                if _REGISTRY[plugin_id].get("_source") == "file":
-                    print(f"INFO: Dynamic plugin '{plugin_id}' skipped (file-based plugin takes priority)")
-                    continue
-
             config = item.get("config", {})
             if isinstance(config, str):
                 config = json.loads(config)
+
+            # Deep-merge: preserve file-based extraction pipeline config,
+            # overlay DynamoDB user edits on top
+            if plugin_id in _REGISTRY and _REGISTRY[plugin_id].get("_source") == "file":
+                print(f"INFO: Dynamic plugin '{plugin_id}' overrides file-based default (deep-merge)")
+                file_base = copy.deepcopy(_REGISTRY[plugin_id])
+                # Remove internal metadata before merge
+                for k in ("_source", "_version", "_dynamodb_item", "_prompt_template_text"):
+                    file_base.pop(k, None)
+                config = _deep_merge(file_base, config)
 
             config["_source"] = "dynamic"
             config["_version"] = str(item.get("version", "v1"))

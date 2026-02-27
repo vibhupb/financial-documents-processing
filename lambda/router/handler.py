@@ -1021,13 +1021,12 @@ def identify_sections_generic(
         quality = page.get("text_quality", {})
         is_readable = quality.get("is_readable", True)
 
-        if not page["has_text"] or not is_readable:
-            # Track pages where text extraction failed — need Textract OCR
+        is_low_quality = not page["has_text"] or not is_readable
+        if is_low_quality:
             low_quality_pages.append(page_num)
-            continue
 
         page_index = page_num - 1
-        text_lower = page["snippet"].lower()
+        text_lower = page["snippet"].lower() if not is_low_quality else ""
 
         for section_id, section_config in sections_config.items():
             hints = section_config.get("classification_hints", {})
@@ -1039,7 +1038,16 @@ def identify_sections_generic(
                     section_pages[section_id].append(page_num)
                 continue
 
-            matches = sum(1 for kw in keywords if kw.lower() in text_lower)
+            # Text-based keyword matching (only for readable pages)
+            matches = 0 if is_low_quality else sum(
+                1 for kw in keywords if kw.lower() in text_lower
+            )
+
+            # Bonus rules — position-based rules (last_n_pages, first_n_pages)
+            # work for ALL pages including low-quality ones since they only
+            # need page position, not text content. Text-based bonus rules
+            # (contains_any, contains_all, regex_match) naturally return 0
+            # for empty text, so evaluating all rules is safe.
             bonus = sum(
                 _evaluate_bonus_rule(rule, text_lower, page_index, total_pages)
                 for rule in hints.get("page_bonus_rules", [])
