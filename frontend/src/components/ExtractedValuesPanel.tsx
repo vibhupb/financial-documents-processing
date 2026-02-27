@@ -466,9 +466,9 @@ function PromissoryNoteFields({
   onFieldClick?: (pageNumber: number, fieldName: string) => void;
 }) {
   const formatCurrency = (val: number | undefined) =>
-    val !== undefined ? `$${val.toLocaleString()}` : undefined;
+    val != null ? `$${val.toLocaleString()}` : undefined;
   const formatPercent = (val: number | undefined) =>
-    val !== undefined ? `${(val * 100).toFixed(3)}%` : undefined;
+    val != null ? `${(val * 100).toFixed(3)}%` : undefined;
 
   const defaultPage = data.pageNumber;
 
@@ -536,7 +536,7 @@ function ClosingDisclosureFields({
   onFieldClick?: (pageNumber: number, fieldName: string) => void;
 }) {
   const formatCurrency = (val: number | undefined) =>
-    val !== undefined ? `$${val.toLocaleString()}` : undefined;
+    val != null ? `$${val.toLocaleString()}` : undefined;
 
   const defaultPage = data.pageNumber;
 
@@ -720,7 +720,7 @@ function Form1003Fields({
             <FieldRow
               label="Monthly Income"
               value={
-                getFieldValue(data.employmentInfo.monthlyIncome) !== undefined
+                getFieldValue(data.employmentInfo.monthlyIncome) != null
                   ? `$${getFieldValue(data.employmentInfo.monthlyIncome)!.toLocaleString()}`
                   : undefined
               }
@@ -745,9 +745,9 @@ function CreditAgreementFields({
   onFieldClick?: (pageNumber: number, fieldName: string) => void;
 }) {
   const formatCurrency = (val: number | undefined) =>
-    val !== undefined ? `$${val.toLocaleString()}` : undefined;
+    val != null ? `$${val.toLocaleString()}` : undefined;
   const formatPercent = (val: number | undefined) =>
-    val !== undefined ? `${(val * 100).toFixed(3)}%` : undefined;
+    val != null ? `${(val * 100).toFixed(3)}%` : undefined;
 
   return (
     <div className="space-y-4">
