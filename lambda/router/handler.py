@@ -1130,34 +1130,44 @@ def identify_sections_generic(
                 f"(>= {MIN_PAGES_FOR_SKIP})"
             )
 
-    # SAFETY: If very few pages found and document has many pages,
-    # expand around found pages (±1 page) to capture nearby content
+    # =========================================================================
+    # UNCOVERED PAGES FALLBACK
+    # =========================================================================
+    # When keyword matching covers less than half the readable pages (common
+    # for multi-document packages like "Laser Pro" where middle pages contain
+    # security agreements, guaranties, etc. that don't match section keywords),
+    # add uncovered readable pages to the primary section so Textract extracts
+    # the full content instead of missing the core of the document.
+    # Only applies to smaller documents (<50 pages) to avoid cost blowout
+    # on large credit agreements.
+    # =========================================================================
     all_found_pages = set()
     for pages in section_pages.values():
         all_found_pages.update(pages)
 
-    if len(all_found_pages) < 5 and total_pages > 10 and not low_quality_pages:
-        expanded = set()
-        for pn in all_found_pages:
-            expanded.update(range(max(1, pn - 1), min(total_pages, pn + 1) + 1))
-        new_pages = expanded - all_found_pages
-        if new_pages:
-            cost_budget = plugin.get("cost_budget", {})
-            section_priority = cost_budget.get("section_priority", {})
-            if section_priority:
-                primary_section = min(
-                    section_priority.keys(),
-                    key=lambda s: section_priority[s],
-                )
-            else:
-                primary_section = next(iter(sections_config), None)
-            if primary_section and primary_section in section_pages:
-                existing = set(section_pages[primary_section])
-                section_pages[primary_section] = sorted(existing.union(new_pages))
-                print(
-                    f"[GenericSections] Expanded {len(new_pages)} adjacent "
-                    f"pages into '{primary_section}'"
-                )
+    readable_pages = set(range(1, total_pages + 1)) - set(low_quality_pages)
+    uncovered = readable_pages - all_found_pages
+    coverage_ratio = len(all_found_pages) / max(total_pages, 1)
+
+    if uncovered and coverage_ratio < 0.5 and total_pages <= 50:
+        cost_budget = plugin.get("cost_budget", {})
+        section_priority = cost_budget.get("section_priority", {})
+        if section_priority:
+            primary_section = min(
+                section_priority.keys(),
+                key=lambda s: section_priority[s],
+            )
+        else:
+            primary_section = next(iter(sections_config), None)
+        if primary_section and primary_section in section_pages:
+            existing = set(section_pages[primary_section])
+            section_pages[primary_section] = sorted(existing.union(uncovered))
+            print(
+                f"[GenericSections] Uncovered pages fallback: added "
+                f"{len(uncovered)} uncovered readable pages to "
+                f"'{primary_section}' (coverage was {coverage_ratio:.0%}, "
+                f"{len(all_found_pages)}/{total_pages} pages)"
+            )
 
     # =========================================================================
     # CROSS-SECTION PAGE DEDUPLICATION

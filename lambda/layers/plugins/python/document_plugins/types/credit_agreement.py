@@ -794,6 +794,67 @@ PLUGIN_CONFIG: DocumentPluginConfig = {
                 "agencyFee",
             ],
         },
+
+        # ==============================================================
+        # Signatures (last pages of the document)
+        # ==============================================================
+        "signatures": {
+            "name": "Signatures",
+            "description": (
+                "Signature blocks, execution dates, witnesses, and "
+                "notarizations on the last pages of the agreement."
+            ),
+            "max_pages": 10,
+            "classification_hints": {
+                "keywords": [
+                    "signature", "signed", "executed", "witness",
+                    "notary", "acknowledged", "sworn",
+                    "in witness whereof", "intending to be legally bound",
+                    "duly authorized",
+                    "dated as of", "effective as of",
+                    "by:", "name:", "title:", "date:",
+                ],
+                "min_keyword_matches": 3,
+                "max_pages": 10,
+                "typical_pages": "last 5-10 pages with signatures",
+                "search_last_pages": True,
+                "page_bonus_rules": [
+                    {"condition": "last_n_pages", "patterns": ["10"], "bonus": 10},
+                    {"condition": "last_n_pages", "patterns": ["15"], "bonus": 5},
+                    {
+                        "condition": "contains_any",
+                        "patterns": ["in witness whereof", "witness whereof"],
+                        "bonus": 5,
+                    },
+                    {
+                        "condition": "contains_any",
+                        "patterns": ["by:", "name:", "title:"],
+                        "bonus": 3,
+                    },
+                ],
+            },
+            "textract_features": ["QUERIES"],
+            "queries": [
+                "Who signed this document as Borrower?",
+                "Who signed this document as Administrative Agent?",
+                "Who signed as Lender and what is their commitment amount?",
+                "What date was this document executed or signed?",
+                "What is the title of each signatory?",
+                "Who is the witness or notary?",
+            ],
+            "include_pypdf_text": False,
+            "render_as_images": True,
+            "render_dpi": 150,
+            "low_quality_fallback": False,
+            "parallel_extraction": False,
+            "extract_tables": False,
+            "extract_signatures": True,
+            "extraction_fields": [
+                "signature_detected", "execution_date",
+                "borrower_signatory", "agent_signatory",
+                "lender_signatories",
+            ],
+        },
     },
 
     # ------------------------------------------------------------------
@@ -915,6 +976,7 @@ PLUGIN_CONFIG: DocumentPluginConfig = {
             "fees": 5,
             "covenants": 6,
             "definitions": 7,
+            "signatures": 8,
         },
     },
 
@@ -923,7 +985,7 @@ PLUGIN_CONFIG: DocumentPluginConfig = {
     # ------------------------------------------------------------------
     "supports_deduplication": True,
     "supports_review_workflow": True,
-    "requires_signatures": False,
+    "requires_signatures": True,
 
     # ------------------------------------------------------------------
     # Legacy mappings for backward compatibility
