@@ -56,7 +56,12 @@ def bedrock_converse(
                 messages=messages,
                 inferenceConfig={"temperature": 0, "maxTokens": max_tokens},
             )
-            return response["output"]["message"]["content"][0]["text"]
+            text = response["output"]["message"]["content"][0]["text"]
+            usage = response.get("usage", {})
+            print(f"[LLM] OK: {usage.get('inputTokens', '?')} in, "
+                  f"{usage.get('outputTokens', '?')} out, "
+                  f"model={model}")
+            return text
         except Exception as e:
             print(f"[LLM] Attempt {attempt + 1}/{MAX_RETRIES} failed: {e}")
             if attempt < MAX_RETRIES - 1:

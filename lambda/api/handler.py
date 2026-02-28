@@ -221,7 +221,19 @@ def get_document(document_id: str) -> dict[str, Any]:
     if not items:
         return {"error": "Document not found", "documentId": document_id}
 
-    return {"document": items[0]}
+    doc = items[0]
+
+    # Load PageIndex tree from S3 if stored as reference (large trees)
+    if not doc.get("pageIndexTree") and doc.get("pageIndexTreeS3Key"):
+        try:
+            resp = s3_client.get_object(
+                Bucket=BUCKET_NAME, Key=doc["pageIndexTreeS3Key"]
+            )
+            doc["pageIndexTree"] = json.loads(resp["Body"].read().decode("utf-8"))
+        except Exception:
+            pass  # Non-critical — tree just won't be available
+
+    return {"document": doc}
 
 
 def get_document_audit(document_id: str) -> dict[str, Any]:
@@ -1165,13 +1177,28 @@ Return ONLY valid JSON — no explanation, no markdown fences."""
 # ---------------------------------------------------------------------------
 
 def get_document_tree(document_id: str) -> dict[str, Any]:
-    """GET /documents/{id}/tree — return cached PageIndex tree."""
+    """GET /documents/{id}/tree — return cached PageIndex tree.
+
+    Tree may be stored inline in DynamoDB or in S3 (for large trees).
+    """
     table = dynamodb.Table(TABLE_NAME)
     doc = _get_document_item(table, document_id)
     if not doc:
         return {"error": "Document not found"}
 
     tree = doc.get("pageIndexTree")
+
+    # Check if tree is stored in S3 (large trees exceed DynamoDB 400KB limit)
+    if not tree:
+        s3_key = doc.get("pageIndexTreeS3Key")
+        if s3_key:
+            try:
+                s3 = boto3.client("s3")
+                resp = s3.get_object(Bucket=BUCKET_NAME, Key=s3_key)
+                tree = json.loads(resp["Body"].read().decode("utf-8"))
+            except Exception as e:
+                print(f"Failed to load tree from S3: {e}")
+
     if not tree:
         return {
             "documentId": document_id,
@@ -1183,7 +1210,7 @@ def get_document_tree(document_id: str) -> dict[str, Any]:
         "documentId": document_id,
         "documentType": doc.get("documentType"),
         "status": doc.get("status"),
-        "pageIndexTree": convert_decimals(tree),
+        "pageIndexTree": tree,
     }
 
 
@@ -1218,7 +1245,7 @@ def trigger_document_extraction(document_id: str) -> dict[str, Any]:
         "contentHash": doc.get("contentHash", ""),
         "size": doc.get("fileSize", 0),
         "processingMode": "extract",
-        "pageIndexTree": convert_decimals(tree) if tree else None,
+        "pageIndexTree": tree if tree else None,
         "pluginId": plugin_id,
         "source": "deferred-extraction",
     }
@@ -1287,7 +1314,7 @@ def ask_document(document_id: str, body: dict[str, Any]) -> dict[str, Any]:
 
         # Step 1: Navigate tree to find relevant nodes
         tree_structure = json.dumps(
-            convert_decimals(tree["structure"]), default=str
+            tree["structure"], default=str
         )
         nav_prompt = (
             "You are given a query and a document's hierarchical tree structure. "

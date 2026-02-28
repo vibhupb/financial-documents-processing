@@ -2607,6 +2607,9 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             },
         }
 
+        # Default has_sections to False; overridden below when plugin has sections
+        result["classification"]["has_sections"] = False
+
         # ============================================================
         # Plugin-driven extraction plan
         # When ROUTER_OUTPUT_FORMAT=dual, emit extractionPlan for the Map state.
@@ -2621,6 +2624,15 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 if plugin:
                     plugin_id = plugin["plugin_id"]
                     plugin_cls = plugin.get("classification", {})
+
+                    # Propagate has_sections flag into classification for Step Functions routing
+                    # PageIndexRouteChoice checks $.classification.has_sections to decide
+                    # whether to build PageIndex tree (unstructured docs) or skip (forms)
+                    has_sections = bool(
+                        plugin_cls.get("has_sections")
+                        or (plugin.get("sections") and not plugin_cls.get("target_all_pages"))
+                    )
+                    result["classification"]["has_sections"] = has_sections
 
                     # Build section pages based on plugin type
                     if plugin_cls.get("target_all_pages"):

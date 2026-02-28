@@ -96,13 +96,13 @@ def extract_page_texts(pdf_bytes: bytes) -> list[dict]:
 
 
 def _extract_with_pypdf(pdf_bytes: bytes) -> list[str]:
-    """Extract text using PyPDF2."""
+    """Extract text using pypdf."""
     try:
-        from PyPDF2 import PdfReader
+        from pypdf import PdfReader
         reader = PdfReader(BytesIO(pdf_bytes))
         return [page.extract_text() or "" for page in reader.pages]
     except Exception as e:
-        print(f"[PageIndex] PyPDF2 extraction failed: {e}")
+        print(f"[PageIndex] pypdf extraction failed: {e}")
         return []
 
 
@@ -350,12 +350,20 @@ def generate_structure_no_toc(
                 previous=prev_json, text=group_text
             )
 
-        result, _ = bedrock_converse_with_stop(prompt, model=model)
+        result, finish_status = bedrock_converse_with_stop(prompt, model=model)
+        if not result or result == "Error":
+            print(f"[PageIndex] Structure group {i + 1}/{len(groups)}: "
+                  f"LLM returned error/empty")
+            continue
         parsed = extract_json(result)
         if isinstance(parsed, list):
             all_entries.extend(parsed)
+        else:
+            print(f"[PageIndex] Structure group {i + 1}/{len(groups)}: "
+                  f"Failed to parse JSON from response "
+                  f"(first 300 chars): {result[:300]}")
         print(f"[PageIndex] Structure group {i + 1}/{len(groups)}: "
-              f"{len(parsed or [])} entries")
+              f"{len(parsed or [])} entries (finish={finish_status})")
 
     return all_entries if all_entries else None
 

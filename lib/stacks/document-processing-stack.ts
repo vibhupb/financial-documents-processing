@@ -1087,72 +1087,12 @@ export class DocumentProcessingStack extends cdk.Stack {
 
     const apiIntegration = new apigateway.LambdaIntegration(apiLambda);
 
-    // API Routes
-    const documentsResource = api.root.addResource('documents');
-    documentsResource.addMethod('GET', apiIntegration);
-
-    const documentByIdResource = documentsResource.addResource('{documentId}');
-    documentByIdResource.addMethod('GET', apiIntegration);
-
-    const documentAuditResource = documentByIdResource.addResource('audit');
-    documentAuditResource.addMethod('GET', apiIntegration);
-
-    const documentStatusResource = documentByIdResource.addResource('status');
-    documentStatusResource.addMethod('GET', apiIntegration);
-
-    const documentPdfResource = documentByIdResource.addResource('pdf');
-    documentPdfResource.addMethod('GET', apiIntegration);
-
-    // Document correction and reprocessing routes
-    const documentFieldsResource = documentByIdResource.addResource('fields');
-    documentFieldsResource.addMethod('PUT', apiIntegration);
-
-    const documentReprocessResource = documentByIdResource.addResource('reprocess');
-    documentReprocessResource.addMethod('POST', apiIntegration);
-
-    const uploadResource = api.root.addResource('upload');
-    uploadResource.addMethod('POST', apiIntegration);
-
-    const metricsResource = api.root.addResource('metrics');
-    metricsResource.addMethod('GET', apiIntegration);
-
-    // Plugin registry + config builder (CRUD for self-service plugin creation)
-    const pluginsResource = api.root.addResource('plugins');
-    pluginsResource.addMethod('GET', apiIntegration);   // List all plugins (file + dynamic)
-    pluginsResource.addMethod('POST', apiIntegration);  // Create draft plugin config
-
-    const pluginByIdResource = pluginsResource.addResource('{pluginId}');
-    pluginByIdResource.addMethod('GET', apiIntegration);    // Get plugin config with versions
-    pluginByIdResource.addMethod('PUT', apiIntegration);    // Update draft config
-    pluginByIdResource.addMethod('DELETE', apiIntegration); // Delete dynamic plugin
-
-    const pluginPublishResource = pluginByIdResource.addResource('publish');
-    pluginPublishResource.addMethod('POST', apiIntegration); // Publish for production
-
-    const pluginAnalyzeResource = pluginsResource.addResource('analyze');
-    pluginAnalyzeResource.addMethod('POST', apiIntegration); // Analyze sample document
-
-    const pluginGenerateResource = pluginsResource.addResource('generate');
-    pluginGenerateResource.addMethod('POST', apiIntegration); // AI-generate plugin config
-
-    const pluginRefineResource = pluginsResource.addResource('refine');
-    pluginRefineResource.addMethod('POST', apiIntegration); // AI-refine plugin config from instruction
-
-    const pluginTestResource = pluginByIdResource.addResource('test');
-    pluginTestResource.addMethod('POST', apiIntegration); // Run test on sample document
-
-    // Review workflow routes
-    const reviewResource = api.root.addResource('review');
-    reviewResource.addMethod('GET', apiIntegration);  // List review queue
-
-    const reviewByIdResource = reviewResource.addResource('{documentId}');
-    reviewByIdResource.addMethod('GET', apiIntegration);  // Get document for review
-
-    const reviewApproveResource = reviewByIdResource.addResource('approve');
-    reviewApproveResource.addMethod('POST', apiIntegration);  // Approve document
-
-    const reviewRejectResource = reviewByIdResource.addResource('reject');
-    reviewRejectResource.addMethod('POST', apiIntegration);  // Reject document
+    // API Routes — single proxy catches all paths to stay within Lambda
+    // policy size limits (20KB). The Lambda handler does its own routing.
+    api.root.addProxy({
+      defaultIntegration: apiIntegration,
+      anyMethod: true,
+    });
 
     // ==========================================
     // CloudFront Distribution for Frontend

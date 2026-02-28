@@ -54,7 +54,7 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     except Exception as e:
         print(f"[PageIndex] Failed to download PDF: {e}")
         _update_status(document_id, "INDEXING", f"PageIndex failed: {e}")
-        return {**event, "pageIndexTree": None, "pageIndexCost": _zero_cost()}
+        return {**event, "hasPageIndexTree": False, "pageIndexCost": _zero_cost()}
 
     # Get plugin-specific PageIndex config
     pi_config = _get_page_index_config(event)
@@ -74,15 +74,15 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     except Exception as e:
         print(f"[PageIndex] Tree build failed: {e}")
         _update_status(document_id, "INDEXING", f"PageIndex failed: {e}")
-        return {**event, "pageIndexTree": None, "pageIndexCost": _zero_cost()}
+        return {**event, "hasPageIndexTree": False, "pageIndexCost": _zero_cost()}
 
     elapsed = time.time() - start_time
 
-    # Store tree in DynamoDB
-    _store_tree(document_id, tree)
-
-    # Store tree in S3 audit trail
+    # Store tree in S3 first (no size limit)
     _store_audit(bucket, document_id, tree)
+
+    # Store tree in DynamoDB (may fail for large trees > 400KB)
+    _store_tree(document_id, tree, bucket)
 
     # Record completion
     node_count = _count_nodes(tree.get("structure", []))
@@ -98,11 +98,17 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     print(f"[PageIndex] Complete: {node_count} nodes, "
           f"~${cost.get('cost', 0):.3f}, {elapsed:.1f}s")
 
-    # Return tree + cost merged into Step Functions state
+    # Return lightweight reference — full tree is in DynamoDB + S3.
+    # Avoids Step Functions 256KB payload limit for large documents.
     return {
         **event,
-        "pageIndexTree": tree,
+        "hasPageIndexTree": True,
         "pageIndexCost": cost,
+        "pageIndexStats": {
+            "nodeCount": node_count,
+            "totalPages": tree.get("total_pages", 0),
+            "buildSeconds": round(elapsed, 1),
+        },
     }
 
 
@@ -125,49 +131,64 @@ def _get_page_index_config(event: dict) -> dict:
     return pi_config
 
 
-def _store_tree(document_id: str, tree: dict) -> None:
-    """Store PageIndex tree in DynamoDB document record."""
-    try:
-        # Use update_item to add tree to existing record
-        table.update_item(
-            Key={"documentId": document_id, "documentType": "PROCESSING"},
-            UpdateExpression=(
-                "SET pageIndexTree = :tree, "
-                "updatedAt = :now"
-            ),
-            ExpressionAttributeValues={
-                ":tree": _sanitize_for_dynamo(tree),
-                ":now": datetime.now(timezone.utc).isoformat(),
-            },
+def _store_tree(document_id: str, tree: dict, bucket: str) -> None:
+    """Store PageIndex tree in DynamoDB document record.
+
+    If the tree exceeds DynamoDB's 400KB item limit, stores a reference
+    to S3 (pageIndexTreeS3Key) instead of the full tree inline.
+    """
+    sanitized = _sanitize_for_dynamo(tree)
+
+    # Estimate serialized size (rough — DynamoDB attribute overhead ~100 bytes)
+    tree_json = json.dumps(sanitized, default=str)
+    tree_size = len(tree_json.encode("utf-8"))
+    print(f"[PageIndex] Tree JSON size: {tree_size:,} bytes")
+
+    # DynamoDB has 400KB item limit; leave room for other attributes
+    if tree_size > 350_000:
+        print(f"[PageIndex] Tree too large for DynamoDB ({tree_size:,} bytes), "
+              f"storing S3 reference")
+        update_expr = (
+            "SET pageIndexTreeS3Key = :s3key, "
+            "updatedAt = :now"
         )
+        attr_values = {
+            ":s3key": f"audit/{document_id}/pageindex-tree.json",
+            ":now": datetime.now(timezone.utc).isoformat(),
+        }
+    else:
+        update_expr = (
+            "SET pageIndexTree = :tree, "
+            "updatedAt = :now"
+        )
+        attr_values = {
+            ":tree": sanitized,
+            ":now": datetime.now(timezone.utc).isoformat(),
+        }
+
+    # Find the document record (documentType may be PROCESSING or already classified)
+    try:
+        resp = table.query(
+            KeyConditionExpression="documentId = :did",
+            ExpressionAttributeValues={":did": document_id},
+            Limit=1,
+        )
+        if resp.get("Items"):
+            doc_type = resp["Items"][0]["documentType"]
+        else:
+            doc_type = "PROCESSING"
+    except Exception:
+        doc_type = "PROCESSING"
+
+    try:
+        table.update_item(
+            Key={"documentId": document_id, "documentType": doc_type},
+            UpdateExpression=update_expr,
+            ExpressionAttributeValues=attr_values,
+        )
+        print(f"[PageIndex] Stored tree in DynamoDB (key={doc_type})")
     except Exception as e:
-        # documentType might already be set to the actual type
-        print(f"[PageIndex] DynamoDB update with PROCESSING key failed: {e}")
-        # Try scanning for the document
-        try:
-            resp = table.query(
-                KeyConditionExpression="documentId = :did",
-                ExpressionAttributeValues={":did": document_id},
-                Limit=1,
-            )
-            if resp.get("Items"):
-                item = resp["Items"][0]
-                table.update_item(
-                    Key={
-                        "documentId": document_id,
-                        "documentType": item["documentType"],
-                    },
-                    UpdateExpression=(
-                        "SET pageIndexTree = :tree, "
-                        "updatedAt = :now"
-                    ),
-                    ExpressionAttributeValues={
-                        ":tree": _sanitize_for_dynamo(tree),
-                        ":now": datetime.now(timezone.utc).isoformat(),
-                    },
-                )
-        except Exception as e2:
-            print(f"[PageIndex] DynamoDB fallback update also failed: {e2}")
+        print(f"[PageIndex] DynamoDB update failed: {e}")
 
 
 def _store_audit(bucket: str, document_id: str, tree: dict) -> None:

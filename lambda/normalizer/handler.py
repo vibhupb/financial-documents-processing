@@ -2236,6 +2236,10 @@ def store_to_dynamodb(
 
     timestamp = datetime.utcnow().isoformat() + "Z"
 
+    # Preserve PageIndex data from old record before deletion
+    _preserved_page_index_tree = None
+    _preserved_page_index_s3_key = None
+
     # First, check for and delete any existing PROCESSING record
     # (This handles the transition from PENDING/CLASSIFIED -> PROCESSED)
     try:
@@ -2248,6 +2252,13 @@ def store_to_dynamodb(
         if query_result.get("Items"):
             existing_record = query_result["Items"][0]
             existing_doc_type = existing_record.get("documentType")
+
+            # Preserve PageIndex tree reference from PROCESSING record
+            # (PageIndex Lambda stores this before normalizer transitions record)
+            if existing_record.get("pageIndexTree"):
+                _preserved_page_index_tree = existing_record["pageIndexTree"]
+            elif existing_record.get("pageIndexTreeS3Key"):
+                _preserved_page_index_s3_key = existing_record["pageIndexTreeS3Key"]
 
             # Delete the old record if it has a different documentType (e.g., PROCESSING)
             if existing_doc_type and existing_doc_type != document_type:
@@ -2305,6 +2316,12 @@ def store_to_dynamodb(
     # Add signature validation
     if signature_validation:
         item['signatureValidation'] = convert_floats_to_decimal(signature_validation)
+
+    # Preserve PageIndex tree data from PROCESSING record
+    if _preserved_page_index_tree:
+        item['pageIndexTree'] = _preserved_page_index_tree
+    if _preserved_page_index_s3_key:
+        item['pageIndexTreeS3Key'] = _preserved_page_index_s3_key
 
     table.put_item(Item=item)
     print(f"Stored normalized data to DynamoDB: {document_id} (hash: {content_hash[:16] if content_hash else 'N/A'}...)")
