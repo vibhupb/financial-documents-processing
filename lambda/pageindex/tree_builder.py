@@ -22,6 +22,7 @@ from llm_client import (
     bedrock_converse,
     bedrock_converse_threaded,
     bedrock_converse_with_stop,
+    bedrock_converse_with_stop_threaded,
 )
 from token_counter import count_tokens
 
@@ -122,31 +123,43 @@ def _extract_with_fitz(pdf_bytes: bytes) -> list[str]:
 # ---------------------------------------------------------------------------
 # TOC Detection
 # ---------------------------------------------------------------------------
-TOC_DETECT_PROMPT = """Your job is to detect if there is a table of contents provided in the given text.
-Given text:
-{content}
+BATCH_TOC_DETECT_PROMPT = """Examine each of the following pages and determine which ones contain a Table of Contents (TOC).
 
-Return JSON: {{"thinking": "<your reasoning>", "toc_detected": "<yes or no>"}}
-Note: abstract, summary, notation list, figure list, table list, etc. are not table of contents."""
+A table of contents lists sections/chapters with titles, often with page numbers or section markers.
+Abstract, summary, notation list, figure list, and table list are NOT table of contents.
+
+{pages_content}
+
+Return JSON: {{"toc_pages": [<page numbers that contain a table of contents>]}}
+If none contain a table of contents, return: {{"toc_pages": []}}"""
 
 
 def find_toc_pages(
     pages: list[dict], max_check: int = DEFAULT_TOC_CHECK_PAGES, model: str = ""
 ) -> list[int]:
-    """Scan first N pages for table of contents. Returns list of page numbers."""
-    toc_pages = []
+    """Scan first N pages for table of contents in a single batched LLM call."""
     check_limit = min(max_check, len(pages))
 
+    # Build batched content with page markers
+    pages_content = ""
     for page in pages[:check_limit]:
         if len(page["text"].strip()) < 30:
             continue
-        prompt = TOC_DETECT_PROMPT.format(content=page["text"])
-        result = extract_json(bedrock_converse(prompt, model=model))
-        if result and str(result.get("toc_detected", "")).lower() == "yes":
-            toc_pages.append(page["page_num"])
-            print(f"[PageIndex] TOC detected on page {page['page_num']}")
+        pages_content += f"--- Page {page['page_num']} ---\n{page['text']}\n\n"
 
-    return toc_pages
+    if not pages_content:
+        return []
+
+    prompt = BATCH_TOC_DETECT_PROMPT.format(pages_content=pages_content)
+    result = extract_json(bedrock_converse(prompt, model=model))
+
+    if result and isinstance(result.get("toc_pages"), list):
+        toc_pages = [int(p) for p in result["toc_pages"]]
+        if toc_pages:
+            print(f"[PageIndex] TOC detected on pages: {toc_pages}")
+        return toc_pages
+
+    return []
 
 
 # ---------------------------------------------------------------------------
@@ -240,34 +253,46 @@ def transform_toc_to_json(
 # Page number mapping (TOC with page numbers → physical pages)
 # ---------------------------------------------------------------------------
 def calculate_page_offset(
-    toc_entries: list[dict], pages: list[dict], model: str = ""
-) -> int:
+    toc_entries: list[dict],
+    pages: list[dict],
+    toc_page_nums: list[int] | None = None,
+    model: str = "",
+) -> tuple[int, bool]:
     """Calculate offset between TOC page numbers and physical PDF page indices.
 
-    Some documents have roman-numeral front matter, so page "1" in the TOC
-    might be physical page 5 in the PDF.
+    Returns (offset, confident). If no confident match is found, returns (0, False)
+    so the caller can skip to Mode C instead of using a bad offset.
+
+    IMPORTANT: Excludes TOC pages from the search to avoid matching section titles
+    that appear in the TOC text itself (e.g., "Definitions" on a TOC page).
     """
-    # Find first TOC entry with a page number
-    for entry in toc_entries:
+    skip_pages = set(toc_page_nums or [])
+
+    # Try multiple entries to find a confident match
+    for entry in toc_entries[:10]:
         toc_page = entry.get("page")
         if toc_page is None:
             continue
         toc_page = int(toc_page)
         title = entry.get("title", "")
+        check = title.lower().strip()[:40]
+        if not check:
+            continue
 
-        # Search nearby physical pages for the title
-        for offset in range(-5, 20):
+        # Search physical pages, skipping TOC pages
+        for offset in range(-5, 30):
             phys = toc_page + offset
+            if phys in skip_pages:
+                continue
             if 1 <= phys <= len(pages):
                 page_text = pages[phys - 1]["text"].lower()
-                title_lower = title.lower().strip()
-                # Fuzzy: check if first 40 chars of title appear in page
-                check = title_lower[:40]
-                if check and check in page_text:
+                if check in page_text:
                     print(f"[PageIndex] Page offset: {offset} "
                           f"(TOC page {toc_page} = physical page {phys})")
-                    return offset
-    return 0
+                    return offset, True
+
+    print("[PageIndex] No confident page offset found")
+    return 0, False
 
 
 def apply_page_offset(toc_entries: list[dict], offset: int) -> list[dict]:
@@ -337,20 +362,26 @@ def group_pages_for_llm(pages: list[dict], max_tokens: int = MAX_GROUP_TOKENS) -
 def generate_structure_no_toc(
     pages: list[dict], model: str = ""
 ) -> list[dict] | None:
-    """Generate hierarchical structure when no TOC is found."""
+    """Generate hierarchical structure when no TOC is found.
+
+    All page groups are processed in parallel (independent prompts).
+    The tree builder sorts by physical_index, so numbering continuity
+    between groups isn't needed — each group numbers independently.
+    """
     groups = group_pages_for_llm(pages)
+    if not groups:
+        return None
+
+    # Build independent prompts for all groups
+    prompts = [GENERATE_STRUCTURE_PROMPT.format(text=g) for g in groups]
+
+    print(f"[PageIndex] Generating structure for {len(groups)} groups in parallel")
+    results = bedrock_converse_with_stop_threaded(
+        prompts, model=model, max_tokens=8192
+    )
+
     all_entries: list[dict] = []
-
-    for i, group_text in enumerate(groups):
-        if i == 0:
-            prompt = GENERATE_STRUCTURE_PROMPT.format(text=group_text)
-        else:
-            prev_json = json.dumps(all_entries[-10:])  # last 10 for context
-            prompt = CONTINUE_STRUCTURE_PROMPT.format(
-                previous=prev_json, text=group_text
-            )
-
-        result, finish_status = bedrock_converse_with_stop(prompt, model=model)
+    for i, (result, finish_status) in enumerate(results):
         if not result or result == "Error":
             print(f"[PageIndex] Structure group {i + 1}/{len(groups)}: "
                   f"LLM returned error/empty")
@@ -651,33 +682,57 @@ def subdivide_large_nodes(
     max_tokens: int = DEFAULT_MAX_TOKENS_PER_NODE,
     model: str = "",
 ) -> None:
-    """Recursively split nodes that exceed page/token thresholds."""
+    """Split oversized leaf nodes, processing multiple nodes in parallel."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    # First, recurse into existing children
     for node in nodes:
         if node.get("nodes"):
             subdivide_large_nodes(
                 node["nodes"], pages, max_pages, max_tokens, model
             )
 
+    # Collect leaf nodes that need subdivision
+    to_subdivide: list[dict] = []
+    for node in nodes:
         node_pages = node["end_index"] - node["start_index"] + 1
         node_tokens = sum(
             pages[i]["tokens"]
             for i in range(node["start_index"] - 1, min(node["end_index"], len(pages)))
         )
-
         if (node_pages > max_pages or node_tokens > max_tokens) and not node.get("nodes"):
-            print(f"[PageIndex] Subdividing '{node.get('title', '')}' "
-                  f"({node_pages} pages, {node_tokens} tokens)")
-            sub_pages = pages[node["start_index"] - 1 : node["end_index"]]
-            sub_entries = generate_structure_no_toc(sub_pages, model=model)
-            if sub_entries:
-                # Adjust physical indices to global page numbers
-                offset = node["start_index"] - 1
-                for entry in sub_entries:
-                    if entry.get("physical_index") is not None:
-                        entry["physical_index"] = int(entry["physical_index"]) + offset
-                sub_tree = list_to_tree(sub_entries, node["end_index"])
-                if sub_tree:
-                    node["nodes"] = sub_tree
+            to_subdivide.append(node)
+
+    if not to_subdivide:
+        return
+
+    print(f"[PageIndex] Subdividing {len(to_subdivide)} oversized nodes in parallel")
+
+    def _do_subdivide(node: dict) -> list[dict] | None:
+        np = node["end_index"] - node["start_index"] + 1
+        nt = sum(
+            pages[i]["tokens"]
+            for i in range(node["start_index"] - 1, min(node["end_index"], len(pages)))
+        )
+        print(f"[PageIndex] Subdividing '{node.get('title', '')}' ({np} pages, {nt} tokens)")
+        sub_pages = pages[node["start_index"] - 1 : node["end_index"]]
+        sub_entries = generate_structure_no_toc(sub_pages, model=model)
+        if sub_entries:
+            offset = node["start_index"] - 1
+            for entry in sub_entries:
+                if entry.get("physical_index") is not None:
+                    entry["physical_index"] = int(entry["physical_index"]) + offset
+            sub_tree = list_to_tree(sub_entries, node["end_index"])
+            if sub_tree:
+                return sub_tree
+        return None
+
+    with ThreadPoolExecutor(max_workers=min(len(to_subdivide), 5)) as executor:
+        results = list(executor.map(_do_subdivide, to_subdivide))
+
+    for node, sub_tree in zip(to_subdivide, results):
+        if sub_tree:
+            node["nodes"] = sub_tree
 
 
 # ---------------------------------------------------------------------------
@@ -722,8 +777,15 @@ def build_tree(
             print("[PageIndex] Mode A: TOC with page numbers")
             entries = transform_toc_to_json(toc_content, model=model)
             if entries:
-                offset = calculate_page_offset(entries, pages, model=model)
-                entries = apply_page_offset(entries, offset)
+                offset, confident = calculate_page_offset(
+                    entries, pages, toc_page_nums=toc_pages, model=model
+                )
+                if confident:
+                    entries = apply_page_offset(entries, offset)
+                else:
+                    # Bad offset → go straight to Mode C instead of verifying garbage
+                    print("[PageIndex] Mode A: offset unreliable, falling back to Mode C")
+                    entries = generate_structure_no_toc(pages, model=model)
         else:
             # Mode B: TOC without page numbers
             print("[PageIndex] Mode B: TOC without page numbers")

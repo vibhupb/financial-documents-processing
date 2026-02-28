@@ -16,8 +16,14 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 import boto3
+from botocore.config import Config
 
-bedrock = boto3.client("bedrock-runtime")
+# Connection pool must match max_workers (30) to avoid
+# "Connection pool is full, discarding connection" warnings.
+bedrock = boto3.client(
+    "bedrock-runtime",
+    config=Config(max_pool_connections=50),
+)
 DEFAULT_MODEL = os.environ.get(
     "BEDROCK_MODEL_ID", "us.anthropic.claude-haiku-4-5-20251001-v1:0"
 )
@@ -108,7 +114,7 @@ def bedrock_converse_with_stop(
 def bedrock_converse_threaded(
     prompts: list[str],
     model: str = "",
-    max_workers: int = 10,
+    max_workers: int = 30,
     max_tokens: int = 4096,
 ) -> list[str]:
     """Run multiple LLM calls concurrently using ThreadPoolExecutor.
@@ -120,6 +126,22 @@ def bedrock_converse_threaded(
 
     def _call(prompt: str) -> str:
         return bedrock_converse(prompt, model=model, max_tokens=max_tokens)
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        return list(executor.map(_call, prompts))
+
+
+def bedrock_converse_with_stop_threaded(
+    prompts: list[str],
+    model: str = "",
+    max_workers: int = 30,
+    max_tokens: int = 8192,
+) -> list[tuple[str, str]]:
+    """Run multiple LLM calls concurrently, returning (content, finish_status) tuples."""
+    model = model or DEFAULT_MODEL
+
+    def _call(prompt: str) -> tuple[str, str]:
+        return bedrock_converse_with_stop(prompt, model=model, max_tokens=max_tokens)
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         return list(executor.map(_call, prompts))

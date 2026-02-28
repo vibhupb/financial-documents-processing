@@ -240,7 +240,7 @@ export class DocumentProcessingStack extends cdk.Stack {
       handler: 'handler.lambda_handler',
       code: lambda.Code.fromAsset(path.join(__dirname, '../../lambda/pageindex')),
       layers: [pypdfLayer, pluginsLayer],
-      memorySize: 2048,  // 2GB = 1 vCPU for PDF text extraction + concurrent LLM calls
+      memorySize: 3008,  // 3GB = 2 vCPUs for 30+ concurrent Bedrock threads (I/O-bound)
       timeout: cdk.Duration.minutes(10),  // Large docs (300+ pages) need multiple LLM rounds
       environment: {
         BUCKET_NAME: documentBucket.bucketName,
@@ -904,55 +904,66 @@ export class DocumentProcessingStack extends cdk.Stack {
       .otherwise(legacyDocumentTypeChoice);
 
     // ==========================================
-    // PageIndex Integration (Tree Building)
+    // PageIndex Integration (Async Tree Building)
     // ==========================================
+    // PageIndex writes results directly to DynamoDB + S3. The extraction
+    // pipeline doesn't need PageIndex output, so we fire-and-forget to
+    // avoid blocking extraction (~295s → 0s wait).
 
-    // PageIndex Lambda invocation — builds hierarchical tree index
-    const buildPageIndex = new tasks.LambdaInvoke(this, 'BuildPageIndex', {
+    // Async (fire-and-forget) PageIndex for normal extraction mode
+    const buildPageIndexAsync = new tasks.LambdaInvoke(this, 'BuildPageIndexAsync', {
+      lambdaFunction: pageIndexLambda,
+      invocationType: tasks.LambdaInvocationType.EVENT,
+      resultPath: sfn.JsonPath.DISCARD,  // Preserve original state for extraction
+      retryOnServiceExceptions: true,
+    });
+
+    // Sync PageIndex for understand-only mode (no extraction, must wait for tree)
+    const buildPageIndexSync = new tasks.LambdaInvoke(this, 'BuildPageIndexSync', {
       lambdaFunction: pageIndexLambda,
       outputPath: '$.Payload',
       retryOnServiceExceptions: true,
     });
 
-    // Route choice: unstructured docs go through PageIndex, structured forms skip it
-    const pageIndexRouteChoice = new sfn.Choice(this, 'PageIndexRouteChoice', {
-      comment: 'Route unstructured docs (has_sections) through PageIndex tree building',
-    });
-
-    // After PageIndex: check if extraction should run now or be deferred
-    const extractionModeChoice = new sfn.Choice(this, 'ExtractionModeChoice', {
-      comment: 'Extract immediately or defer (understand-only mode)',
-    });
-
-    // For understand-only mode: mark document as INDEXED and complete
     const indexingComplete = new sfn.Succeed(this, 'IndexingComplete', {
       comment: 'Document indexed (tree built), extraction deferred',
     });
 
-    // Wire PageIndex flow
+    // Route: has_sections → async PageIndex fire-and-forget, then extraction
+    const pageIndexRouteChoice = new sfn.Choice(this, 'PageIndexRouteChoice', {
+      comment: 'Fire-and-forget PageIndex for unstructured docs, skip for forms',
+    });
     pageIndexRouteChoice
       .when(
         sfn.Condition.booleanEquals('$.classification.has_sections', true),
-        buildPageIndex
+        buildPageIndexAsync,
       )
       .otherwise(extractionRouteChoice);
 
-    buildPageIndex.next(extractionModeChoice);
+    // After async fire, immediately proceed to extraction
+    buildPageIndexAsync.next(extractionRouteChoice);
 
-    extractionModeChoice
-      .when(
-        sfn.Condition.stringEquals('$.processingMode', 'understand'),
-        indexingComplete
-      )
-      .otherwise(extractionRouteChoice);
-
-    // Add error handling for PageIndex
-    buildPageIndex.addCatch(handleError, {
-      resultPath: '$.error',
+    // If async invoke itself fails (infra error), still continue to extraction
+    buildPageIndexAsync.addCatch(extractionRouteChoice, {
+      resultPath: '$.pageIndexError',
     });
 
-    // Updated definition: classify -> PageIndex route -> extraction route
-    const definition = classifyDocument.next(pageIndexRouteChoice);
+    // Top-level: understand-only (sync PageIndex) vs normal (async + extraction)
+    const processingModeChoice = new sfn.Choice(this, 'ProcessingModeChoice', {
+      comment: 'Understand-only: sync PageIndex; normal: async PageIndex + extraction',
+    });
+    processingModeChoice
+      .when(
+        sfn.Condition.stringEquals('$.processingMode', 'understand'),
+        buildPageIndexSync,
+      )
+      .otherwise(pageIndexRouteChoice);
+
+    buildPageIndexSync.next(indexingComplete);
+    buildPageIndexSync.addCatch(handleError, { resultPath: '$.error' });
+
+    // Definition: classify → mode check → async PageIndex + extraction (or sync PageIndex)
+    const definition = classifyDocument.next(processingModeChoice);
 
     // Normalize leads to processing complete
     normalizeData.next(processingComplete);

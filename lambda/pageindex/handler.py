@@ -68,7 +68,7 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             toc_check_page_num=pi_config.get("toc_check_page_num", 20),
             max_page_num_each_node=pi_config.get("max_page_num_each_node", 10),
             max_token_num_each_node=pi_config.get("max_token_num_each_node", 20000),
-            generate_summaries_flag=pi_config.get("generate_summaries", True),
+            generate_summaries_flag=pi_config.get("generate_summaries", False),
             generate_description_flag=pi_config.get("generate_description", True),
         )
     except Exception as e:
@@ -233,21 +233,19 @@ def _estimate_cost(tree: dict) -> dict:
     node_count = _count_nodes(tree.get("structure", []))
 
     # Rough estimates for Claude Haiku 4.5:
-    # TOC detection: ~500 tokens/page × first 20 pages
+    # TOC detection: ~15K tokens (batched, first 20 pages in one call)
     # Structure generation: ~2000 tokens/page
     # Verification: ~500 tokens × sample_size
-    # Summaries: ~1000 tokens × node_count
+    # Summaries: deferred (not generated during build)
     input_tokens = (
-        min(total_pages, 20) * 500    # TOC detection
+        min(total_pages, 20) * 500    # TOC detection (single batched call)
         + total_pages * 500            # structure/TOC processing
         + 15 * 500                     # verification
-        + node_count * 1000            # summaries
     )
     output_tokens = (
-        min(total_pages, 20) * 50     # TOC detection responses
+        200                            # TOC detection (single response)
         + total_pages * 100            # structure entries
         + 15 * 50                      # verification responses
-        + node_count * 200             # summaries
     )
 
     # Claude Haiku 4.5: $1.00/MTok input, $5.00/MTok output
