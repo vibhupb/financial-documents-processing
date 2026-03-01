@@ -1285,10 +1285,12 @@ def trigger_document_extraction(document_id: str) -> dict[str, Any]:
 
 
 def ask_document(document_id: str, body: dict[str, Any]) -> dict[str, Any]:
-    """POST /documents/{id}/ask — Q&A over cached PageIndex tree.
+    """POST /documents/{id}/ask — Hybrid Q&A over extracted data + PageIndex tree.
 
-    Uses LLM reasoning to navigate the tree, find relevant pages,
-    and generate an answer from those pages.
+    Three-source approach:
+    1. Already-extracted structured data (highest quality, from Textract + normalization)
+    2. Tree navigation to find relevant PDF pages (for questions beyond extraction)
+    3. Combined context for LLM answer generation
     """
     question = (body.get("question") or "").strip()
     if not question:
@@ -1306,6 +1308,24 @@ def ask_document(document_id: str, body: dict[str, Any]) -> dict[str, Any]:
     bucket = doc.get("bucket", os.environ.get("BUCKET_NAME", ""))
     key = doc.get("originalS3Key", "")
 
+    # Gather extracted data if available (primary source)
+    extracted_data = doc.get("extractedData") or doc.get("data") or {}
+    extracted_context = ""
+    if extracted_data:
+        try:
+            extracted_json = json.dumps(extracted_data, indent=2, default=str)
+            # Cap at 8K chars to leave room for page text
+            if len(extracted_json) > 8000:
+                extracted_json = extracted_json[:8000] + "\n... (truncated)"
+            extracted_context = (
+                f"=== EXTRACTED STRUCTURED DATA ===\n"
+                f"(This data was extracted and verified from the document via OCR)\n"
+                f"{extracted_json}\n"
+                f"=== END EXTRACTED DATA ===\n\n"
+            )
+        except Exception:
+            pass
+
     try:
         bedrock_client = boto3.client("bedrock-runtime")
         model_id = os.environ.get(
@@ -1313,16 +1333,24 @@ def ask_document(document_id: str, body: dict[str, Any]) -> dict[str, Any]:
         )
 
         # Step 1: Navigate tree to find relevant nodes
-        tree_structure = json.dumps(
-            tree["structure"], default=str
-        )
+        # Build a compact tree (title + node_id + pages only) to save tokens
+        compact_tree = _build_compact_tree(tree["structure"])
         nav_prompt = (
-            "You are given a query and a document's hierarchical tree structure. "
-            "Find all nodes most likely to contain the answer.\n\n"
-            f"Query: {question}\n\n"
+            "You are analyzing a document's table of contents to find sections "
+            "relevant to a user's question.\n\n"
+            f"Question: {question}\n\n"
             f"Document: {tree.get('doc_description', 'Unknown document')}\n"
-            f"Tree structure:\n{tree_structure}\n\n"
-            'Return JSON: {"thinking": "<reasoning>", "node_ids": ["0001", "0005"]}'
+            f"Total pages: {tree.get('total_pages', '?')}\n\n"
+            f"Table of contents:\n{compact_tree}\n\n"
+            "Think about WHERE in a document this information would typically appear. "
+            "For example:\n"
+            "- Party names/borrowers → preamble (first pages), signature pages, or recitals\n"
+            "- Financial terms → specific articles about rates, fees, payments\n"
+            "- Definitions → definitions section (but prefer the actual substantive sections)\n"
+            "- Covenants → covenant articles\n\n"
+            "Select the most relevant leaf nodes (prefer specific sections over broad parent nodes). "
+            "Pick 3-6 nodes maximum.\n\n"
+            'Return JSON: {"thinking": "<your reasoning>", "node_ids": ["0001", "0005"]}'
         )
 
         nav_resp = bedrock_client.converse(
@@ -1343,37 +1371,58 @@ def ask_document(document_id: str, body: dict[str, Any]) -> dict[str, Any]:
             import re
             node_ids = re.findall(r'"(\d{4})"', nav_text)
 
-        if not node_ids:
+        # Step 2: Gather page text from relevant nodes
+        sorted_pages: list[int] = []
+        page_texts = ""
+        if node_ids:
+            all_nodes = _flatten_tree_nodes(tree["structure"])
+            node_map = {n.get("node_id"): n for n in all_nodes}
+            relevant_pages: set[int] = set()
+            for nid in node_ids:
+                node = node_map.get(nid)
+                if node:
+                    start = int(node.get("start_index", 0))
+                    end = int(node.get("end_index", start))
+                    # Cap each node's contribution to 5 pages
+                    end = min(end, start + 4)
+                    relevant_pages.update(range(start, end + 1))
+
+            # Limit to 15 pages to leave room for extracted data context
+            sorted_pages = sorted(relevant_pages)[:15]
+
+            if sorted_pages:
+                page_texts = _extract_pages_for_qa(bucket, key, sorted_pages)
+
+        # Step 3: Generate answer using both sources
+        context_parts = []
+        if extracted_context:
+            context_parts.append(extracted_context)
+        if page_texts:
+            context_parts.append(
+                f"=== RELEVANT PAGE TEXT (pages {sorted_pages}) ===\n"
+                f"{page_texts}\n"
+                f"=== END PAGE TEXT ===\n"
+            )
+
+        if not context_parts:
             return {
-                "answer": "I couldn't identify relevant sections for this question.",
-                "sourceNodes": [],
+                "answer": "I couldn't find relevant information to answer this question.",
+                "sourceNodes": node_ids,
                 "sourcePages": [],
             }
 
-        # Step 2: Gather page text from relevant nodes
-        all_nodes = _flatten_tree_nodes(tree["structure"])
-        node_map = {n.get("node_id"): n for n in all_nodes}
-        relevant_pages: set[int] = set()
-        for nid in node_ids:
-            node = node_map.get(nid)
-            if node:
-                start = int(node.get("start_index", 0))
-                end = int(node.get("end_index", start))
-                relevant_pages.update(range(start, end + 1))
+        combined_context = "\n".join(context_parts)
 
-        # Limit to 20 pages to keep prompt manageable
-        sorted_pages = sorted(relevant_pages)[:20]
-
-        # Download PDF and extract text from relevant pages
-        page_texts = _extract_pages_for_qa(bucket, key, sorted_pages)
-
-        # Step 3: Generate answer
         answer_prompt = (
-            "Answer the following question using ONLY the document text below. "
-            "Be specific and cite page numbers. If the answer is not in the text, "
-            "say so.\n\n"
+            "Answer the following question using the document context below. "
+            "The context includes two sources:\n"
+            "1. EXTRACTED STRUCTURED DATA — verified, high-quality data from OCR extraction\n"
+            "2. RELEVANT PAGE TEXT — raw text from specific pages of the document\n\n"
+            "Prefer the extracted structured data when it contains the answer. "
+            "Use page text for additional detail or when the extracted data doesn't cover the question. "
+            "Be specific, cite sources (extracted data or page numbers), and provide a complete answer.\n\n"
             f"Question: {question}\n\n"
-            f"Document text (from pages {sorted_pages}):\n{page_texts}\n\n"
+            f"{combined_context}\n"
             "Answer:"
         )
 
@@ -1393,6 +1442,23 @@ def ask_document(document_id: str, body: dict[str, Any]) -> dict[str, Any]:
 
     except Exception as e:
         return {"error": f"Q&A failed: {str(e)}"}
+
+
+def _build_compact_tree(nodes: list, depth: int = 0) -> str:
+    """Build a compact text representation of the tree for navigation prompts."""
+    lines = []
+    indent = "  " * depth
+    for node in nodes:
+        nid = node.get("node_id", "?")
+        title = node.get("title", "?")
+        start = node.get("start_index", "?")
+        end = node.get("end_index", start)
+        page_str = f"p.{start}" if start == end else f"p.{start}-{end}"
+        lines.append(f"{indent}[{nid}] {title} ({page_str})")
+        children = node.get("nodes", [])
+        if children:
+            lines.append(_build_compact_tree(children, depth + 1))
+    return "\n".join(lines)
 
 
 def generate_section_summary(
