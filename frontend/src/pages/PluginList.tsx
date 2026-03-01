@@ -72,7 +72,7 @@ export default function PluginList() {
 
   if (loading) {
     return (
-      <div className="flex justify-center py-12">
+      <div className="h-full overflow-auto p-8 flex justify-center py-12">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600" />
       </div>
     );
@@ -81,7 +81,7 @@ export default function PluginList() {
   const pluginList = Object.values(plugins);
 
   return (
-    <div className="max-w-6xl mx-auto">
+    <div className="h-full overflow-auto p-8 max-w-6xl mx-auto">
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">

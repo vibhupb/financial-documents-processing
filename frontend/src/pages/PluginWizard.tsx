@@ -258,7 +258,7 @@ export default function PluginWizard() {
   }
 
   return (
-    <div className="max-w-5xl mx-auto">
+    <div className="h-full overflow-auto p-8 max-w-5xl mx-auto">
       <div className="flex items-center gap-3 mb-6">
         <button onClick={() => navigate('/config')} className="text-gray-400 hover:text-gray-600">
           <ArrowLeft className="w-5 h-5" />

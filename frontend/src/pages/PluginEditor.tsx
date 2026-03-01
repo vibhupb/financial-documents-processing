@@ -176,14 +176,14 @@ export default function PluginEditor() {
 
   if (loading) {
     return (
-      <div className="flex justify-center py-12">
+      <div className="h-full overflow-auto p-8 flex justify-center py-12">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600" />
       </div>
     );
   }
 
   return (
-    <div className="max-w-5xl mx-auto">
+    <div className="h-full overflow-auto p-8 max-w-5xl mx-auto">
       {/* Header */}
       <div className="flex items-center gap-3 mb-6">
         <button onClick={() => navigate('/config')} className="text-gray-400 hover:text-gray-600">

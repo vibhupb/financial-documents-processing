@@ -14,12 +14,12 @@ for arg in "$@"; do
     esac
 done
 
-FRONTEND_BUCKET=$(get_stack_output "FrontendBucketName")
+FRONTEND_BUCKET=$(get_stack_output "FrontendBucketName" || true)
 if [ -z "$FRONTEND_BUCKET" ]; then
     FRONTEND_BUCKET="financial-docs-frontend-${AWS_ACCOUNT_ID}-${AWS_REGION}"
 fi
 
-CLOUDFRONT_URL=$(get_stack_output "CloudFrontUrl")
+CLOUDFRONT_URL=$(get_stack_output "CloudFrontUrl" || true)
 
 info "Frontend bucket: $FRONTEND_BUCKET"
 info "CloudFront URL:  $CLOUDFRONT_URL"

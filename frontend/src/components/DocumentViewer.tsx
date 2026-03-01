@@ -168,61 +168,70 @@ export default function DocumentViewer({
             />
 
             {/* Tab Content */}
-            <div className="flex-1 overflow-auto">
+            <div className="flex-1 flex flex-col overflow-hidden">
               {activeTab === 'summary' && (
-                <div className="flex flex-col h-full">
-                  <div className="flex-1 overflow-auto">
-                    <DocumentTreeView
-                      tree={document.pageIndexTree!}
-                      onPageClick={handlePageClick}
-                    />
-                  </div>
+                <div className="flex flex-col flex-1 min-h-0">
+                  <DocumentTreeView
+                    tree={document.pageIndexTree!}
+                    documentId={document.documentId}
+                    apiBaseUrl={apiBaseUrl}
+                    onPageClick={handlePageClick}
+                    className="flex-1 min-h-0"
+                  />
                   {/* Q&A at bottom of summary tab */}
                   {hasTree && (
-                    <DocumentQA
-                      documentId={document.documentId}
-                      apiBaseUrl={apiBaseUrl}
-                      onPageClick={handlePageClick}
-                    />
+                    <div className="flex-shrink-0">
+                      <DocumentQA
+                        documentId={document.documentId}
+                        apiBaseUrl={apiBaseUrl}
+                        onPageClick={handlePageClick}
+                      />
+                    </div>
                   )}
                 </div>
               )}
 
               {activeTab === 'extracted' && (
-                hasExtractedData ? (
-                  <ExtractedValuesPanel
-                    data={(document.extractedData as LoanData) || document.data || null}
-                    validation={document.validation}
-                    signatureValidation={document.signatureValidation}
-                    classification={document.classification}
-                    processingCost={undefined}
-                    processingTime={undefined}
-                    onFieldClick={handleFieldClick}
-                    className="h-full"
-                  />
-                ) : (
-                  <ExtractionTrigger
-                    documentId={document.documentId}
-                    apiBaseUrl={apiBaseUrl}
-                    onExtractionStarted={() => window.location.reload()}
-                  />
-                )
+                <div className="flex-1 overflow-auto">
+                  {hasExtractedData ? (
+                    <ExtractedValuesPanel
+                      data={(document.extractedData as LoanData) || document.data || null}
+                      validation={document.validation}
+                      signatureValidation={document.signatureValidation}
+                      classification={document.classification}
+                      processingCost={undefined}
+                      processingTime={undefined}
+                      onFieldClick={handleFieldClick}
+                      className="h-full"
+                    />
+                  ) : (
+                    <ExtractionTrigger
+                      documentId={document.documentId}
+                      apiBaseUrl={apiBaseUrl}
+                      onExtractionStarted={() => window.location.reload()}
+                    />
+                  )}
+                </div>
               )}
 
               {activeTab === 'json' && (
-                <RawJsonView
-                  data={rawJsonData}
-                  label={document.extractedData ? 'Extracted Data' : 'PageIndex Tree'}
-                />
+                <div className="flex-1 overflow-auto">
+                  <RawJsonView
+                    data={rawJsonData}
+                    label={document.extractedData ? 'Extracted Data' : 'PageIndex Tree'}
+                  />
+                </div>
               )}
             </div>
 
-            {/* Processing Metrics — always visible, collapsed by default */}
-            <ProcessingMetricsPanel
-              processingCost={document.processingCost}
-              processingTime={document.processingTime}
-              defaultCollapsed
-            />
+            {/* Processing Metrics — pinned at bottom, collapsed by default */}
+            <div className="flex-shrink-0 border-t border-gray-200">
+              <ProcessingMetricsPanel
+                processingCost={document.processingCost}
+                processingTime={document.processingTime}
+                defaultCollapsed
+              />
+            </div>
           </div>
         )}
       </div>

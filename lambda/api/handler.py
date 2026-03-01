@@ -1395,6 +1395,146 @@ def ask_document(document_id: str, body: dict[str, Any]) -> dict[str, Any]:
         return {"error": f"Q&A failed: {str(e)}"}
 
 
+def generate_section_summary(
+    document_id: str, body: dict[str, Any]
+) -> dict[str, Any]:
+    """POST /documents/{id}/section-summary — On-demand summary for a tree node.
+
+    Checks if a cached summary exists first. If not, extracts the section's
+    page text, generates a summary via LLM, and caches it in both DynamoDB
+    (inline in the tree node) and S3 (audit trail).
+    """
+    node_id = (body.get("nodeId") or "").strip()
+    if not node_id:
+        return {"error": "nodeId is required"}
+
+    table = dynamodb.Table(TABLE_NAME)
+    doc = _get_document_item(table, document_id)
+    if not doc:
+        return {"error": "Document not found"}
+
+    tree = doc.get("pageIndexTree")
+    if not tree or not tree.get("structure"):
+        return {"error": "No PageIndex tree available"}
+
+    # Find the target node
+    all_nodes = _flatten_tree_nodes(tree["structure"])
+    node_map = {n.get("node_id"): n for n in all_nodes}
+    target = node_map.get(node_id)
+    if not target:
+        return {"error": f"Node {node_id} not found in tree"}
+
+    # Check cache — return immediately if summary already exists
+    cached = target.get("summary")
+    if cached:
+        return {
+            "nodeId": node_id,
+            "summary": cached,
+            "cached": True,
+        }
+
+    # Extract page text for this section
+    bucket = doc.get("bucket", os.environ.get("BUCKET_NAME", ""))
+    key = doc.get("originalS3Key", "")
+    start = int(target.get("start_index", 1))
+    end = int(target.get("end_index", start))
+    page_numbers = list(range(start, min(end, start + 20) + 1))  # cap at 20 pages
+
+    page_texts = _extract_pages_for_qa(bucket, key, page_numbers)
+    if page_texts.startswith("("):
+        return {"error": f"Could not extract text: {page_texts}"}
+
+    # Generate summary via LLM
+    try:
+        bedrock_client = boto3.client("bedrock-runtime")
+        model_id = os.environ.get(
+            "BEDROCK_MODEL_ID", "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+        )
+
+        prompt = (
+            "Generate a concise summary (2-4 sentences) of this document section. "
+            "Focus on the key provisions, terms, or information covered.\n\n"
+            f"Section: {target.get('title', 'Unknown')}\n"
+            f"Pages {start}-{end}\n\n"
+            f"{page_texts}\n\n"
+            "Summary:"
+        )
+
+        resp = bedrock_client.converse(
+            modelId=model_id,
+            messages=[{"role": "user", "content": [{"text": prompt}]}],
+            inferenceConfig={"temperature": 0, "maxTokens": 512},
+        )
+        summary = resp["output"]["message"]["content"][0]["text"].strip()
+    except Exception as e:
+        return {"error": f"Summary generation failed: {str(e)}"}
+
+    # Cache the summary back into the tree
+    _cache_section_summary(doc, tree, node_id, summary, bucket, document_id)
+
+    return {
+        "nodeId": node_id,
+        "summary": summary,
+        "cached": False,
+        "pages": page_numbers,
+    }
+
+
+def _cache_section_summary(
+    doc: dict, tree: dict, node_id: str, summary: str,
+    bucket: str, document_id: str,
+) -> None:
+    """Write the generated summary back into the tree in DynamoDB and S3."""
+    # Update the node in the tree structure in-memory
+    _set_node_summary(tree["structure"], node_id, summary)
+
+    # Write updated tree to S3 audit (always works, no size limit)
+    try:
+        s3_client.put_object(
+            Bucket=bucket,
+            Key=f"audit/{document_id}/pageindex-tree.json",
+            Body=json.dumps(tree, indent=2, default=str),
+            ContentType="application/json",
+        )
+    except Exception:
+        pass
+
+    # Update DynamoDB — only if tree is stored inline (not S3 reference)
+    if doc.get("pageIndexTree"):
+        from decimal import Decimal
+
+        def _sanitize(obj: Any) -> Any:
+            if isinstance(obj, float):
+                return Decimal(str(round(obj, 6)))
+            if isinstance(obj, dict):
+                return {k: _sanitize(v) for k, v in obj.items()}
+            if isinstance(obj, list):
+                return [_sanitize(v) for v in obj]
+            return obj
+
+        doc_type = doc.get("documentType", "PROCESSING")
+        try:
+            table = dynamodb.Table(TABLE_NAME)
+            table.update_item(
+                Key={"documentId": document_id, "documentType": doc_type},
+                UpdateExpression="SET pageIndexTree = :tree",
+                ExpressionAttributeValues={":tree": _sanitize(tree)},
+            )
+        except Exception:
+            pass  # Non-critical — S3 has the authoritative copy
+
+
+def _set_node_summary(nodes: list, node_id: str, summary: str) -> bool:
+    """Recursively find a node by ID and set its summary."""
+    for node in nodes:
+        if node.get("node_id") == node_id:
+            node["summary"] = summary
+            return True
+        if node.get("nodes") and _set_node_summary(node["nodes"], node_id, summary):
+            return True
+    return False
+
+
 def _get_document_item(table: Any, document_id: str) -> dict | None:
     """Query DynamoDB for a document by ID (any documentType)."""
     resp = table.query(
@@ -1907,6 +2047,10 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         elif path.startswith("/documents/") and "/ask" in path and http_method == "POST":
             # POST /documents/{documentId}/ask - Q&A over document tree
             return response(200, ask_document(_doc_id(), body or {}))
+
+        elif path.startswith("/documents/") and "/section-summary" in path and http_method == "POST":
+            # POST /documents/{documentId}/section-summary - On-demand section summary
+            return response(200, generate_section_summary(_doc_id(), body or {}))
 
         elif path.startswith("/documents/") and http_method == "GET":
             return response(200, get_document(_doc_id()))

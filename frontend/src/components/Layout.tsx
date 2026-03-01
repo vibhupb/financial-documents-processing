@@ -45,7 +45,7 @@ export default function Layout({ children }: LayoutProps) {
   ];
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="h-screen bg-gray-50 overflow-hidden">
       {/* Sidebar */}
       <div className="fixed inset-y-0 left-0 z-50 w-64 bg-white border-r border-gray-200 flex flex-col">
         {/* Logo */}
@@ -117,8 +117,8 @@ export default function Layout({ children }: LayoutProps) {
       </div>
 
       {/* Main content */}
-      <div className="pl-64">
-        <main className="p-8">{children}</main>
+      <div className="pl-64 h-full">
+        <main className="h-full overflow-hidden">{children}</main>
       </div>
     </div>
   );

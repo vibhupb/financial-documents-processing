@@ -180,7 +180,7 @@ export default function WorkQueue() {
   };
 
   return (
-    <div className="space-y-6">
+    <div className="h-full overflow-auto p-8 space-y-6">
       {/* Zone 1 -- Upload */}
       <UploadBar />
 
