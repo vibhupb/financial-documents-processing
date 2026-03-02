@@ -1,10 +1,30 @@
 # PageIndex Integration — Document Understanding + Tree-Assisted Extraction
 
 **Date**: 2026-02-27
-**Status**: Design
+**Status**: Implemented
 **Author**: AI-assisted design session
 
 ---
+
+## Implementation Notes (2026-03-01)
+
+The design was fully implemented across 7 phases with the following additions beyond the original spec:
+
+**Additional features built:**
+- **On-demand section summaries** (`POST /documents/{id}/section-summary`): Instead of generating all summaries upfront (expensive for 726-node trees), summaries are generated lazily on user click and cached in both DynamoDB (inline tree update) and S3 (audit trail).
+- **Hybrid Q&A**: The `/ask` endpoint now uses extracted structured data as primary context alongside tree-navigated PDF pages, producing significantly better answers for questions about already-extracted fields (e.g., borrower names, rates).
+- **SPA layout**: Fixed viewport with independent panel scrolling (PDF left, data right) instead of full-page scroll.
+- **Plain-text Q&A responses**: LLM instructed to return concise plain text (no markdown) for clean chat display.
+
+**Performance optimizations applied (separate commits):**
+- Async fire-and-forget PageIndex (pipeline doesn't wait for tree building)
+- Parallel Mode C subdivision, connection pooling, batch TOC processing
+- Pipeline time: 335s → 49s for credit agreements
+
+**Key metrics from production:**
+- PageIndex tree: 726 nodes for a 208-page credit agreement, 60% verification accuracy
+- Section summary generation: ~3-5s per section, cached after first request
+- Q&A response time: ~5-8s (two LLM calls: navigation + answer)
 
 ## 1. Problem Statement
 

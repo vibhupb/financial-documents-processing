@@ -47,11 +47,16 @@ This project implements a serverless AWS architecture for processing high-volume
                         │  │  │  - Identify document types & page numbers  │   │ │
                         │  │  └─────────────────────────────────────────────┘   │ │
                         │  │                       │                            │ │
-                        │  │  ┌─────────────────────────────────────────────┐   │ │
-                        │  │  │  EXTRACTOR: Textract (Targeted Pages)      │   │ │
-                        │  │  │  - Queries, Tables, Forms extraction       │   │ │
-                        │  │  └─────────────────────────────────────────────┘   │ │
-                        │  │                       │                            │ │
+                        │  │          ┌─────────────┴─────────────┐             │ │
+                        │  │          ▼                           ▼             │ │
+                        │  │  ┌────────────────────┐  ┌──────────────────────┐  │ │
+                        │  │  │  EXTRACTOR:        │  │  PAGEINDEX:          │  │ │
+                        │  │  │  Textract (Targeted│  │  Claude Haiku 4.5    │  │ │
+                        │  │  │  Pages) — Queries, │  │  - Hierarchical tree │  │ │
+                        │  │  │  Tables, Forms     │  │  - On-demand summary │  │ │
+                        │  │  └────────────────────┘  │  - Hybrid Q&A        │  │ │
+                        │  │          │               └──────────────────────┘  │ │
+                        │  │          ▼                                         │ │
                         │  │  ┌─────────────────────────────────────────────┐   │ │
                         │  │  │  NORMALIZER: Claude Haiku 4.5               │   │ │
                         │  │  │  - Normalize, validate, output JSON        │   │ │
@@ -86,6 +91,8 @@ This project implements a serverless AWS architecture for processing high-volume
 | PII Encryption | AWS KMS | Envelope encryption for SSN, DOB, Tax ID fields |
 | Authentication | Amazon Cognito | User Pool with Admins/Reviewers/Viewers RBAC |
 | PII Audit | Amazon DynamoDB | Access audit trail for compliance |
+| PageIndex | Amazon Bedrock (Claude Haiku 4.5) | Hierarchical document tree building |
+| Document Q&A | Amazon Bedrock (Claude Haiku 4.5) | Hybrid Q&A over extracted data + tree |
 
 ## Project Structure
 
@@ -107,6 +114,11 @@ financial-documents-processing/
 │   │   └── handler.py                # Textract targeted extraction
 │   ├── normalizer/                   # Data normalization
 │   │   └── handler.py                # Claude Haiku 4.5 normalization
+│   ├── pageindex/                    # Hierarchical document tree + Q&A
+│   │   ├── handler.py                # Lambda entry point (tree, summary, ask)
+│   │   ├── tree_builder.py           # Build hierarchical tree from PDF text
+│   │   ├── llm_client.py             # Bedrock LLM calls for summaries & Q&A
+│   │   └── token_counter.py          # Token counting utilities
 │   └── layers/
 │       ├── pypdf/                    # PyPDF Lambda layer
 │       │   ├── requirements.txt
@@ -135,13 +147,19 @@ financial-documents-processing/
 │   │   │   ├── BooleanFlag.tsx       # Yes/No badge component
 │   │   │   ├── PIIIndicator.tsx      # PII masking lock icon
 │   │   │   ├── PDFViewer.tsx         # PDF rendering with react-pdf
-│   │   │   └── StatusBadge.tsx       # Processing status indicator
+│   │   │   ├── StatusBadge.tsx       # Processing status indicator
+│   │   │   ├── DocumentTreeView.tsx  # Tree TOC with on-demand section summaries
+│   │   │   ├── DocumentQA.tsx        # Hybrid Q&A (extracted data + tree navigation)
+│   │   │   ├── RawJsonView.tsx       # Raw JSON viewer for extracted data
+│   │   │   ├── DataViewTabs.tsx      # Tab switcher (Summary/Extracted/JSON)
+│   │   │   └── ExtractionTrigger.tsx # Deferred extraction trigger button
 │   │   ├── pages/                    # Route pages
 │   │   │   ├── Dashboard.tsx         # Overview & metrics
 │   │   │   ├── Upload.tsx            # Document upload with drag-drop
 │   │   │   ├── Documents.tsx         # Document list
 │   │   │   ├── DocumentDetail.tsx    # Document viewer page
-│   │   │   └── ReviewDocument.tsx    # Review workflow page
+│   │   │   ├── ReviewDocument.tsx    # Review workflow page
+│   │   │   └── WorkQueue.tsx         # Work queue page
 │   │   ├── contexts/
 │   │   │   └── AuthContext.tsx        # Cognito auth context + useAuth hook
 │   │   ├── services/
@@ -470,6 +488,9 @@ new_var = os.environ.get('NEW_VAR')
 | PUT | `/documents/{id}/fields` | Correct field values |
 | POST | `/documents/{id}/reprocess` | Trigger reprocessing |
 | GET | `/plugins` | List registered document type plugins with schemas |
+| POST | `/documents/{id}/ask` | Hybrid Q&A (extracted data + tree navigation) |
+| POST | `/documents/{id}/section-summary` | On-demand section summary with caching |
+| POST | `/documents/{id}/extract` | Trigger deferred extraction |
 
 ## Testing
 
@@ -636,6 +657,7 @@ When working on this project, Claude should:
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 4.0.0 | 2026-03-01 | PageIndex integration: hierarchical document tree, on-demand section summaries (LLM + cached), hybrid Q&A (extracted data + tree navigation), SPA layout fix, view tabs (Summary/Extracted/JSON), processing mode toggle, deferred extraction |
 | 3.0.0 | 2026-02-19 | Plugin architecture: self-registering document types (6 plugins), Map state, KMS encryption, Cognito auth, BSA Profile, W-2, Driver's License, GenericDataFields, common.sh scripts |
 | 2.2.0 | 2024-12-29 | Performance optimization: 2GB Lambda memory, 30 parallel workers, ~35s processing time; Add cleanup.sh script; Add ProcessingMetricsPanel component |
 | 2.1.0 | 2024-12-29 | Complete cost tracking: Add Step Functions + Lambda costs |

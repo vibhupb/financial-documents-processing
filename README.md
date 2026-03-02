@@ -103,6 +103,14 @@ python3 scripts/generate-architecture-diagram-horizontal.py  # Compact horizonta
 - **Payment Terms**: Interest periods, payment dates
 - **Covenants**: Financial ratios, coverage requirements
 
+### Document Understanding
+
+Documents that do not match a known plugin type (or any document for deeper exploration) receive a **PageIndex tree** -- a hierarchical table of contents built by Claude Haiku 4.5 from the raw PDF text. The tree powers:
+
+- **On-Demand Summaries** -- click any section node to generate an LLM summary (cached in DynamoDB and S3).
+- **Hybrid Q&A** -- ask natural-language questions answered from extracted data plus tree-navigated page context.
+- **Deferred Extraction** -- trigger targeted Textract extraction for any section directly from the UI.
+
 ## Key Features
 
 | Feature | Description |
@@ -115,6 +123,10 @@ python3 scripts/generate-architecture-diagram-horizontal.py  # Compact horizonta
 | **Processing Metrics** | Real-time cost and time breakdown per document |
 | **PDF Viewer** | Side-by-side PDF and extracted data view |
 | **Real-time Status** | Live processing status updates |
+| **PageIndex Tree** | Hierarchical document structure with browsable TOC for unstructured documents |
+| **On-Demand Summaries** | LLM-generated section summaries cached in DynamoDB and S3 |
+| **Hybrid Q&A** | Ask questions using extracted data + tree-navigated page context |
+| **SPA Layout** | Fixed viewport with independent panel scrolling |
 
 ## Quick Start
 
@@ -206,6 +218,11 @@ financial-documents-processing/
 │   │   └── handler.py                # Textract targeted extraction
 │   ├── normalizer/                   # Data normalization
 │   │   └── handler.py                # Claude Haiku 4.5 normalization
+│   ├── pageindex/                    # PageIndex tree building
+│   │   ├── handler.py                # Lambda entry point
+│   │   ├── tree_builder.py           # Hierarchical tree construction
+│   │   ├── llm_client.py             # Bedrock LLM calls
+│   │   └── token_counter.py          # Token budget management
 │   └── layers/
 │       └── pypdf/                    # PyPDF Lambda layer
 ├── frontend/                         # React Dashboard
@@ -214,7 +231,12 @@ financial-documents-processing/
 │   │   │   ├── DocumentViewer.tsx    # PDF + extracted data viewer
 │   │   │   ├── ExtractedValuesPanel.tsx  # Formatted data display
 │   │   │   ├── ProcessingMetricsPanel.tsx  # Cost & time breakdown
-│   │   │   └── PDFViewer.tsx         # PDF rendering
+│   │   │   ├── PDFViewer.tsx         # PDF rendering
+│   │   │   ├── DocumentTreeView.tsx  # PageIndex tree browser
+│   │   │   ├── DocumentQA.tsx        # Hybrid Q&A panel
+│   │   │   ├── RawJsonView.tsx       # Raw JSON data viewer
+│   │   │   ├── DataViewTabs.tsx      # Tab switcher for data panels
+│   │   │   └── ExtractionTrigger.tsx # Deferred extraction button
 │   │   ├── pages/                    # Route pages
 │   │   │   ├── Dashboard.tsx         # Overview & metrics
 │   │   │   ├── Upload.tsx            # Document upload
@@ -379,6 +401,9 @@ The result: **Enterprise-grade document processing at startup costs**.
 | POST | `/review/{id}/reject` | Reject document |
 | PUT | `/documents/{id}/fields` | Correct field values |
 | POST | `/documents/{id}/reprocess` | Trigger reprocessing |
+| POST | `/documents/{id}/ask` | Hybrid Q&A over document |
+| POST | `/documents/{id}/section-summary` | On-demand section summary |
+| POST | `/documents/{id}/extract` | Trigger deferred extraction |
 
 ## Technology Stack
 
@@ -395,6 +420,8 @@ The result: **Enterprise-grade document processing at startup costs**.
 | Frontend | React + TypeScript + Vite | Dashboard UI |
 | PDF Viewing | react-pdf | In-browser PDF rendering |
 | Styling | Tailwind CSS | Utility-first CSS |
+| PageIndex | Amazon Bedrock (Claude Haiku 4.5) | Hierarchical tree building |
+| Document Q&A | Amazon Bedrock (Claude Haiku 4.5) | Hybrid Q&A |
 
 ## Environment Variables
 
