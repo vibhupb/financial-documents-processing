@@ -18,6 +18,9 @@ command -v cdk >/dev/null 2>&1 || fail "AWS CDK not installed. Run: npm install 
 info "[1/5] Building Lambda layers..."
 cd lambda/layers/pypdf && chmod +x build.sh && ./build.sh && cd "$PROJECT_ROOT"
 
+echo "Building compliance-parsers layer..."
+bash "$PROJECT_ROOT/lambda/layers/compliance-parsers/build.sh"
+
 # Python deps
 info "[2/5] Syncing Python environment..."
 uv sync --dev
