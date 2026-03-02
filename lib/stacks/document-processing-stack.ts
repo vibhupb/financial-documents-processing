@@ -189,6 +189,13 @@ export class DocumentProcessingStack extends cdk.Stack {
       description: 'Document type plugin configurations (classification, extraction, normalization)',
     });
 
+    // Compliance Parsers Layer (python-docx, python-pptx, Pillow)
+    const complianceParsersLayer = new lambda.LayerVersion(this, 'ComplianceParsersLayer', {
+      code: lambda.Code.fromAsset(path.join(__dirname, '../../lambda/layers/compliance-parsers')),
+      compatibleRuntimes: [lambda.Runtime.PYTHON_3_13],
+      description: 'python-docx, python-pptx, Pillow for reference doc parsing',
+    });
+
     // ==========================================
     // Layer 2: Router Lambda (Classification)
     // ==========================================
@@ -315,6 +322,85 @@ export class DocumentProcessingStack extends cdk.Stack {
       actions: ['bedrock:InvokeModel'],
       resources: ['*'],
     }));
+
+    // ==========================================
+    // Compliance Engine -- Lambda Functions
+    // ==========================================
+
+    // compliance-ingest: parse reference docs, extract requirements
+    const complianceIngestLambda = new lambda.Function(this, 'ComplianceIngestLambda', {
+      functionName: 'doc-processor-compliance-ingest',
+      runtime: lambda.Runtime.PYTHON_3_13,
+      handler: 'handler.lambda_handler',
+      code: lambda.Code.fromAsset(path.join(__dirname, '../../lambda/compliance-ingest')),
+      layers: [pypdfLayer, complianceParsersLayer],
+      memorySize: 2048,
+      timeout: cdk.Duration.seconds(300),
+      environment: {
+        BUCKET_NAME: documentBucket.bucketName,
+        BASELINES_TABLE: complianceBaselinesTable.tableName,
+        BEDROCK_MODEL_ID: 'us.anthropic.claude-haiku-4-5-20251001-v1:0',
+      },
+      tracing: lambda.Tracing.ACTIVE,
+    });
+    documentBucket.grantRead(complianceIngestLambda);
+    complianceBaselinesTable.grantReadWriteData(complianceIngestLambda);
+    complianceIngestLambda.addToRolePolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      resources: ['*'],
+      actions: ['bedrock:InvokeModel', 'textract:AnalyzeDocument', 'textract:DetectDocumentText'],
+    }));
+
+    // compliance-evaluate: evaluate documents against baselines
+    const complianceEvaluateLambda = new lambda.Function(this, 'ComplianceEvaluateLambda', {
+      functionName: 'doc-processor-compliance-evaluate',
+      runtime: lambda.Runtime.PYTHON_3_13,
+      handler: 'handler.lambda_handler',
+      code: lambda.Code.fromAsset(path.join(__dirname, '../../lambda/compliance-evaluate')),
+      layers: [pypdfLayer, pluginsLayer],
+      memorySize: 2048,
+      timeout: cdk.Duration.seconds(300),
+      environment: {
+        BUCKET_NAME: documentBucket.bucketName,
+        TABLE_NAME: documentTable.tableName,
+        BASELINES_TABLE: complianceBaselinesTable.tableName,
+        REPORTS_TABLE: complianceReportsTable.tableName,
+        FEEDBACK_TABLE: complianceFeedbackTable.tableName,
+        BEDROCK_MODEL_ID: 'us.anthropic.claude-haiku-4-5-20251001-v1:0',
+      },
+      tracing: lambda.Tracing.ACTIVE,
+    });
+    documentBucket.grantRead(complianceEvaluateLambda);
+    documentTable.grantReadData(complianceEvaluateLambda);
+    complianceBaselinesTable.grantReadData(complianceEvaluateLambda);
+    complianceReportsTable.grantReadWriteData(complianceEvaluateLambda);
+    complianceFeedbackTable.grantReadData(complianceEvaluateLambda);
+    complianceEvaluateLambda.addToRolePolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: ['bedrock:InvokeModel'],
+      resources: ['*'],
+    }));
+
+    // compliance-api: CRUD for baselines/reports/feedback
+    const complianceApiLambda = new lambda.Function(this, 'ComplianceApiLambda', {
+      functionName: 'doc-processor-compliance-api',
+      runtime: lambda.Runtime.PYTHON_3_13,
+      handler: 'handler.lambda_handler',
+      code: lambda.Code.fromAsset(path.join(__dirname, '../../lambda/compliance-api')),
+      memorySize: 512,
+      timeout: cdk.Duration.seconds(30),
+      environment: {
+        BUCKET_NAME: documentBucket.bucketName,
+        CORS_ORIGIN: '*',
+        BASELINES_TABLE: complianceBaselinesTable.tableName,
+        REPORTS_TABLE: complianceReportsTable.tableName,
+        FEEDBACK_TABLE: complianceFeedbackTable.tableName,
+      },
+      tracing: lambda.Tracing.ACTIVE,
+    });
+    documentBucket.grantReadWrite(complianceApiLambda);
+    [complianceBaselinesTable, complianceReportsTable, complianceFeedbackTable]
+      .forEach(t => t.grantReadWriteData(complianceApiLambda));
 
     // ==========================================
     // Step Functions State Machine
@@ -1111,6 +1197,9 @@ export class DocumentProcessingStack extends cdk.Stack {
         PLUGIN_CONFIGS_TABLE: 'document-plugin-configs',
         BEDROCK_MODEL_ID: 'us.anthropic.claude-haiku-4-5-20251001-v1:0',
         CORS_ORIGIN: '*',
+        BASELINES_TABLE: complianceBaselinesTable.tableName,
+        REPORTS_TABLE: complianceReportsTable.tableName,
+        FEEDBACK_TABLE: complianceFeedbackTable.tableName,
       },
       tracing: lambda.Tracing.ACTIVE,
     });
@@ -1119,6 +1208,8 @@ export class DocumentProcessingStack extends cdk.Stack {
     documentTable.grantReadWriteData(apiLambda);  // Read/Write for review workflow
     stateMachine.grantRead(apiLambda);
     stateMachine.grantStartExecution(apiLambda);  // For re-processing rejected documents
+    [complianceBaselinesTable, complianceReportsTable, complianceFeedbackTable]
+      .forEach(t => t.grantReadWriteData(apiLambda));
 
     // Plugin builder needs Textract + Bedrock for sample analysis and AI config generation
     apiLambda.addToRolePolicy(new iam.PolicyStatement({
