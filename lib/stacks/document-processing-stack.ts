@@ -115,6 +115,63 @@ export class DocumentProcessingStack extends cdk.Stack {
     });
 
     // ==========================================
+    // Compliance Engine -- DynamoDB Tables
+    // ==========================================
+
+    const complianceBaselinesTable = new dynamodb.Table(this, 'ComplianceBaselinesTable', {
+      tableName: 'compliance-baselines',
+      partitionKey: { name: 'baselineId', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      pointInTimeRecovery: true,
+      encryption: dynamodb.TableEncryption.AWS_MANAGED,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+    });
+    complianceBaselinesTable.addGlobalSecondaryIndex({
+      indexName: 'pluginId-index',
+      partitionKey: { name: 'pluginId', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'status', type: dynamodb.AttributeType.STRING },
+      projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    const complianceReportsTable = new dynamodb.Table(this, 'ComplianceReportsTable', {
+      tableName: 'compliance-reports',
+      partitionKey: { name: 'reportId', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'documentId', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      pointInTimeRecovery: true,
+      encryption: dynamodb.TableEncryption.AWS_MANAGED,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+    });
+    complianceReportsTable.addGlobalSecondaryIndex({
+      indexName: 'documentId-index',
+      partitionKey: { name: 'documentId', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'evaluatedAt', type: dynamodb.AttributeType.STRING },
+      projectionType: dynamodb.ProjectionType.ALL,
+    });
+    complianceReportsTable.addGlobalSecondaryIndex({
+      indexName: 'baselineId-index',
+      partitionKey: { name: 'baselineId', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'evaluatedAt', type: dynamodb.AttributeType.STRING },
+      projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    const complianceFeedbackTable = new dynamodb.Table(this, 'ComplianceFeedbackTable', {
+      tableName: 'compliance-feedback',
+      partitionKey: { name: 'feedbackId', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'baselineId', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      pointInTimeRecovery: true,
+      encryption: dynamodb.TableEncryption.AWS_MANAGED,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+    });
+    complianceFeedbackTable.addGlobalSecondaryIndex({
+      indexName: 'requirementId-index',
+      partitionKey: { name: 'requirementId', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'createdAt', type: dynamodb.AttributeType.STRING },
+      projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    // ==========================================
     // Lambda Layers
     // ==========================================
 
