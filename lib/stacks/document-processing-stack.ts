@@ -995,8 +995,30 @@ export class DocumentProcessingStack extends cdk.Stack {
 
     mapExtraction.itemProcessor(extractSection);
 
-    // Map extraction -> normalize
-    mapExtraction.next(normalizeData);
+    // ==========================================
+    // Compliance Engine -- Step Functions States
+    // ==========================================
+
+    // Compliance evaluation (non-blocking — errors don't block extraction)
+    const evaluateCompliance = new tasks.LambdaInvoke(this, 'EvaluateCompliance', {
+      lambdaFunction: complianceEvaluateLambda,
+      outputPath: '$.Payload',
+      retryOnServiceExceptions: true,
+    });
+    const complianceFailed = new sfn.Pass(this, 'ComplianceFailed', {
+      result: sfn.Result.fromObject({ complianceReport: { status: 'error', overallScore: -1 } }),
+    });
+    evaluateCompliance.addCatch(complianceFailed, { resultPath: '$.complianceError' });
+
+    // Parallel: extraction + compliance run side-by-side
+    const extractionAndCompliance = new sfn.Parallel(this, 'ExtractionAndCompliance', {
+      comment: 'Run extraction and compliance evaluation in parallel',
+      resultPath: '$.parallelResults',
+    });
+    extractionAndCompliance.branch(mapExtraction);                     // Branch 0: extraction (Map)
+    extractionAndCompliance.branch(evaluateCompliance);                // Branch 1: compliance
+    extractionAndCompliance.next(normalizeData);
+    extractionAndCompliance.addCatch(handleError, { resultPath: '$.error' });
 
     // ==========================================
     // Document Type Routing (Blue/Green)
@@ -1042,7 +1064,7 @@ export class DocumentProcessingStack extends cdk.Stack {
           sfn.Condition.isPresent('$.extractionPlan'),
           sfn.Condition.isPresent('$.extractionPlan[0]'),
         ),
-        mapExtraction
+        extractionAndCompliance
       )
       .otherwise(legacyDocumentTypeChoice);
 
@@ -1122,9 +1144,6 @@ export class DocumentProcessingStack extends cdk.Stack {
       resultPath: '$.error',
     });
     parallelMortgageExtraction.addCatch(handleError, {
-      resultPath: '$.error',
-    });
-    mapExtraction.addCatch(handleError, {
       resultPath: '$.error',
     });
     normalizeData.addCatch(handleError, {
