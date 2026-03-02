@@ -15,7 +15,7 @@ import uuid
 import boto3
 from botocore.config import Config
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
 from urllib.parse import unquote
@@ -581,6 +581,7 @@ def get_registered_plugins() -> dict[str, Any]:
 
 
 PLUGIN_CONFIGS_TABLE = os.environ.get("PLUGIN_CONFIGS_TABLE", "document-plugin-configs")
+BASELINES_TABLE = os.environ.get("BASELINES_TABLE", "compliance-baselines")
 
 
 def _convert_floats_to_decimal(obj: Any) -> Any:
@@ -2169,6 +2170,41 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             pid = path_params.get("pluginId") or path.split("/")[2]
             return response(200, delete_plugin_config(pid))
 
+        # ── Compliance Baseline CRUD ──
+        elif path == "/baselines" and http_method == "GET":
+            return response(200, list_baselines(query_params))
+
+        elif path == "/baselines" and http_method == "POST":
+            return response(200, create_baseline(body or {}, user.user_id))
+
+        elif path.startswith("/baselines/") and "/publish" in path and http_method == "POST":
+            baseline_id = path.split("/")[2]
+            return response(200, publish_baseline(baseline_id))
+
+        elif path.startswith("/baselines/") and "/requirements" in path and http_method == "POST":
+            baseline_id = path.split("/")[2]
+            return response(200, add_requirement(baseline_id, body or {}))
+
+        elif path.startswith("/baselines/") and "/requirements/" in path and http_method == "PUT":
+            parts = path.split("/")
+            return response(200, update_requirement(parts[2], parts[4], body or {}))
+
+        elif path.startswith("/baselines/") and "/requirements/" in path and http_method == "DELETE":
+            parts = path.split("/")
+            return response(200, delete_requirement(parts[2], parts[4]))
+
+        elif path.startswith("/baselines/") and http_method == "GET":
+            baseline_id = path.split("/")[2]
+            return response(200, get_baseline(baseline_id))
+
+        elif path.startswith("/baselines/") and http_method == "PUT":
+            baseline_id = path.split("/")[2]
+            return response(200, update_baseline(baseline_id, body or {}))
+
+        elif path.startswith("/baselines/") and http_method == "DELETE":
+            baseline_id = path.split("/")[2]
+            return response(200, archive_baseline(baseline_id))
+
         # Review workflow endpoints
         elif path == "/review" and http_method == "GET":
             return response(200, list_review_queue(query_params))
@@ -2191,3 +2227,176 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     except Exception as e:
         print(f"Error processing request: {str(e)}")
         return response(500, {"error": "Internal server error", "message": str(e)})
+
+
+# ── Compliance Baseline CRUD ──────────────────────────────────────────────────
+
+
+def list_baselines(params):
+    """List compliance baselines, optionally filtered by status."""
+    bl_table = dynamodb.Table(BASELINES_TABLE)
+    kwargs = {}
+    status_filter = params.get("status") if params else None
+    if status_filter:
+        kwargs["FilterExpression"] = "#s = :s"
+        kwargs["ExpressionAttributeNames"] = {"#s": "status"}
+        kwargs["ExpressionAttributeValues"] = {":s": status_filter}
+    resp = bl_table.scan(**kwargs)
+    return {"baselines": resp.get("Items", [])}
+
+
+def create_baseline(body, user):
+    """Create a new compliance baseline in draft status."""
+    bl_table = dynamodb.Table(BASELINES_TABLE)
+    baseline_id = f"bl-{uuid.uuid4().hex[:12]}"
+    now = datetime.now(timezone.utc).isoformat()
+    item = {
+        "baselineId": baseline_id,
+        "name": body["name"],
+        "description": body.get("description", ""),
+        "pluginIds": body.get("pluginIds", []),
+        "status": "draft",
+        "version": 0,
+        "requirements": [],
+        "categories": [],
+        "createdBy": user or "anonymous",
+        "createdAt": now,
+        "updatedAt": now,
+    }
+    bl_table.put_item(Item=item)
+    return item
+
+
+def get_baseline(baseline_id):
+    """Get a single compliance baseline by ID."""
+    bl_table = dynamodb.Table(BASELINES_TABLE)
+    resp = bl_table.get_item(Key={"baselineId": baseline_id})
+    item = resp.get("Item")
+    return {"baseline": item} if item else {"error": "Baseline not found"}
+
+
+def update_baseline(baseline_id, body):
+    """Update baseline metadata (name, description, pluginIds)."""
+    bl_table = dynamodb.Table(BASELINES_TABLE)
+    now = datetime.now(timezone.utc).isoformat()
+    update_parts = ["updatedAt = :now"]
+    values = {":now": now}
+    names = {}
+    for field in ("name", "description", "pluginIds"):
+        if field in body:
+            safe = f"#{field}"
+            update_parts.append(f"{safe} = :{field}")
+            names[safe] = field
+            values[f":{field}"] = body[field]
+    bl_table.update_item(
+        Key={"baselineId": baseline_id},
+        UpdateExpression="SET " + ", ".join(update_parts),
+        ExpressionAttributeNames=names if names else None,
+        ExpressionAttributeValues=values,
+    )
+    return {"baselineId": baseline_id, "updated": True}
+
+
+def archive_baseline(baseline_id):
+    """Soft-delete a baseline by setting status to archived."""
+    bl_table = dynamodb.Table(BASELINES_TABLE)
+    now = datetime.now(timezone.utc).isoformat()
+    bl_table.update_item(
+        Key={"baselineId": baseline_id},
+        UpdateExpression="SET #s = :s, updatedAt = :now",
+        ExpressionAttributeNames={"#s": "status"},
+        ExpressionAttributeValues={":s": "archived", ":now": now},
+    )
+    return {"baselineId": baseline_id, "status": "archived"}
+
+
+def publish_baseline(baseline_id):
+    """Publish a baseline (must have at least one requirement)."""
+    bl_table = dynamodb.Table(BASELINES_TABLE)
+    resp = bl_table.get_item(Key={"baselineId": baseline_id})
+    item = resp.get("Item")
+    if not item:
+        return {"error": "Baseline not found"}
+    if not item.get("requirements"):
+        return {"error": "Cannot publish baseline with no requirements"}
+    now = datetime.now(timezone.utc).isoformat()
+    bl_table.update_item(
+        Key={"baselineId": baseline_id},
+        UpdateExpression="SET #s = :s, version = version + :one, updatedAt = :now",
+        ExpressionAttributeNames={"#s": "status"},
+        ExpressionAttributeValues={":s": "published", ":one": 1, ":now": now},
+    )
+    return {
+        "baselineId": baseline_id,
+        "status": "published",
+        "version": item.get("version", 0) + 1,
+    }
+
+
+def add_requirement(baseline_id, body):
+    """Add a requirement to a baseline."""
+    bl_table = dynamodb.Table(BASELINES_TABLE)
+    req_id = f"req-{uuid.uuid4().hex[:12]}"
+    now = datetime.now(timezone.utc).isoformat()
+    requirement = {
+        "requirementId": req_id,
+        "text": body["text"],
+        "category": body.get("category", "general"),
+        "criticality": body.get("criticality", "should-have"),
+        "confidenceThreshold": body.get("confidenceThreshold", 0.8),
+        "status": "active",
+        "createdAt": now,
+    }
+    bl_table.update_item(
+        Key={"baselineId": baseline_id},
+        UpdateExpression="SET requirements = list_append(if_not_exists(requirements, :empty), :req), updatedAt = :now",
+        ExpressionAttributeValues={
+            ":req": [requirement],
+            ":empty": [],
+            ":now": now,
+        },
+    )
+    return {"baselineId": baseline_id, "requirement": requirement}
+
+
+def update_requirement(baseline_id, requirement_id, body):
+    """Update a specific requirement within a baseline."""
+    bl_table = dynamodb.Table(BASELINES_TABLE)
+    resp = bl_table.get_item(Key={"baselineId": baseline_id})
+    item = resp.get("Item")
+    if not item:
+        return {"error": "Baseline not found"}
+    reqs = item.get("requirements", [])
+    now = datetime.now(timezone.utc).isoformat()
+    for req in reqs:
+        if req["requirementId"] == requirement_id:
+            for field in ("text", "category", "criticality", "confidenceThreshold", "status"):
+                if field in body:
+                    req[field] = body[field]
+            req["updatedAt"] = now
+            break
+    else:
+        return {"error": "Requirement not found"}
+    bl_table.update_item(
+        Key={"baselineId": baseline_id},
+        UpdateExpression="SET requirements = :r, updatedAt = :now",
+        ExpressionAttributeValues={":r": reqs, ":now": now},
+    )
+    return {"baselineId": baseline_id, "requirementId": requirement_id, "updated": True}
+
+
+def delete_requirement(baseline_id, requirement_id):
+    """Remove a requirement from a baseline."""
+    bl_table = dynamodb.Table(BASELINES_TABLE)
+    resp = bl_table.get_item(Key={"baselineId": baseline_id})
+    item = resp.get("Item")
+    if not item:
+        return {"error": "Baseline not found"}
+    reqs = [r for r in item.get("requirements", []) if r["requirementId"] != requirement_id]
+    now = datetime.now(timezone.utc).isoformat()
+    bl_table.update_item(
+        Key={"baselineId": baseline_id},
+        UpdateExpression="SET requirements = :r, updatedAt = :now",
+        ExpressionAttributeValues={":r": reqs, ":now": now},
+    )
+    return {"baselineId": baseline_id, "requirementId": requirement_id, "deleted": True}
