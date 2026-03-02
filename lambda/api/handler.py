@@ -582,6 +582,8 @@ def get_registered_plugins() -> dict[str, Any]:
 
 PLUGIN_CONFIGS_TABLE = os.environ.get("PLUGIN_CONFIGS_TABLE", "document-plugin-configs")
 BASELINES_TABLE = os.environ.get("BASELINES_TABLE", "compliance-baselines")
+REPORTS_TABLE = os.environ.get("REPORTS_TABLE", "compliance-reports")
+FEEDBACK_TABLE = os.environ.get("FEEDBACK_TABLE", "compliance-feedback")
 
 
 def _convert_floats_to_decimal(obj: Any) -> Any:
@@ -2123,6 +2125,22 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             # POST /documents/{documentId}/section-summary - On-demand section summary
             return response(200, generate_section_summary(_doc_id(), body or {}))
 
+        # ── Compliance Report + Reviewer Override ──
+        elif (path.startswith("/documents/") and "/compliance/" in path
+              and "/review" in path and http_method == "POST"):
+            parts = path.split("/")
+            return response(200, submit_compliance_review(
+                parts[2], parts[4], body or {}, user.user_id))
+
+        elif (path.startswith("/documents/") and "/compliance/" in path
+              and http_method == "GET"):
+            parts = path.split("/")
+            return response(200, get_compliance_report(parts[2], parts[4]))
+
+        elif (path.startswith("/documents/") and "/compliance" in path
+              and http_method == "GET"):
+            return response(200, get_compliance_reports(_doc_id()))
+
         elif path.startswith("/documents/") and http_method == "GET":
             return response(200, get_document(_doc_id()))
 
@@ -2400,3 +2418,69 @@ def delete_requirement(baseline_id, requirement_id):
         ExpressionAttributeValues={":r": reqs, ":now": now},
     )
     return {"baselineId": baseline_id, "requirementId": requirement_id, "deleted": True}
+
+
+# ── Compliance Report + Reviewer Override ─────────────────────────────────────
+
+
+def get_compliance_reports(document_id):
+    """List all compliance reports for a document."""
+    rpt_table = dynamodb.Table(REPORTS_TABLE)
+    resp = rpt_table.query(
+        IndexName="documentId-index",
+        KeyConditionExpression="documentId = :did",
+        ExpressionAttributeValues={":did": document_id},
+        ScanIndexForward=False,
+    )
+    return {"reports": resp.get("Items", [])}
+
+
+def get_compliance_report(document_id, report_id):
+    """Get a single compliance report by ID."""
+    rpt_table = dynamodb.Table(REPORTS_TABLE)
+    resp = rpt_table.get_item(Key={"reportId": report_id, "documentId": document_id})
+    item = resp.get("Item")
+    return {"report": item} if item else {"error": "Report not found"}
+
+
+def submit_compliance_review(document_id, report_id, body, user):
+    """Submit reviewer overrides for a compliance report, creating feedback records."""
+    rpt_table = dynamodb.Table(REPORTS_TABLE)
+    fb_table = dynamodb.Table(FEEDBACK_TABLE)
+    resp = rpt_table.get_item(Key={"reportId": report_id, "documentId": document_id})
+    report = resp.get("Item")
+    if not report:
+        return {"error": "Report not found"}
+    overrides = body.get("overrides", [])
+    now = datetime.now(timezone.utc).isoformat()
+    results_map = {r["requirementId"]: r for r in report.get("results", [])}
+    for ov in overrides:
+        req_id = ov["requirementId"]
+        original = results_map.get(req_id, {})
+        # Update verdict in report
+        original["reviewerOverride"] = ov["correctedVerdict"]
+        original["reviewerNote"] = ov.get("reviewerNote", "")
+        results_map[req_id] = original
+        # Create feedback record for learning loop
+        fb_table.put_item(Item={
+            "feedbackId": f"fb-{uuid.uuid4().hex[:12]}",
+            "baselineId": report["baselineId"],
+            "requirementId": req_id,
+            "documentId": document_id,
+            "originalVerdict": original.get("verdict", ""),
+            "correctedVerdict": ov["correctedVerdict"],
+            "reviewerNote": ov.get("reviewerNote", ""),
+            "createdAt": now,
+        })
+    rpt_table.update_item(
+        Key={"reportId": report_id, "documentId": document_id},
+        UpdateExpression="SET results = :r, #s = :s, reviewedBy = :u, reviewedAt = :now",
+        ExpressionAttributeNames={"#s": "status"},
+        ExpressionAttributeValues={
+            ":r": list(results_map.values()),
+            ":s": "reviewed",
+            ":u": user or "anonymous",
+            ":now": now,
+        },
+    )
+    return {"reportId": report_id, "status": "reviewed", "overrideCount": len(overrides)}
