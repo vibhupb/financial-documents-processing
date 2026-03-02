@@ -2,6 +2,9 @@
 """
 Generate Horizontal AWS Architecture Diagram for Financial Documents Processing.
 Optimized for presentations and README display with light theme.
+
+Includes Router Pattern pipeline with PageIndex tree building for unstructured
+documents, on-demand section summaries, and hybrid Q&A.
 """
 
 from diagrams import Diagram, Cluster, Edge
@@ -114,11 +117,15 @@ with Diagram(
                 router = Lambda("Classify")
                 haiku1 = Bedrock("Haiku 4.5\n$0.023")
 
-            with Cluster("2. Extractor", graph_attr=ai_style):
+            with Cluster("2. PageIndex", graph_attr=ai_style):
+                pageindex = Lambda("Tree Build")
+                haiku_pi = Bedrock("Haiku 4.5\nTree+Q&A")
+
+            with Cluster("3. Extractor", graph_attr=ai_style):
                 extractor = Lambda("Extract")
                 textract = Textract("Textract\n$0.30")
 
-            with Cluster("3. Normalizer", graph_attr=ai_style):
+            with Cluster("4. Normalizer", graph_attr=ai_style):
                 normalizer = Lambda("Normalize")
                 haiku2 = Bedrock("Haiku 4.5\n$0.013")
 
@@ -141,7 +148,10 @@ with Diagram(
     sfn >> Edge(color="#8b5cf6") >> router
     router >> Edge(color="#f59e0b") >> haiku1
 
-    router >> Edge(color="#8b5cf6") >> extractor
+    router >> Edge(color="#8b5cf6", label="Unstructured") >> pageindex
+    pageindex >> Edge(color="#f59e0b") >> haiku_pi
+    pageindex >> Edge(color="#8b5cf6") >> extractor
+    router >> Edge(color="#8b5cf6", style="dashed", label="Structured") >> extractor
     extractor >> Edge(color="#f59e0b") >> textract
 
     extractor >> Edge(color="#8b5cf6") >> normalizer
@@ -149,7 +159,9 @@ with Diagram(
 
     normalizer >> Edge(color="#64748b", penwidth="2") >> dynamodb
     normalizer >> Edge(color="#64748b", style="dashed") >> s3_audit
+    pageindex >> Edge(color="#64748b", style="dashed") >> dynamodb
 
     api_lambda >> Edge(color="#22c55e", style="dashed") >> dynamodb
+    api_lambda >> Edge(color="#f59e0b", style="dashed") >> haiku2
 
 print("Horizontal diagram saved to docs/aws-architecture-horizontal.png")

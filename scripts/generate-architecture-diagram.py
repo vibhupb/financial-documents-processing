@@ -3,12 +3,15 @@
 Generate AWS Architecture Diagram for Financial Documents Processing System.
 
 This creates a professional, publication-ready architecture diagram showing:
-- React Frontend on CloudFront/S3
-- API Gateway + Lambda API
+- React Frontend on CloudFront/S3 (SPA with independent panel scrolling)
+- API Gateway + Lambda API (CRUD, Q&A, section summaries)
 - S3 Document Ingestion
 - Step Functions Orchestration (Router Pattern)
-- Lambda Processing Pipeline (Router -> Extractor -> Normalizer)
-- Bedrock AI (Claude Haiku) & Textract
+- Lambda Processing Pipeline:
+  - Router -> PageIndex (unstructured) -> Extractor -> Normalizer
+  - Router -> Extractor (structured forms, skip PageIndex)
+- Bedrock AI (Claude Haiku 4.5): Classification, PageIndex tree, Q&A, summaries
+- Textract: Targeted page extraction
 - DynamoDB & S3 Audit Storage
 """
 
@@ -155,13 +158,18 @@ with Diagram(
                     router_lambda = Lambda("Router Lambda")
                     bedrock_haiku = Bedrock("Claude Haiku 4.5\n~$0.023/doc")
 
+                # PageIndex Stage (unstructured docs only)
+                with Cluster("2. PAGEINDEX: Tree Building\n(unstructured docs)", graph_attr=ai_cluster_style):
+                    pageindex_lambda = Lambda("PageIndex Lambda")
+                    bedrock_haiku_pi = Bedrock("Claude Haiku 4.5\nTree + Summaries")
+
                 # Extractor Stage
-                with Cluster("2. EXTRACTOR: Targeted Pages", graph_attr=ai_cluster_style):
+                with Cluster("3. EXTRACTOR: Targeted Pages", graph_attr=ai_cluster_style):
                     extractor_lambda = Lambda("Extractor Lambda")
                     textract = Textract("Textract\nTables+Queries\n~$0.30/doc")
 
                 # Normalizer Stage
-                with Cluster("3. NORMALIZER: Refinement", graph_attr=ai_cluster_style):
+                with Cluster("4. NORMALIZER: Refinement", graph_attr=ai_cluster_style):
                     normalizer_lambda = Lambda("Normalizer Lambda")
                     bedrock_haiku_norm = Bedrock("Claude Haiku 4.5\n~$0.013/doc")
 
@@ -193,7 +201,13 @@ with Diagram(
     sfn >> Edge(color="#8b5cf6", penwidth="2") >> router_lambda
     router_lambda >> Edge(color="#f59e0b", label="Classify") >> bedrock_haiku
 
-    router_lambda >> Edge(color="#8b5cf6", penwidth="2", label="Page Map") >> extractor_lambda
+    # PageIndex branch (unstructured documents)
+    router_lambda >> Edge(color="#8b5cf6", penwidth="2", label="Unstructured\n(has_sections)") >> pageindex_lambda
+    pageindex_lambda >> Edge(color="#f59e0b", label="Build Tree") >> bedrock_haiku_pi
+    pageindex_lambda >> Edge(color="#8b5cf6", penwidth="2", label="Tree-Assisted\nPage Map") >> extractor_lambda
+
+    # Direct extractor branch (structured forms)
+    router_lambda >> Edge(color="#8b5cf6", style="dashed", label="Structured\n(all pages)") >> extractor_lambda
     extractor_lambda >> Edge(color="#f59e0b", label="OCR Pages") >> textract
 
     extractor_lambda >> Edge(color="#8b5cf6", penwidth="2", label="Raw Data") >> normalizer_lambda
@@ -202,6 +216,10 @@ with Diagram(
     # Storage Output
     normalizer_lambda >> Edge(color="#64748b", penwidth="2", label="Final Data") >> dynamodb
     normalizer_lambda >> Edge(color="#64748b", style="dashed", label="Audit") >> s3_audit
+    pageindex_lambda >> Edge(color="#64748b", style="dashed", label="Cache Tree") >> dynamodb
+
+    # API Lambda connections for Q&A and summaries
+    api_lambda >> Edge(color="#f59e0b", style="dashed", label="Q&A +\nSummaries") >> bedrock_haiku_norm
 
     # Monitoring
     sfn >> Edge(color="#94a3b8", style="dashed") >> cloudwatch

@@ -1,0 +1,78 @@
+digraph StepFunctions {
+  bgcolor="#f8fafc";
+  fontname="Arial Bold";
+  fontsize=20;
+  label="Financial Doc Processor — Step Functions State Machine";
+  labelloc=t;
+  fontcolor="#1e293b";
+  rankdir=TB;
+  nodesep=0.6;
+  ranksep=0.8;
+  dpi=150;
+  node [fontname="Arial" fontsize=10 style=filled penwidth=2];
+  edge [fontname="Arial" fontsize=8 color="#475569"];
+
+  Start [shape=circle fillcolor="#22c55e" fontcolor=white label="Start" width=0.5];
+  "ClassifyDocument" [shape=box fillcolor="#f97316" fontcolor="white" label="1. Classify
+Document
+(Router Lambda)" pencolor="#f97316"];
+  "ProcessingModeChoice" [shape=diamond fillcolor="#8b5cf6" fontcolor="white" label="Processing
+Mode?" pencolor="#8b5cf6"];
+  "PageIndexRouteChoice" [shape=diamond fillcolor="#8b5cf6" fontcolor="white" label="Has
+Sections?" pencolor="#8b5cf6"];
+  "ExtractionRouteChoice" [shape=diamond fillcolor="#8b5cf6" fontcolor="white" label="Extraction
+Plan?" pencolor="#8b5cf6"];
+  "BuildPageIndexAsync" [shape=box fillcolor="#f97316" fontcolor="white" label="2a. Build PageIndex
+(Async, Fire & Forget)" pencolor="#f97316"];
+  "LegacyDocumentTypeChoice" [shape=diamond fillcolor="#8b5cf6" fontcolor="white" label="Document
+Type?" pencolor="#8b5cf6"];
+  "ParallelMortgageExtraction" [shape=box fillcolor="#3b82f6" fontcolor="white" label="3. Parallel Extraction
+(Mortgage)" pencolor="#3b82f6"];
+  "NormalizeData" [shape=box fillcolor="#f97316" fontcolor="white" label="4. Normalize
+Data
+(Haiku 4.5)" pencolor="#f97316"];
+  "MapExtraction" [shape=box fillcolor="#06b6d4" fontcolor="white" label="3. Map Extraction
+(Plugin Sections)" pencolor="#06b6d4"];
+  "HandleError" [shape=box fillcolor="#64748b" fontcolor="white" label="Handle
+Error" pencolor="#64748b"];
+  "BuildPageIndexSync" [shape=box fillcolor="#f97316" fontcolor="white" label="2b. Build PageIndex
+(Sync, Understand-Only)" pencolor="#f97316"];
+  "IndexingComplete" [shape=ellipse fillcolor="#22c55e" fontcolor="white" label="Indexing
+Complete" pencolor="#22c55e"];
+  "ParallelCreditAgreementExtraction" [shape=box fillcolor="#3b82f6" fontcolor="white" label="3. Parallel Extraction
+(Credit Agreement)" pencolor="#3b82f6"];
+  "ParallelLoanAgreementExtraction" [shape=box fillcolor="#3b82f6" fontcolor="white" label="3. Parallel Extraction
+(Loan Agreement)" pencolor="#3b82f6"];
+  "ProcessingFailed" [shape=ellipse fillcolor="#ef4444" fontcolor="white" label="Processing
+Failed" pencolor="#ef4444"];
+  "ProcessingComplete" [shape=ellipse fillcolor="#22c55e" fontcolor="white" label="Processing
+Complete" pencolor="#22c55e"];
+
+  Start -> "ClassifyDocument" [penwidth=2 color="#22c55e"];
+  "ClassifyDocument" -> "ProcessingModeChoice" [penwidth=1.5];
+  "ClassifyDocument" -> "HandleError" [style=dashed color="#ef4444" label=" error"];
+  "ProcessingModeChoice" -> "BuildPageIndexSync" [label=" understand" color="#8b5cf6" fontcolor="#8b5cf6"];
+  "ProcessingModeChoice" -> "PageIndexRouteChoice" [label=" default" style=dashed color="#94a3b8" fontcolor="#94a3b8"];
+  "PageIndexRouteChoice" -> "BuildPageIndexAsync" [label=" Yes" color="#8b5cf6" fontcolor="#8b5cf6"];
+  "PageIndexRouteChoice" -> "ExtractionRouteChoice" [label=" default" style=dashed color="#94a3b8" fontcolor="#94a3b8"];
+  "ExtractionRouteChoice" -> "MapExtraction" [label=" Has plan" color="#8b5cf6" fontcolor="#8b5cf6"];
+  "ExtractionRouteChoice" -> "LegacyDocumentTypeChoice" [label=" default" style=dashed color="#94a3b8" fontcolor="#94a3b8"];
+  "BuildPageIndexAsync" -> "ExtractionRouteChoice" [penwidth=1.5];
+  "BuildPageIndexAsync" -> "ExtractionRouteChoice" [style=dashed color="#ef4444" label=" error"];
+  "LegacyDocumentTypeChoice" -> "ParallelCreditAgreementExtraction" [label=" " color="#8b5cf6" fontcolor="#8b5cf6"];
+  "LegacyDocumentTypeChoice" -> "ParallelLoanAgreementExtraction" [label=" " color="#8b5cf6" fontcolor="#8b5cf6"];
+  "LegacyDocumentTypeChoice" -> "ParallelMortgageExtraction" [label=" default" style=dashed color="#94a3b8" fontcolor="#94a3b8"];
+  "ParallelMortgageExtraction" -> "NormalizeData" [penwidth=1.5];
+  "ParallelMortgageExtraction" -> "HandleError" [style=dashed color="#ef4444" label=" error"];
+  "NormalizeData" -> "ProcessingComplete" [penwidth=1.5];
+  "NormalizeData" -> "HandleError" [style=dashed color="#ef4444" label=" error"];
+  "MapExtraction" -> "NormalizeData" [penwidth=1.5];
+  "MapExtraction" -> "HandleError" [style=dashed color="#ef4444" label=" error"];
+  "HandleError" -> "ProcessingFailed" [penwidth=1.5];
+  "BuildPageIndexSync" -> "IndexingComplete" [penwidth=1.5];
+  "BuildPageIndexSync" -> "HandleError" [style=dashed color="#ef4444" label=" error"];
+  "ParallelCreditAgreementExtraction" -> "NormalizeData" [penwidth=1.5];
+  "ParallelCreditAgreementExtraction" -> "HandleError" [style=dashed color="#ef4444" label=" error"];
+  "ParallelLoanAgreementExtraction" -> "NormalizeData" [penwidth=1.5];
+  "ParallelLoanAgreementExtraction" -> "HandleError" [style=dashed color="#ef4444" label=" error"];
+}
