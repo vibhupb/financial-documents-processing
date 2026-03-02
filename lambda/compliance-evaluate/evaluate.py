@@ -197,12 +197,41 @@ def _evaluate_batch(batch, page_text, doc_id, baseline_id):
 
 
 def _get_corrections_block(baseline_id, batch):
-    """Placeholder for few-shot corrections -- Task 8 will implement this.
+    """Query compliance-feedback table for recent reviewer corrections.
 
-    Will query the feedback table for prior human corrections and format
-    them as few-shot examples to improve evaluation accuracy.
+    Returns a formatted "PRIOR CORRECTIONS" block for prompt injection,
+    or empty string if no feedback exists.
     """
-    return ""
+    req_ids = {r["requirementId"] for r in batch}
+    all_corrections = []
+    for req_id in req_ids:
+        try:
+            resp = feedback_table.query(
+                IndexName="requirementId-index",
+                KeyConditionExpression="requirementId = :rid",
+                ExpressionAttributeValues={":rid": req_id},
+                ScanIndexForward=False,  # newest first
+                Limit=3,  # up to 3 per requirement
+            )
+            all_corrections.extend(resp.get("Items", []))
+        except Exception as e:
+            print(f"[Compliance] Feedback query failed for {req_id}: {e}")
+
+    if not all_corrections:
+        return ""
+
+    # Sort by createdAt descending, take top MAX_CORRECTIONS
+    all_corrections.sort(key=lambda x: x.get("createdAt", ""), reverse=True)
+    corrections = all_corrections[:MAX_CORRECTIONS]
+
+    lines = ["PRIOR CORRECTIONS (learn from these reviewer corrections):"]
+    for c in corrections:
+        lines.append(
+            f"- Requirement \"{c['requirementId']}\" was marked "
+            f"{c['originalVerdict']} but reviewer corrected to "
+            f"{c['correctedVerdict']}: {c.get('reviewerNote', '')}"
+        )
+    return "\n".join(lines) + "\n\n"
 
 
 def _store_report(report):
