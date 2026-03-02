@@ -455,6 +455,18 @@ The result: **Enterprise-grade document processing at startup costs**.
 | Normalizer | ~12-15s | Claude Haiku 4.5 normalization |
 | **Total** | **~35s** | End-to-end processing |
 
+## Acknowledgments
+
+This project builds on several open-source projects and techniques:
+
+| Project | License | Usage |
+|---------|---------|-------|
+| [VectifyAI/PageIndex](https://github.com/VectifyAI/PageIndex) | MIT | Core tree-building algorithm for hierarchical document indexing. Adapted to use AWS Bedrock (Claude Haiku 4.5) instead of OpenAI, with additions for async processing, on-demand summaries, and tree-assisted extraction. |
+| [GAIK](https://github.com/Sankgreall/GAIK) | MIT | Inspired the double-pass text extraction approach (PyPDF + PyMuPDF fallback) used in the Router Lambda for robust handling of scanned/garbled PDFs. |
+| [PyPDF](https://github.com/py-pdf/pypdf) | BSD-3 | Primary PDF text extraction (fast, lightweight). |
+| [PyMuPDF](https://github.com/pymupdf/PyMuPDF) | AGPL-3.0 | Secondary PDF text extraction for custom fonts and scanned documents. |
+| [react-pdf](https://github.com/wojtekmaj/react-pdf) | MIT | In-browser PDF rendering for the document viewer. |
+
 ## License
 
 MIT License
