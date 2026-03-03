@@ -115,6 +115,63 @@ export class DocumentProcessingStack extends cdk.Stack {
     });
 
     // ==========================================
+    // Compliance Engine -- DynamoDB Tables
+    // ==========================================
+
+    const complianceBaselinesTable = new dynamodb.Table(this, 'ComplianceBaselinesTable', {
+      tableName: 'compliance-baselines',
+      partitionKey: { name: 'baselineId', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      pointInTimeRecovery: true,
+      encryption: dynamodb.TableEncryption.AWS_MANAGED,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+    });
+    complianceBaselinesTable.addGlobalSecondaryIndex({
+      indexName: 'pluginId-index',
+      partitionKey: { name: 'pluginId', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'status', type: dynamodb.AttributeType.STRING },
+      projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    const complianceReportsTable = new dynamodb.Table(this, 'ComplianceReportsTable', {
+      tableName: 'compliance-reports',
+      partitionKey: { name: 'reportId', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'documentId', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      pointInTimeRecovery: true,
+      encryption: dynamodb.TableEncryption.AWS_MANAGED,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+    });
+    complianceReportsTable.addGlobalSecondaryIndex({
+      indexName: 'documentId-index',
+      partitionKey: { name: 'documentId', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'evaluatedAt', type: dynamodb.AttributeType.STRING },
+      projectionType: dynamodb.ProjectionType.ALL,
+    });
+    complianceReportsTable.addGlobalSecondaryIndex({
+      indexName: 'baselineId-index',
+      partitionKey: { name: 'baselineId', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'evaluatedAt', type: dynamodb.AttributeType.STRING },
+      projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    const complianceFeedbackTable = new dynamodb.Table(this, 'ComplianceFeedbackTable', {
+      tableName: 'compliance-feedback',
+      partitionKey: { name: 'feedbackId', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'baselineId', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      pointInTimeRecovery: true,
+      encryption: dynamodb.TableEncryption.AWS_MANAGED,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+    });
+    complianceFeedbackTable.addGlobalSecondaryIndex({
+      indexName: 'requirementId-index',
+      partitionKey: { name: 'requirementId', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'createdAt', type: dynamodb.AttributeType.STRING },
+      projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    // ==========================================
     // Lambda Layers
     // ==========================================
 
@@ -130,6 +187,13 @@ export class DocumentProcessingStack extends cdk.Stack {
       code: lambda.Code.fromAsset(path.join(__dirname, '../../lambda/layers/plugins')),
       compatibleRuntimes: [lambda.Runtime.PYTHON_3_13],
       description: 'Document type plugin configurations (classification, extraction, normalization)',
+    });
+
+    // Compliance Parsers Layer (python-docx, python-pptx, Pillow)
+    const complianceParsersLayer = new lambda.LayerVersion(this, 'ComplianceParsersLayer', {
+      code: lambda.Code.fromAsset(path.join(__dirname, '../../lambda/layers/compliance-parsers')),
+      compatibleRuntimes: [lambda.Runtime.PYTHON_3_13],
+      description: 'python-docx, python-pptx, Pillow for reference doc parsing',
     });
 
     // ==========================================
@@ -258,6 +322,85 @@ export class DocumentProcessingStack extends cdk.Stack {
       actions: ['bedrock:InvokeModel'],
       resources: ['*'],
     }));
+
+    // ==========================================
+    // Compliance Engine -- Lambda Functions
+    // ==========================================
+
+    // compliance-ingest: parse reference docs, extract requirements
+    const complianceIngestLambda = new lambda.Function(this, 'ComplianceIngestLambda', {
+      functionName: 'doc-processor-compliance-ingest',
+      runtime: lambda.Runtime.PYTHON_3_13,
+      handler: 'handler.lambda_handler',
+      code: lambda.Code.fromAsset(path.join(__dirname, '../../lambda/compliance-ingest')),
+      layers: [pypdfLayer, complianceParsersLayer],
+      memorySize: 2048,
+      timeout: cdk.Duration.seconds(300),
+      environment: {
+        BUCKET_NAME: documentBucket.bucketName,
+        BASELINES_TABLE: complianceBaselinesTable.tableName,
+        BEDROCK_MODEL_ID: 'us.anthropic.claude-haiku-4-5-20251001-v1:0',
+      },
+      tracing: lambda.Tracing.ACTIVE,
+    });
+    documentBucket.grantRead(complianceIngestLambda);
+    complianceBaselinesTable.grantReadWriteData(complianceIngestLambda);
+    complianceIngestLambda.addToRolePolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      resources: ['*'],
+      actions: ['bedrock:InvokeModel', 'textract:AnalyzeDocument', 'textract:DetectDocumentText'],
+    }));
+
+    // compliance-evaluate: evaluate documents against baselines
+    const complianceEvaluateLambda = new lambda.Function(this, 'ComplianceEvaluateLambda', {
+      functionName: 'doc-processor-compliance-evaluate',
+      runtime: lambda.Runtime.PYTHON_3_13,
+      handler: 'handler.lambda_handler',
+      code: lambda.Code.fromAsset(path.join(__dirname, '../../lambda/compliance-evaluate')),
+      layers: [pypdfLayer, pluginsLayer],
+      memorySize: 2048,
+      timeout: cdk.Duration.seconds(300),
+      environment: {
+        BUCKET_NAME: documentBucket.bucketName,
+        TABLE_NAME: documentTable.tableName,
+        BASELINES_TABLE: complianceBaselinesTable.tableName,
+        REPORTS_TABLE: complianceReportsTable.tableName,
+        FEEDBACK_TABLE: complianceFeedbackTable.tableName,
+        BEDROCK_MODEL_ID: 'us.anthropic.claude-haiku-4-5-20251001-v1:0',
+      },
+      tracing: lambda.Tracing.ACTIVE,
+    });
+    documentBucket.grantRead(complianceEvaluateLambda);
+    documentTable.grantReadData(complianceEvaluateLambda);
+    complianceBaselinesTable.grantReadData(complianceEvaluateLambda);
+    complianceReportsTable.grantReadWriteData(complianceEvaluateLambda);
+    complianceFeedbackTable.grantReadData(complianceEvaluateLambda);
+    complianceEvaluateLambda.addToRolePolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: ['bedrock:InvokeModel'],
+      resources: ['*'],
+    }));
+
+    // compliance-api: CRUD for baselines/reports/feedback
+    const complianceApiLambda = new lambda.Function(this, 'ComplianceApiLambda', {
+      functionName: 'doc-processor-compliance-api',
+      runtime: lambda.Runtime.PYTHON_3_13,
+      handler: 'handler.lambda_handler',
+      code: lambda.Code.fromAsset(path.join(__dirname, '../../lambda/compliance-api')),
+      memorySize: 512,
+      timeout: cdk.Duration.seconds(30),
+      environment: {
+        BUCKET_NAME: documentBucket.bucketName,
+        CORS_ORIGIN: '*',
+        BASELINES_TABLE: complianceBaselinesTable.tableName,
+        REPORTS_TABLE: complianceReportsTable.tableName,
+        FEEDBACK_TABLE: complianceFeedbackTable.tableName,
+      },
+      tracing: lambda.Tracing.ACTIVE,
+    });
+    documentBucket.grantReadWrite(complianceApiLambda);
+    [complianceBaselinesTable, complianceReportsTable, complianceFeedbackTable]
+      .forEach(t => t.grantReadWriteData(complianceApiLambda));
 
     // ==========================================
     // Step Functions State Machine
@@ -852,8 +995,30 @@ export class DocumentProcessingStack extends cdk.Stack {
 
     mapExtraction.itemProcessor(extractSection);
 
-    // Map extraction -> normalize
-    mapExtraction.next(normalizeData);
+    // ==========================================
+    // Compliance Engine -- Step Functions States
+    // ==========================================
+
+    // Compliance evaluation (non-blocking — errors don't block extraction)
+    const evaluateCompliance = new tasks.LambdaInvoke(this, 'EvaluateCompliance', {
+      lambdaFunction: complianceEvaluateLambda,
+      outputPath: '$.Payload',
+      retryOnServiceExceptions: true,
+    });
+    const complianceFailed = new sfn.Pass(this, 'ComplianceFailed', {
+      result: sfn.Result.fromObject({ complianceReport: { status: 'error', overallScore: -1 } }),
+    });
+    evaluateCompliance.addCatch(complianceFailed, { resultPath: '$.complianceError' });
+
+    // Parallel: extraction + compliance run side-by-side
+    const extractionAndCompliance = new sfn.Parallel(this, 'ExtractionAndCompliance', {
+      comment: 'Run extraction and compliance evaluation in parallel',
+      resultPath: '$.parallelResults',
+    });
+    extractionAndCompliance.branch(mapExtraction);                     // Branch 0: extraction (Map)
+    extractionAndCompliance.branch(evaluateCompliance);                // Branch 1: compliance
+    extractionAndCompliance.next(normalizeData);
+    extractionAndCompliance.addCatch(handleError, { resultPath: '$.error' });
 
     // ==========================================
     // Document Type Routing (Blue/Green)
@@ -899,7 +1064,7 @@ export class DocumentProcessingStack extends cdk.Stack {
           sfn.Condition.isPresent('$.extractionPlan'),
           sfn.Condition.isPresent('$.extractionPlan[0]'),
         ),
-        mapExtraction
+        extractionAndCompliance
       )
       .otherwise(legacyDocumentTypeChoice);
 
@@ -981,9 +1146,6 @@ export class DocumentProcessingStack extends cdk.Stack {
     parallelMortgageExtraction.addCatch(handleError, {
       resultPath: '$.error',
     });
-    mapExtraction.addCatch(handleError, {
-      resultPath: '$.error',
-    });
     normalizeData.addCatch(handleError, {
       resultPath: '$.error',
     });
@@ -1054,6 +1216,9 @@ export class DocumentProcessingStack extends cdk.Stack {
         PLUGIN_CONFIGS_TABLE: 'document-plugin-configs',
         BEDROCK_MODEL_ID: 'us.anthropic.claude-haiku-4-5-20251001-v1:0',
         CORS_ORIGIN: '*',
+        BASELINES_TABLE: complianceBaselinesTable.tableName,
+        REPORTS_TABLE: complianceReportsTable.tableName,
+        FEEDBACK_TABLE: complianceFeedbackTable.tableName,
       },
       tracing: lambda.Tracing.ACTIVE,
     });
@@ -1062,6 +1227,8 @@ export class DocumentProcessingStack extends cdk.Stack {
     documentTable.grantReadWriteData(apiLambda);  // Read/Write for review workflow
     stateMachine.grantRead(apiLambda);
     stateMachine.grantStartExecution(apiLambda);  // For re-processing rejected documents
+    [complianceBaselinesTable, complianceReportsTable, complianceFeedbackTable]
+      .forEach(t => t.grantReadWriteData(apiLambda));
 
     // Plugin builder needs Textract + Bedrock for sample analysis and AI config generation
     apiLambda.addToRolePolicy(new iam.PolicyStatement({

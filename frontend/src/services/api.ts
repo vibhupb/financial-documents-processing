@@ -61,10 +61,14 @@ export const api = {
     ),
 
   // Upload
-  createUploadUrl: (filename: string, processingMode: string = 'extract') =>
+  createUploadUrl: (filename: string, processingMode: string = 'extract', baselineIds?: string[]) =>
     fetchApi<UploadResponse>('/upload', {
       method: 'POST',
-      body: JSON.stringify({ filename, processingMode }),
+      body: JSON.stringify({
+        filename,
+        processingMode,
+        ...(baselineIds?.length ? { baselineIds } : {}),
+      }),
     }),
 
   uploadFile: async (uploadUrl: string, fields: Record<string, string>, file: File) => {
@@ -167,4 +171,39 @@ export const api = {
       `/documents/${documentId}/reprocess`,
       { method: 'POST', body: JSON.stringify({ force: true }) }
     ),
+
+  // Compliance Baselines
+  listBaselines: (params?: { status?: string }) =>
+    fetchApi<{ baselines: any[] }>(`/baselines${params?.status ? `?status=${params.status}` : ''}`),
+
+  createBaseline: (body: { name: string; description: string; pluginIds?: string[] }) =>
+    fetchApi<any>('/baselines', { method: 'POST', body: JSON.stringify(body) }),
+
+  getBaseline: (baselineId: string) =>
+    fetchApi<{ baseline: any }>(`/baselines/${baselineId}`),
+
+  updateBaseline: (baselineId: string, body: any) =>
+    fetchApi<any>(`/baselines/${baselineId}`, { method: 'PUT', body: JSON.stringify(body) }),
+
+  publishBaseline: (baselineId: string) =>
+    fetchApi<any>(`/baselines/${baselineId}/publish`, { method: 'POST' }),
+
+  addRequirement: (baselineId: string, body: any) =>
+    fetchApi<any>(`/baselines/${baselineId}/requirements`, { method: 'POST', body: JSON.stringify(body) }),
+
+  updateRequirement: (baselineId: string, reqId: string, body: any) =>
+    fetchApi<any>(`/baselines/${baselineId}/requirements/${reqId}`, { method: 'PUT', body: JSON.stringify(body) }),
+
+  deleteRequirement: (baselineId: string, reqId: string) =>
+    fetchApi<any>(`/baselines/${baselineId}/requirements/${reqId}`, { method: 'DELETE' }),
+
+  // Compliance Reports
+  getComplianceReports: (documentId: string) =>
+    fetchApi<{ reports: any[] }>(`/documents/${documentId}/compliance`),
+
+  submitComplianceReview: (documentId: string, reportId: string, body: any) =>
+    fetchApi<any>(`/documents/${documentId}/compliance/${reportId}/review`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
 };

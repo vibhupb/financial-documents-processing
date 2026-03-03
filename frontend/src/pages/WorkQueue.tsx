@@ -283,6 +283,9 @@ export default function WorkQueue() {
                     Status
                   </th>
                   <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Compliance
+                  </th>
+                  <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Cost
                   </th>
                   <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">
@@ -341,6 +344,25 @@ export default function WorkQueue() {
                       <StatusBadge
                         status={doc.reviewStatus || doc.status}
                       />
+                    </td>
+
+                    {/* Compliance column */}
+                    <td className="px-4 py-4">
+                      {(doc as any).complianceScore != null && (doc as any).complianceScore >= 0 ? (
+                        <span
+                          className={`px-2 py-0.5 rounded text-xs font-medium ${
+                            (doc as any).complianceScore >= 90
+                              ? 'bg-green-100 text-green-700'
+                              : (doc as any).complianceScore >= 50
+                                ? 'bg-yellow-100 text-yellow-700'
+                                : 'bg-red-100 text-red-700'
+                          }`}
+                        >
+                          {(doc as any).complianceScore}%
+                        </span>
+                      ) : (
+                        <span className="text-xs text-gray-300">&mdash;</span>
+                      )}
                     </td>
 
                     {/* Cost column */}

@@ -7,6 +7,8 @@ import DocumentDetail from './pages/DocumentDetail';
 import PluginList from './pages/PluginList';
 import PluginWizard from './pages/PluginWizard';
 import PluginEditor from './pages/PluginEditor';
+import Baselines from './pages/Baselines';
+import BaselineEditor from './pages/BaselineEditor';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, isLoading } = useAuth();
@@ -71,6 +73,22 @@ function AppRoutes() {
         element={
           <ProtectedRoute>
             <Layout><PluginEditor /></Layout>
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/baselines"
+        element={
+          <ProtectedRoute>
+            <Layout><Baselines /></Layout>
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/baselines/:baselineId"
+        element={
+          <ProtectedRoute>
+            <Layout><BaselineEditor /></Layout>
           </ProtectedRoute>
         }
       />
