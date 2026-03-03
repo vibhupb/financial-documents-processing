@@ -1,7 +1,9 @@
+import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../services/api';
 import VerdictBadge from './VerdictBadge';
 import ComplianceScoreGauge from './ComplianceScoreGauge';
+import ReviewerOverride from './ReviewerOverride';
 
 interface Props {
   documentId: string;
@@ -9,6 +11,7 @@ interface Props {
 }
 
 export default function ComplianceTab({ documentId, onPageClick }: Props) {
+  const [overridingReqId, setOverridingReqId] = useState<string | null>(null);
   const { data, isLoading } = useQuery({
     queryKey: ['compliance', documentId],
     queryFn: () => api.getComplianceReports(documentId),
@@ -27,7 +30,15 @@ export default function ComplianceTab({ documentId, onPageClick }: Props) {
           <div key={r.requirementId} className="border rounded p-3 bg-white">
             <div className="flex items-center justify-between">
               <span className="text-sm font-medium">{r.requirementId}</span>
-              <VerdictBadge verdict={r.reviewerOverride || r.verdict} />
+              <div className="flex items-center gap-2">
+                <VerdictBadge verdict={r.reviewerOverride || r.verdict} />
+                <button
+                  onClick={() => setOverridingReqId(r.requirementId)}
+                  className="text-xs text-gray-400 hover:text-primary-600"
+                >
+                  Override
+                </button>
+              </div>
             </div>
             {r.evidence && (
               <p
@@ -45,6 +56,15 @@ export default function ComplianceTab({ documentId, onPageClick }: Props) {
                   {r.evidence}
                 </span>
               </p>
+            )}
+            {overridingReqId === r.requirementId && (
+              <ReviewerOverride
+                documentId={documentId}
+                reportId={report.reportId}
+                requirementId={r.requirementId}
+                currentVerdict={r.reviewerOverride || r.verdict}
+                onClose={() => setOverridingReqId(null)}
+              />
             )}
           </div>
         ))}

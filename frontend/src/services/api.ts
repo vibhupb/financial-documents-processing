@@ -196,4 +196,10 @@ export const api = {
   // Compliance Reports
   getComplianceReports: (documentId: string) =>
     fetchApi<{ reports: any[] }>(`/documents/${documentId}/compliance`),
+
+  submitComplianceReview: (documentId: string, reportId: string, body: any) =>
+    fetchApi<any>(`/documents/${documentId}/compliance/${reportId}/review`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
 };
