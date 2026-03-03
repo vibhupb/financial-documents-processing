@@ -8,6 +8,7 @@ import DocumentTreeView from './DocumentTreeView';
 import DocumentQA from './DocumentQA';
 import RawJsonView from './RawJsonView';
 import ExtractionTrigger from './ExtractionTrigger';
+import ComplianceTab from './ComplianceTab';
 import ProcessingMetricsPanel from './ProcessingMetricsPanel';
 import type { Document, LoanData } from '../types';
 
@@ -219,6 +220,15 @@ export default function DocumentViewer({
                   <RawJsonView
                     data={rawJsonData}
                     label={document.extractedData ? 'Extracted Data' : 'PageIndex Tree'}
+                  />
+                </div>
+              )}
+
+              {activeTab === 'compliance' && (
+                <div className="flex-1 overflow-auto">
+                  <ComplianceTab
+                    documentId={document.documentId}
+                    onPageClick={handlePageClick}
                   />
                 </div>
               )}

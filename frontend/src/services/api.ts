@@ -192,4 +192,8 @@ export const api = {
 
   deleteRequirement: (baselineId: string, reqId: string) =>
     fetchApi<any>(`/baselines/${baselineId}/requirements/${reqId}`, { method: 'DELETE' }),
+
+  // Compliance Reports
+  getComplianceReports: (documentId: string) =>
+    fetchApi<{ reports: any[] }>(`/documents/${documentId}/compliance`),
 };

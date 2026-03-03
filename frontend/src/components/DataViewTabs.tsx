@@ -1,7 +1,7 @@
-import { FileText, BarChart3, Code } from 'lucide-react';
+import { FileText, BarChart3, Code, Shield } from 'lucide-react';
 import clsx from 'clsx';
 
-export type DataViewTab = 'summary' | 'extracted' | 'json';
+export type DataViewTab = 'summary' | 'extracted' | 'json' | 'compliance';
 
 interface DataViewTabsProps {
   activeTab: DataViewTab;
@@ -15,6 +15,7 @@ const tabs: { id: DataViewTab; label: string; icon: typeof FileText }[] = [
   { id: 'summary', label: 'Summary', icon: FileText },
   { id: 'extracted', label: 'Extracted', icon: BarChart3 },
   { id: 'json', label: 'JSON', icon: Code },
+  { id: 'compliance', label: 'Compliance', icon: Shield },
 ];
 
 export default function DataViewTabs({
