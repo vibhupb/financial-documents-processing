@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect } from 'react';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useDropzone } from 'react-dropzone';
 import { Upload, CheckCircle, AlertCircle, Loader2 } from 'lucide-react';
 import clsx from 'clsx';
@@ -14,6 +14,13 @@ export default function UploadBar() {
   const [status, setStatus] = useState<UploadBarStatus>('idle');
   const [fileName, setFileName] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [selectedBaselines, setSelectedBaselines] = useState<string[]>([]);
+
+  // Fetch published compliance baselines for evaluation selection
+  const { data: baselinesData } = useQuery({
+    queryKey: ['baselines', 'published'],
+    queryFn: () => api.listBaselines({ status: 'published' }),
+  });
 
   // Auto-reset to idle after success (3s) or error (5s)
   useEffect(() => {
@@ -36,7 +43,11 @@ export default function UploadBar() {
 
   const uploadMutation = useMutation({
     mutationFn: async (file: File) => {
-      const urlResponse = await api.createUploadUrl(file.name);
+      const urlResponse = await api.createUploadUrl(
+        file.name,
+        undefined,
+        selectedBaselines.length > 0 ? selectedBaselines : undefined
+      );
       await api.uploadFile(urlResponse.uploadUrl, urlResponse.fields, file);
       return urlResponse;
     },
@@ -99,54 +110,84 @@ export default function UploadBar() {
     disabled: status === 'uploading',
   });
 
+  const publishedBaselines = baselinesData?.baselines || [];
+
   return (
-    <div
-      {...getRootProps()}
-      className={clsx(
-        'flex items-center gap-3 px-4 py-2.5 rounded-lg border transition-colors cursor-pointer',
-        status === 'idle' && !isDragActive && 'border-gray-200 bg-white hover:border-primary-300 hover:bg-gray-50',
-        status === 'idle' && isDragActive && 'border-primary-400 bg-primary-50',
-        status === 'uploading' && 'border-primary-200 bg-primary-50 cursor-wait',
-        status === 'success' && 'border-green-300 bg-green-50',
-        status === 'error' && 'border-red-300 bg-red-50'
-      )}
-    >
-      <input {...getInputProps()} />
+    <div className="space-y-1">
+      <div
+        {...getRootProps()}
+        className={clsx(
+          'flex items-center gap-3 px-4 py-2.5 rounded-lg border transition-colors cursor-pointer',
+          status === 'idle' && !isDragActive && 'border-gray-200 bg-white hover:border-primary-300 hover:bg-gray-50',
+          status === 'idle' && isDragActive && 'border-primary-400 bg-primary-50',
+          status === 'uploading' && 'border-primary-200 bg-primary-50 cursor-wait',
+          status === 'success' && 'border-green-300 bg-green-50',
+          status === 'error' && 'border-red-300 bg-red-50'
+        )}
+      >
+        <input {...getInputProps()} />
 
-      {status === 'idle' && (
-        <>
-          <Upload className="w-4 h-4 text-gray-400 flex-shrink-0" />
-          <span className="text-sm text-gray-500">
-            {isDragActive ? 'Drop PDF here' : 'Drop a PDF here or click to upload'}
-          </span>
-        </>
-      )}
+        {status === 'idle' && (
+          <>
+            <Upload className="w-4 h-4 text-gray-400 flex-shrink-0" />
+            <span className="text-sm text-gray-500">
+              {isDragActive ? 'Drop PDF here' : 'Drop a PDF here or click to upload'}
+            </span>
+          </>
+        )}
 
-      {status === 'uploading' && (
-        <>
-          <Loader2 className="w-4 h-4 text-primary-600 animate-spin flex-shrink-0" />
-          <span className="text-sm text-primary-700">
-            Uploading {fileName}...
-          </span>
-        </>
-      )}
+        {status === 'uploading' && (
+          <>
+            <Loader2 className="w-4 h-4 text-primary-600 animate-spin flex-shrink-0" />
+            <span className="text-sm text-primary-700">
+              Uploading {fileName}...
+            </span>
+          </>
+        )}
 
-      {status === 'success' && (
-        <>
-          <CheckCircle className="w-4 h-4 text-green-600 flex-shrink-0" />
-          <span className="text-sm text-green-700">
-            {fileName} uploaded successfully
-          </span>
-        </>
-      )}
+        {status === 'success' && (
+          <>
+            <CheckCircle className="w-4 h-4 text-green-600 flex-shrink-0" />
+            <span className="text-sm text-green-700">
+              {fileName} uploaded successfully
+            </span>
+          </>
+        )}
 
-      {status === 'error' && (
-        <>
-          <AlertCircle className="w-4 h-4 text-red-600 flex-shrink-0" />
-          <span className="text-sm text-red-700">
-            Upload failed{errorMessage ? `: ${errorMessage}` : ''}
-          </span>
-        </>
+        {status === 'error' && (
+          <>
+            <AlertCircle className="w-4 h-4 text-red-600 flex-shrink-0" />
+            <span className="text-sm text-red-700">
+              Upload failed{errorMessage ? `: ${errorMessage}` : ''}
+            </span>
+          </>
+        )}
+      </div>
+
+      {/* Baseline selection — shown when published baselines exist */}
+      {publishedBaselines.length > 0 && (
+        <div className="flex items-center gap-3 px-1">
+          <span className="text-xs text-gray-400 flex-shrink-0">Evaluate:</span>
+          <div className="flex flex-wrap gap-x-3 gap-y-1">
+            {publishedBaselines.map((bl: any) => (
+              <label key={bl.baselineId} className="flex items-center gap-1 text-xs text-gray-500 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={selectedBaselines.includes(bl.baselineId)}
+                  onChange={(e) =>
+                    setSelectedBaselines((prev) =>
+                      e.target.checked
+                        ? [...prev, bl.baselineId]
+                        : prev.filter((id) => id !== bl.baselineId)
+                    )
+                  }
+                  className="w-3 h-3 rounded border-gray-300"
+                />
+                {bl.name}
+              </label>
+            ))}
+          </div>
+        </div>
       )}
     </div>
   );

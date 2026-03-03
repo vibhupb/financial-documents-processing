@@ -61,10 +61,14 @@ export const api = {
     ),
 
   // Upload
-  createUploadUrl: (filename: string, processingMode: string = 'extract') =>
+  createUploadUrl: (filename: string, processingMode: string = 'extract', baselineIds?: string[]) =>
     fetchApi<UploadResponse>('/upload', {
       method: 'POST',
-      body: JSON.stringify({ filename, processingMode }),
+      body: JSON.stringify({
+        filename,
+        processingMode,
+        ...(baselineIds?.length ? { baselineIds } : {}),
+      }),
     }),
 
   uploadFile: async (uploadUrl: string, fields: Record<string, string>, file: File) => {
