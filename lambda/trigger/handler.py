@@ -174,14 +174,17 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 document_id = str(uuid.uuid4())
                 print(f"Generated new document ID (unexpected path format): {document_id}")
 
-            # Read processing mode from S3 object metadata
-            # (set by frontend upload: "extract", "understand", or "both")
+            # Read processing mode and baseline IDs from S3 object metadata
+            # (set by frontend upload via presigned POST)
             processing_mode = "extract"  # default
+            baseline_ids = []
             try:
                 head_resp = s3_client.head_object(Bucket=bucket, Key=key)
-                processing_mode = head_resp.get("Metadata", {}).get(
-                    "processing-mode", "extract"
-                )
+                metadata = head_resp.get("Metadata", {})
+                processing_mode = metadata.get("processing-mode", "extract")
+                baseline_ids_str = metadata.get("baseline-ids", "")
+                if baseline_ids_str:
+                    baseline_ids = [bid.strip() for bid in baseline_ids_str.split(",") if bid.strip()]
             except Exception as e:
                 print(f"Warning: Could not read S3 metadata: {e}")
 
@@ -196,6 +199,8 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 "processingMode": processing_mode,
                 "source": "s3-trigger",
             }
+            if baseline_ids:
+                sfn_input["baselineIds"] = baseline_ids
 
             # Start Step Functions execution
             # Sanitize name: Step Functions only allows [a-zA-Z0-9-_]

@@ -47,6 +47,7 @@ UPLOAD_RESP=$(curl -s -X POST "$API_URL/upload" \
   -d "{\"filename\":\"e2e-test.pdf\",\"processingMode\":\"extract\",\"baselineIds\":[\"$BL_ID\"]}")
 DOC_ID=$(echo "$UPLOAD_RESP" | jq -r '.documentId')
 UPLOAD_URL=$(echo "$UPLOAD_RESP" | jq -r '.uploadUrl')
+UPLOAD_FIELDS=$(echo "$UPLOAD_RESP" | jq -r '.fields')
 echo "Document ID: $DOC_ID"
 
 if [ -z "$DOC_ID" ] || [ "$DOC_ID" = "null" ]; then
@@ -57,11 +58,15 @@ fi
 # Upload a sample PDF if available
 SAMPLE_PDF="$PROJECT_ROOT/tests/sample-documents/sample-loan.pdf"
 if [ -f "$SAMPLE_PDF" ]; then
-  # Use the presigned URL for direct PUT upload
+  # Build curl -F arguments from presigned POST fields
   echo "Uploading $SAMPLE_PDF..."
-  curl -s -X PUT "$UPLOAD_URL" \
-    -H "Content-Type: application/pdf" \
-    --data-binary "@$SAMPLE_PDF" || echo "Upload via presigned URL"
+  CURL_ARGS=()
+  for key in $(echo "$UPLOAD_FIELDS" | jq -r 'keys[]'); do
+    val=$(echo "$UPLOAD_FIELDS" | jq -r --arg k "$key" '.[$k]')
+    CURL_ARGS+=(-F "$key=$val")
+  done
+  CURL_ARGS+=(-F "file=@$SAMPLE_PDF")
+  curl -s -X POST "$UPLOAD_URL" "${CURL_ARGS[@]}" > /dev/null
   echo "Upload complete."
 else
   warning "No sample PDF found at $SAMPLE_PDF"

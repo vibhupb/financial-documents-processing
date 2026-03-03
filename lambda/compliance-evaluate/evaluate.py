@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 
 import boto3
 from botocore.config import Config
+from decimal import Decimal
 
 s3_client = boto3.client("s3")
 bedrock_client = boto3.client(
@@ -33,7 +34,7 @@ MODEL_ID = os.environ.get(
 BUCKET = os.environ.get("BUCKET_NAME", "")
 
 
-def evaluate_document(doc_id, plugin_id, tree, pdf_bytes):
+def evaluate_document(doc_id, plugin_id, tree, pdf_bytes, baseline_ids=None):
     """Evaluate a document against all applicable baselines.
 
     Args:
@@ -41,11 +42,12 @@ def evaluate_document(doc_id, plugin_id, tree, pdf_bytes):
         plugin_id: The plugin/document type identifier (e.g. 'loan_package').
         tree: PageIndex hierarchical tree structure for the document.
         pdf_bytes: Raw PDF content as bytes.
+        baseline_ids: Optional explicit list of baseline IDs from upload.
 
     Returns:
         A compliance report dict with overallScore, results, and status.
     """
-    baselines = _find_baselines(plugin_id)
+    baselines = _find_baselines(plugin_id, baseline_ids=baseline_ids)
     if not baselines:
         return {
             "reportId": str(uuid.uuid4()),
@@ -80,12 +82,26 @@ def evaluate_document(doc_id, plugin_id, tree, pdf_bytes):
     }
 
 
-def _find_baselines(plugin_id):
-    """Find published baselines for a given plugin type.
+def _find_baselines(plugin_id, baseline_ids=None):
+    """Find baselines for evaluation.
 
-    Queries the baselines DynamoDB table using the pluginId-index GSI
-    to find all baselines with status='published' for the given plugin.
+    If baseline_ids are provided (from upload), fetch those specific baselines.
+    Otherwise, query by pluginId GSI for all published baselines matching the plugin.
     """
+    if baseline_ids:
+        # Fetch explicit baselines by ID
+        items = []
+        for bid in baseline_ids:
+            try:
+                resp = baselines_table.get_item(Key={"baselineId": bid})
+                item = resp.get("Item")
+                if item and item.get("status") == "published":
+                    items.append(item)
+            except Exception as e:
+                print(f"[Compliance] Failed to fetch baseline {bid}: {e}")
+        return items
+
+    # Fallback: query by plugin type
     resp = baselines_table.query(
         IndexName="pluginId-index",
         KeyConditionExpression="pluginId = :pid AND #s = :pub",
@@ -234,17 +250,41 @@ def _get_corrections_block(baseline_id, batch):
     return "\n".join(lines) + "\n\n"
 
 
+def _convert_floats(obj):
+    """Recursively convert float values to Decimal for DynamoDB compatibility."""
+    if isinstance(obj, float):
+        return Decimal(str(obj))
+    if isinstance(obj, dict):
+        return {k: _convert_floats(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_convert_floats(i) for i in obj]
+    return obj
+
+
 def _store_report(report):
     """Store compliance report and update document with compliance score."""
-    reports_table.put_item(Item=report)
+    reports_table.put_item(Item=_convert_floats(report))
     # Write complianceScore to main documents table for Work Queue display
+    # The documents table has a composite key (documentId + documentType),
+    # so we must query first to find the documentType.
     doc_table_name = os.environ.get("TABLE_NAME", "financial-documents")
     doc_table = dynamodb.Table(doc_table_name)
-    doc_table.update_item(
-        Key={"documentId": report["documentId"]},
-        UpdateExpression="SET complianceScore = :score",
-        ExpressionAttributeValues={":score": report.get("overallScore", 0)},
-    )
+    try:
+        resp = doc_table.query(
+            KeyConditionExpression="documentId = :did",
+            ExpressionAttributeValues={":did": report["documentId"]},
+            ProjectionExpression="documentId, documentType",
+            Limit=1,
+        )
+        items = resp.get("Items", [])
+        if items:
+            doc_table.update_item(
+                Key={"documentId": items[0]["documentId"], "documentType": items[0]["documentType"]},
+                UpdateExpression="SET complianceScore = :score",
+                ExpressionAttributeValues={":score": report.get("overallScore", 0)},
+            )
+    except Exception as e:
+        print(f"[Compliance] Warning: Could not update complianceScore on document: {e}")
 
 
 def _load_tree_from_s3(event):

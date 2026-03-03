@@ -371,7 +371,7 @@ export class DocumentProcessingStack extends cdk.Stack {
       tracing: lambda.Tracing.ACTIVE,
     });
     documentBucket.grantRead(complianceEvaluateLambda);
-    documentTable.grantReadData(complianceEvaluateLambda);
+    documentTable.grantReadWriteData(complianceEvaluateLambda);
     complianceBaselinesTable.grantReadData(complianceEvaluateLambda);
     complianceReportsTable.grantReadWriteData(complianceEvaluateLambda);
     complianceFeedbackTable.grantReadData(complianceEvaluateLambda);

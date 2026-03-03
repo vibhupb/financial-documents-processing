@@ -263,7 +263,7 @@ def get_document_audit(document_id: str) -> dict[str, Any]:
         return {"error": f"Failed to get audit trail: {str(e)}"}
 
 
-def create_upload_url(filename: str, processing_mode: str = "extract") -> dict[str, Any]:
+def create_upload_url(filename: str, processing_mode: str = "extract", baseline_ids: list | None = None) -> dict[str, Any]:
     """Generate a presigned POST URL for document upload.
 
     Uses presigned POST instead of PUT for better CORS support with
@@ -273,6 +273,7 @@ def create_upload_url(filename: str, processing_mode: str = "extract") -> dict[s
     Args:
         filename: Original filename
         processing_mode: "extract" (default), "understand", or "both"
+        baseline_ids: Optional list of compliance baseline IDs to evaluate against
     """
     document_id = str(uuid.uuid4())
     key = f"ingest/{document_id}/{filename}"
@@ -280,20 +281,30 @@ def create_upload_url(filename: str, processing_mode: str = "extract") -> dict[s
     if processing_mode not in ("extract", "understand", "both"):
         processing_mode = "extract"
 
+    # Serialize baseline IDs as comma-separated string for S3 metadata
+    baseline_ids_str = ",".join(baseline_ids) if baseline_ids else ""
+
     try:
+        fields = {
+            "Content-Type": "application/pdf",
+            "x-amz-meta-processing-mode": processing_mode,
+        }
+        conditions = [
+            {"Content-Type": "application/pdf"},
+            {"x-amz-meta-processing-mode": processing_mode},
+            ["content-length-range", 1, 52428800],  # 1 byte to 50MB
+        ]
+
+        if baseline_ids_str:
+            fields["x-amz-meta-baseline-ids"] = baseline_ids_str
+            conditions.append({"x-amz-meta-baseline-ids": baseline_ids_str})
+
         # Use presigned POST which has better CORS support
         presigned_post = s3_client.generate_presigned_post(
             Bucket=BUCKET_NAME,
             Key=key,
-            Fields={
-                "Content-Type": "application/pdf",
-                "x-amz-meta-processing-mode": processing_mode,
-            },
-            Conditions=[
-                {"Content-Type": "application/pdf"},
-                {"x-amz-meta-processing-mode": processing_mode},
-                ["content-length-range", 1, 52428800],  # 1 byte to 50MB
-            ],
+            Fields=fields,
+            Conditions=conditions,
             ExpiresIn=3600,  # 1 hour
         )
 
@@ -2147,7 +2158,8 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         elif path == "/upload" and http_method == "POST":
             filename = body.get("filename", "document.pdf") if body else "document.pdf"
             processing_mode = body.get("processingMode", "extract") if body else "extract"
-            return response(200, create_upload_url(filename, processing_mode))
+            baseline_ids = body.get("baselineIds", []) if body else []
+            return response(200, create_upload_url(filename, processing_mode, baseline_ids))
 
         elif path == "/metrics" and http_method == "GET":
             return response(200, get_metrics())

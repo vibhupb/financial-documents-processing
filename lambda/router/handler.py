@@ -2583,6 +2583,7 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             "size": file_size,
             "uploadedAt": uploaded_at,
             "processingMode": event.get("processingMode", "extract"),
+            "baselineIds": event.get("baselineIds"),  # Pass through for compliance
             "totalPages": total_pages,
             "classification": classification,
             "identifiedDocuments": identified_docs,
