@@ -2361,7 +2361,7 @@ def add_requirement(baseline_id, body):
         "text": body["text"],
         "category": body.get("category", "general"),
         "criticality": body.get("criticality", "should-have"),
-        "confidenceThreshold": body.get("confidenceThreshold", 0.8),
+        "confidenceThreshold": Decimal(str(body.get("confidenceThreshold", 0.8))),
         "status": "active",
         "createdAt": now,
     }
@@ -2390,7 +2390,7 @@ def update_requirement(baseline_id, requirement_id, body):
         if req["requirementId"] == requirement_id:
             for field in ("text", "category", "criticality", "confidenceThreshold", "status"):
                 if field in body:
-                    req[field] = body[field]
+                    req[field] = Decimal(str(body[field])) if field == "confidenceThreshold" else body[field]
             req["updatedAt"] = now
             break
     else:
