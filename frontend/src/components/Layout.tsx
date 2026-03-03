@@ -1,7 +1,7 @@
 import { ReactNode } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { FileText, Puzzle, LogOut, Inbox } from 'lucide-react';
+import { FileText, Puzzle, LogOut, Inbox, Shield } from 'lucide-react';
 import clsx from 'clsx';
 import { useAuth } from '../contexts/AuthContext';
 import { api } from '../services/api';
@@ -38,6 +38,12 @@ export default function Layout({ children }: LayoutProps) {
             name: 'Plugin Studio',
             href: '/config',
             icon: Puzzle,
+            badge: undefined as number | undefined,
+          },
+          {
+            name: 'Baselines',
+            href: '/baselines',
+            icon: Shield,
             badge: undefined as number | undefined,
           },
         ]

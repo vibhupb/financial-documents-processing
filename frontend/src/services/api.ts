@@ -167,4 +167,11 @@ export const api = {
       `/documents/${documentId}/reprocess`,
       { method: 'POST', body: JSON.stringify({ force: true }) }
     ),
+
+  // Compliance Baselines
+  listBaselines: (params?: { status?: string }) =>
+    fetchApi<{ baselines: any[] }>(`/baselines${params?.status ? `?status=${params.status}` : ''}`),
+
+  createBaseline: (body: { name: string; description: string; pluginIds?: string[] }) =>
+    fetchApi<any>('/baselines', { method: 'POST', body: JSON.stringify(body) }),
 };
