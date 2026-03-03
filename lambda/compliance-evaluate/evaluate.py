@@ -235,8 +235,16 @@ def _get_corrections_block(baseline_id, batch):
 
 
 def _store_report(report):
-    """Store compliance report in DynamoDB."""
+    """Store compliance report and update document with compliance score."""
     reports_table.put_item(Item=report)
+    # Write complianceScore to main documents table for Work Queue display
+    doc_table_name = os.environ.get("TABLE_NAME", "financial-documents")
+    doc_table = dynamodb.Table(doc_table_name)
+    doc_table.update_item(
+        Key={"documentId": report["documentId"]},
+        UpdateExpression="SET complianceScore = :score",
+        ExpressionAttributeValues={":score": report.get("overallScore", 0)},
+    )
 
 
 def _load_tree_from_s3(event):
