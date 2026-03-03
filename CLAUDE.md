@@ -47,15 +47,15 @@ This project implements a serverless AWS architecture for processing high-volume
                         │  │  │  - Identify document types & page numbers  │   │ │
                         │  │  └─────────────────────────────────────────────┘   │ │
                         │  │                       │                            │ │
-                        │  │          ┌─────────────┴─────────────┐             │ │
-                        │  │          ▼                           ▼             │ │
-                        │  │  ┌────────────────────┐  ┌──────────────────────┐  │ │
-                        │  │  │  EXTRACTOR:        │  │  PAGEINDEX:          │  │ │
-                        │  │  │  Textract (Targeted│  │  Claude Haiku 4.5    │  │ │
-                        │  │  │  Pages) — Queries, │  │  - Hierarchical tree │  │ │
-                        │  │  │  Tables, Forms     │  │  - On-demand summary │  │ │
-                        │  │  └────────────────────┘  │  - Hybrid Q&A        │  │ │
-                        │  │          │               └──────────────────────┘  │ │
+                        │  │     ┌─────────────────┼─────────────────┐          │ │
+                        │  │     ▼                 ▼                 ▼          │ │
+                        │  │  ┌──────────────┐  ┌──────────────┐  ┌──────────┐ │ │
+                        │  │  │  EXTRACTOR   │  │  PAGEINDEX   │  │COMPLIANCE│ │ │
+                        │  │  │  Textract    │  │  Claude Haiku│  │  ENGINE  │ │ │
+                        │  │  │  (Targeted   │  │  - Hier. tree│  │  - Ingest│ │ │
+                        │  │  │   Pages)     │  │  - Summaries │  │  - Eval  │ │ │
+                        │  │  └──────────────┘  │  - Q&A       │  │  - Score │ │ │
+                        │  │          │         └──────────────┘  └──────────┘ │ │
                         │  │          ▼                                         │ │
                         │  │  ┌─────────────────────────────────────────────┐   │ │
                         │  │  │  NORMALIZER: Claude Haiku 4.5               │   │ │
@@ -93,6 +93,8 @@ This project implements a serverless AWS architecture for processing high-volume
 | PII Audit | Amazon DynamoDB | Access audit trail for compliance |
 | PageIndex | Amazon Bedrock (Claude Haiku 4.5) | Hierarchical document tree building |
 | Document Q&A | Amazon Bedrock (Claude Haiku 4.5) | Hybrid Q&A over extracted data + tree |
+| Compliance Engine | Amazon Bedrock (Claude Haiku 4.5) + DynamoDB | Baseline comparison, requirement evaluation, reviewer overrides |
+| Compliance Parsing | python-docx, python-pptx, Pillow | Reference document parsing (DOCX, PPTX, images) |
 
 ## Project Structure
 
@@ -119,9 +121,22 @@ financial-documents-processing/
 │   │   ├── tree_builder.py           # Build hierarchical tree from PDF text
 │   │   ├── llm_client.py             # Bedrock LLM calls for summaries & Q&A
 │   │   └── token_counter.py          # Token counting utilities
+│   ├── compliance-ingest/            # Compliance baseline ingestion
+│   │   ├── handler.py                # Lambda entry: parse ref docs, extract requirements
+│   │   ├── parser.py                 # Reference doc parser (PDF, DOCX, PPTX, images)
+│   │   ├── extractor.py              # LLM requirement extraction from parsed text
+│   │   └── image_describer.py        # Bedrock image description for visual docs
+│   ├── compliance-evaluate/          # Compliance evaluation against baselines
+│   │   ├── handler.py                # Lambda entry: batch evaluation orchestrator
+│   │   └── evaluate.py               # Per-requirement LLM evaluation with evidence grounding
+│   ├── compliance-api/               # Compliance-specific API (unused — routes in api/)
+│   │   └── handler.py                # Stub (compliance routes handled by main API Lambda)
 │   └── layers/
 │       ├── pypdf/                    # PyPDF Lambda layer
 │       │   ├── requirements.txt
+│       │   └── build.sh
+│       ├── compliance-parsers/       # Compliance doc parsing layer
+│       │   ├── requirements.txt      # python-docx, python-pptx, Pillow
 │       │   └── build.sh
 │       └── plugins/                  # Document type plugin layer (auto-discovered)
 │           └── python/document_plugins/
@@ -151,15 +166,21 @@ financial-documents-processing/
 │   │   │   ├── DocumentTreeView.tsx  # Tree TOC with on-demand section summaries
 │   │   │   ├── DocumentQA.tsx        # Hybrid Q&A (extracted data + tree navigation)
 │   │   │   ├── RawJsonView.tsx       # Raw JSON viewer for extracted data
-│   │   │   ├── DataViewTabs.tsx      # Tab switcher (Summary/Extracted/JSON)
-│   │   │   └── ExtractionTrigger.tsx # Deferred extraction trigger button
+│   │   │   ├── DataViewTabs.tsx      # Tab switcher (Summary/Extracted/JSON/Compliance)
+│   │   │   ├── ExtractionTrigger.tsx # Deferred extraction trigger button
+│   │   │   ├── ComplianceTab.tsx     # Compliance results with evidence + page-jump
+│   │   │   ├── ComplianceScoreGauge.tsx  # SVG donut chart for compliance score
+│   │   │   ├── VerdictBadge.tsx      # Color-coded PASS/FAIL/PARTIAL/NOT_FOUND badge
+│   │   │   └── ReviewerOverride.tsx  # Inline reviewer override form
 │   │   ├── pages/                    # Route pages
 │   │   │   ├── Dashboard.tsx         # Overview & metrics
 │   │   │   ├── Upload.tsx            # Document upload with drag-drop
 │   │   │   ├── Documents.tsx         # Document list
 │   │   │   ├── DocumentDetail.tsx    # Document viewer page
 │   │   │   ├── ReviewDocument.tsx    # Review workflow page
-│   │   │   └── WorkQueue.tsx         # Work queue page
+│   │   │   ├── WorkQueue.tsx         # Work queue page (+ compliance score column)
+│   │   │   ├── Baselines.tsx         # Compliance baselines list with status filter
+│   │   │   └── BaselineEditor.tsx    # Baseline requirement editor with publish
 │   │   ├── contexts/
 │   │   │   └── AuthContext.tsx        # Cognito auth context + useAuth hook
 │   │   ├── services/
@@ -175,8 +196,14 @@ financial-documents-processing/
 │       ├── common/                   # Shared utilities
 │       ├── schemas/                  # Data schemas (DEPRECATED - use plugins)
 │       └── utils/                    # Helper functions
-├── tests/                            # Python tests (47 plugin registry tests)
-│   └── sample-documents/             # Test PDFs with synthetic data
+├── tests/                            # Python tests (47 plugin + 33 compliance tests)
+│   ├── sample-documents/             # Test PDFs with synthetic data
+│   ├── test_api_baselines.py         # Baseline CRUD API tests (15 tests)
+│   ├── test_api_compliance_reports.py # Compliance report API tests (5 tests)
+│   ├── test_compliance_parser.py     # Reference doc parser tests
+│   ├── test_compliance_extractor.py  # Requirement extraction tests
+│   ├── test_compliance_evaluate.py   # Evaluation engine tests
+│   └── test_compliance_feedback.py   # Few-shot feedback loop tests
 ├── scripts/
 │   ├── common.sh                     # Shared env preamble (AWS validation, helpers)
 │   ├── deploy-backend.sh             # CDK stack deployment
@@ -187,7 +214,8 @@ financial-documents-processing/
 │   ├── upload-test-doc.sh            # Test document upload
 │   ├── encrypt-existing-pii.py       # PII encryption migration (--dry-run default)
 │   ├── decrypt-for-rollback.py       # PII decryption for rollback (--confirm required)
-│   └── generate-sample-bsa.py        # Fill BSA template with synthetic data
+│   ├── generate-sample-bsa.py        # Fill BSA template with synthetic data
+│   └── test-compliance-e2e.sh        # Compliance Engine E2E test (baseline→upload→evaluate)
 ├── .vscode/                          # VS Code configuration
 ├── package.json                      # CDK dependencies
 ├── tsconfig.json                     # TypeScript config
@@ -250,6 +278,62 @@ Each plugin exports `PLUGIN_CONFIG: DocumentPluginConfig` with:
 - `pii_paths` — JSON path markers for PII encryption (`beneficialOwners[*].ssn`)
 - `cost_budget` — max/warn thresholds, section priority for budget trimming
 
+## Compliance Engine
+
+The Compliance Engine evaluates processed documents against user-defined regulatory baselines. It runs as a **non-blocking parallel branch** in Step Functions alongside the extraction pipeline.
+
+### Architecture
+
+```
+Upload (with baselineIds) → Step Functions Parallel:
+  Branch 1: Router → Extractor → Normalizer (existing pipeline)
+  Branch 2: Compliance Ingest → Compliance Evaluate (new)
+```
+
+### Three DynamoDB Tables
+
+| Table | Key | Purpose |
+|-------|-----|---------|
+| `compliance-baselines` | `baselineId` | Baseline definitions with embedded requirements array |
+| `compliance-reports` | `reportId` (GSI: `documentId`) | Evaluation results per document per baseline |
+| `compliance-feedback` | `feedbackId` (GSI: `requirementId`) | Reviewer overrides → few-shot learning examples |
+
+### Key Components
+
+- **Baselines**: Named sets of requirements (draft → published → archived lifecycle)
+- **Requirements**: Text rules with category, criticality (must-have/should-have/nice-to-have), confidence threshold
+- **Ingest Lambda**: Parses reference documents (PDF/DOCX/PPTX/images), extracts requirements via LLM
+- **Evaluate Lambda**: Compares document text against each requirement, produces PASS/FAIL/PARTIAL/NOT_FOUND verdicts with character-offset evidence grounding
+- **Few-shot Learning**: Reviewer overrides stored as feedback, injected into future evaluation prompts
+- **Frontend**: Baselines CRUD pages, ComplianceTab with score gauge + verdict badges, ReviewerOverride inline form, baseline selection on upload
+
+### DynamoDB Gotcha
+
+DynamoDB rejects Python `float` types — always wrap numeric values with `Decimal(str(value))` before `put_item`/`update_item`. This applies to `confidenceThreshold` and any other numeric fields.
+
+### Frontend Testing
+
+Frontend tests use vitest with jsdom. **Must run from `frontend/` directory** (not project root):
+```bash
+cd frontend && npx vitest run
+```
+
+### API Routes (Compliance)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/baselines` | List baselines (optional `?status=` filter) |
+| POST | `/baselines` | Create draft baseline |
+| GET | `/baselines/{id}` | Get baseline with requirements |
+| PUT | `/baselines/{id}` | Update baseline metadata |
+| POST | `/baselines/{id}/publish` | Publish baseline (requires ≥1 requirement) |
+| POST | `/baselines/{id}/requirements` | Add requirement to baseline |
+| PUT | `/baselines/{id}/requirements/{reqId}` | Update requirement |
+| DELETE | `/baselines/{id}/requirements/{reqId}` | Remove requirement |
+| GET | `/documents/{id}/compliance` | Get compliance reports for document |
+| GET | `/documents/{id}/compliance/{reportId}` | Get specific report |
+| POST | `/documents/{id}/compliance/{reportId}/review` | Submit reviewer override |
+
 ## Development Guidelines
 
 ### Code Style
@@ -288,6 +372,7 @@ Each plugin exports `PLUGIN_CONFIG: DocumentPluginConfig` with:
 - Lambda: `doc-processor-{function}`
 - API Gateway: `doc-processor-api`
 - CloudFront: For frontend distribution
+- DynamoDB (Compliance): `compliance-baselines`, `compliance-reports`, `compliance-feedback`
 
 ## Key Design Decisions
 
@@ -338,6 +423,13 @@ Each plugin exports `PLUGIN_CONFIG: DocumentPluginConfig` with:
 - **Why**: API had zero authentication, PII would be publicly accessible
 - **Solution**: Cognito User Pool with Admins/Reviewers/Viewers groups
 - **Status**: User Pool provisioned, `REQUIRE_AUTH=false` (backward compat default)
+
+### 11. Compliance Engine (Non-Blocking Parallel Branch)
+- **Why**: Financial documents must be checked against regulatory baselines (OCC, CFPB, etc.)
+- **Solution**: Step Functions Parallel state runs compliance evaluation alongside extraction — no added latency
+- **Evidence Grounding**: Character-offset evidence (`evidenceCharStart`/`evidenceCharEnd`) for audit trail
+- **Few-shot Learning**: Reviewer overrides stored as feedback, injected into future evaluation prompts
+- **Result**: Automated compliance scoring with human-in-the-loop corrections that improve over time
 
 ## Architectural Design Rationale: Router Pattern vs Alternatives
 
@@ -491,6 +583,16 @@ new_var = os.environ.get('NEW_VAR')
 | POST | `/documents/{id}/ask` | Hybrid Q&A (extracted data + tree navigation) |
 | POST | `/documents/{id}/section-summary` | On-demand section summary with caching |
 | POST | `/documents/{id}/extract` | Trigger deferred extraction |
+| GET | `/baselines` | List compliance baselines |
+| POST | `/baselines` | Create draft baseline |
+| GET | `/baselines/{id}` | Get baseline with requirements |
+| PUT | `/baselines/{id}` | Update baseline metadata |
+| POST | `/baselines/{id}/publish` | Publish baseline |
+| POST | `/baselines/{id}/requirements` | Add requirement |
+| PUT | `/baselines/{id}/requirements/{reqId}` | Update requirement |
+| DELETE | `/baselines/{id}/requirements/{reqId}` | Delete requirement |
+| GET | `/documents/{id}/compliance` | Get compliance reports |
+| POST | `/documents/{id}/compliance/{reportId}/review` | Submit reviewer override |
 
 ## Testing
 
@@ -514,8 +616,14 @@ aws stepfunctions list-executions --state-machine-arn <arn>
 
 ### Unit Testing
 ```bash
-npm test          # CDK tests
-pytest tests/     # Python tests
+npm test                    # CDK tests
+uv run pytest tests/        # Python tests (47 plugin + 33 compliance)
+cd frontend && npx vitest run  # Frontend tests (MUST run from frontend/ dir)
+```
+
+### Compliance E2E Testing
+```bash
+./scripts/test-compliance-e2e.sh  # Create baseline → add requirements → publish → upload → evaluate
 ```
 
 ## Deployment
@@ -599,6 +707,14 @@ When working on this project, Claude should:
 - Check browser console for errors
 - Hard refresh (Cmd+Shift+R) after CloudFront invalidation
 
+**DynamoDB Float Error** (`Float types are not supported`):
+- Always use `Decimal(str(value))` for numeric fields in DynamoDB items
+- Common in compliance baselines (`confidenceThreshold`) and scores
+
+**Frontend Tests Fail with "document is not defined"**:
+- Vitest must be run from `frontend/` directory, not project root
+- The jsdom environment is configured in `frontend/vite.config.ts`
+
 **CORS Errors**:
 - API Lambda returns CORS headers for all responses
 - Check `CORS_ORIGIN` environment variable
@@ -667,6 +783,7 @@ When working on this project, Claude should:
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 5.0.0 | 2026-03-02 | Compliance Engine: baseline CRUD, requirement management, parallel evaluation branch in Step Functions, LLM evidence grounding with char-offsets, reviewer overrides with few-shot learning, compliance-parsers layer (DOCX/PPTX/images), frontend (Baselines pages, ComplianceTab, score gauge, verdict badges, reviewer override), upload baseline selection, work queue compliance badges, E2E test script |
 | 4.0.0 | 2026-03-01 | PageIndex integration: hierarchical document tree, on-demand section summaries (LLM + cached), hybrid Q&A (extracted data + tree navigation), SPA layout fix, view tabs (Summary/Extracted/JSON), processing mode toggle, deferred extraction |
 | 3.0.0 | 2026-02-19 | Plugin architecture: self-registering document types (6 plugins), Map state, KMS encryption, Cognito auth, BSA Profile, W-2, Driver's License, GenericDataFields, common.sh scripts |
 | 2.2.0 | 2024-12-29 | Performance optimization: 2GB Lambda memory, 30 parallel workers, ~35s processing time; Add cleanup.sh script; Add ProcessingMetricsPanel component |
