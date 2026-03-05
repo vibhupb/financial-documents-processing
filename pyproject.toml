@@ -33,6 +33,12 @@ test = [
     "moto[all]>=5.0.0",
 ]
 
+test-toolkit = [
+    "pytest-playwright>=0.5.0",
+    "pytest-html>=4.0.0",
+    "requests>=2.31.0",
+]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
@@ -87,3 +93,9 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_functions = ["test_*"]
 addopts = "-v --cov=src/financial_docs --cov-report=term-missing"
+markers = [
+    "integration: Real-AWS integration tests",
+    "e2e: Playwright browser E2E tests",
+    "slow: Tests requiring CDK deploy cycle",
+    "compliance: Compliance engine tests",
+]

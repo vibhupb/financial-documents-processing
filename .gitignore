@@ -114,3 +114,6 @@ scripts/sfn-input.json
 # Note: src/ contains Python source code and IS committed
 frontend/.env.production
 .worktrees/
+
+# Test reports
+reports/
