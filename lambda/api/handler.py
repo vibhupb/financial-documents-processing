@@ -2223,6 +2223,22 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             parts = path.split("/")
             return response(200, delete_requirement(parts[2], parts[4]))
 
+        elif path.startswith("/baselines/") and "/upload-reference" in path and http_method == "POST":
+            baseline_id = path.split("/")[2]
+            return response(200, upload_baseline_reference(
+                baseline_id,
+                (body or {}).get("filename", "reference.pdf"),
+                (body or {}).get("contentType", "application/pdf"),
+            ))
+
+        elif path.startswith("/baselines/") and "/generate-requirements" in path and http_method == "POST":
+            baseline_id = path.split("/")[2]
+            return response(200, generate_baseline_requirements(
+                baseline_id,
+                (body or {}).get("documentKey", ""),
+                (body or {}).get("sourceFormat"),
+            ))
+
         elif path.startswith("/baselines/") and http_method == "GET":
             baseline_id = path.split("/")[2]
             return response(200, get_baseline(baseline_id))
@@ -2430,6 +2446,92 @@ def delete_requirement(baseline_id, requirement_id):
         ExpressionAttributeValues={":r": reqs, ":now": now},
     )
     return {"baselineId": baseline_id, "requirementId": requirement_id, "deleted": True}
+
+
+def upload_baseline_reference(baseline_id: str, filename: str, content_type: str = "application/pdf") -> dict:
+    """Generate a presigned POST URL for uploading a reference document to a baseline."""
+    bl_table = dynamodb.Table(BASELINES_TABLE)
+    resp = bl_table.get_item(Key={"baselineId": baseline_id})
+    if "Item" not in resp:
+        return {"error": f"Baseline {baseline_id} not found", "statusCode": 404}
+
+    # Generate S3 key for reference document
+    document_key = f"references/{baseline_id}/{filename}"
+
+    # Generate presigned POST (same pattern as create_upload_url)
+    presigned = s3_client.generate_presigned_post(
+        Bucket=BUCKET_NAME,
+        Key=document_key,
+        Fields={"Content-Type": content_type},
+        Conditions=[
+            {"Content-Type": content_type},
+            ["content-length-range", 1, 52428800],  # 50MB max
+        ],
+        ExpiresIn=3600,
+    )
+
+    # Replace global S3 endpoint with regional endpoint to avoid 307 redirects
+    upload_url = presigned["url"]
+    if ".s3.amazonaws.com" in upload_url:
+        upload_url = upload_url.replace(
+            ".s3.amazonaws.com",
+            f".s3.{AWS_REGION}.amazonaws.com",
+        )
+
+    return {
+        "uploadUrl": upload_url,
+        "fields": presigned["fields"],
+        "documentKey": document_key,
+        "baselineId": baseline_id,
+    }
+
+
+def generate_baseline_requirements(baseline_id: str, document_key: str, source_format: str = None) -> dict:
+    """Invoke compliance-ingest Lambda to extract requirements from a reference document."""
+    import json as json_mod
+
+    if not document_key:
+        return {"error": "documentKey is required"}
+
+    # Determine format from extension if not provided
+    if not source_format:
+        source_format = document_key.rsplit(".", 1)[-1].lower()
+
+    # Invoke compliance-ingest Lambda synchronously
+    lambda_client = boto3.client("lambda")
+    function_name = os.environ.get(
+        "COMPLIANCE_INGEST_FUNCTION", "doc-processor-compliance-ingest"
+    )
+
+    payload = {
+        "baselineId": baseline_id,
+        "sourceDocumentKey": document_key,
+        "sourceFormat": source_format,
+    }
+
+    resp = lambda_client.invoke(
+        FunctionName=function_name,
+        InvocationType="RequestResponse",
+        Payload=json_mod.dumps(payload),
+    )
+
+    # Parse response
+    response_payload = json_mod.loads(resp["Payload"].read())
+
+    if "errorMessage" in response_payload:
+        return {"error": response_payload["errorMessage"], "statusCode": 500}
+
+    # Fetch updated baseline to return full requirements list
+    bl_table = dynamodb.Table(BASELINES_TABLE)
+    baseline = bl_table.get_item(Key={"baselineId": baseline_id}).get("Item", {})
+
+    return {
+        "baselineId": baseline_id,
+        "requirementCount": response_payload.get("requirementCount", 0),
+        "categories": response_payload.get("categories", []),
+        "requirements": baseline.get("requirements", []),
+        "sourceDocument": document_key,
+    }
 
 
 # ── Compliance Report + Reviewer Override ─────────────────────────────────────
