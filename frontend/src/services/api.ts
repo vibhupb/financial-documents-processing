@@ -206,4 +206,17 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(body),
     }),
+
+  // Baseline reference document upload
+  uploadBaselineReference: (baselineId: string, filename: string, contentType: string = 'application/pdf') =>
+    fetchApi<{ uploadUrl: string; fields: Record<string, string>; documentKey: string; baselineId: string }>(
+      `/baselines/${baselineId}/upload-reference`,
+      { method: 'POST', body: JSON.stringify({ filename, contentType }) }
+    ),
+
+  generateRequirements: (baselineId: string, documentKey: string, sourceFormat?: string) =>
+    fetchApi<{ baselineId: string; requirementCount: number; categories: string[]; requirements: any[] }>(
+      `/baselines/${baselineId}/generate-requirements`,
+      { method: 'POST', body: JSON.stringify({ documentKey, sourceFormat }) }
+    ),
 };

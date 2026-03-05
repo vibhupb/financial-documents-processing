@@ -1,8 +1,8 @@
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import { useParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../services/api';
-import { Shield, Plus, Trash2, Save, Send, Pencil } from 'lucide-react';
+import { Shield, Plus, Trash2, Save, Send, Pencil, Upload, Loader2, CheckCircle, AlertCircle } from 'lucide-react';
 
 const criticalityColors: Record<string, string> = {
   'must-have': 'bg-red-100 text-red-700',
@@ -10,11 +10,18 @@ const criticalityColors: Record<string, string> = {
   'nice-to-have': 'bg-blue-100 text-blue-700',
 };
 
+type UploadPhase = 'idle' | 'uploading' | 'generating' | 'success' | 'error';
+
 export default function BaselineEditor() {
   const { baselineId } = useParams<{ baselineId: string }>();
   const queryClient = useQueryClient();
   const [editingReq, setEditingReq] = useState<string | null>(null);
   const [editText, setEditText] = useState('');
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [uploadPhase, setUploadPhase] = useState<UploadPhase>('idle');
+  const [uploadFileName, setUploadFileName] = useState('');
+  const [uploadError, setUploadError] = useState('');
+  const [extractedCount, setExtractedCount] = useState(0);
   const { data, isLoading } = useQuery({
     queryKey: ['baseline', baselineId],
     queryFn: () => api.getBaseline(baselineId!),
@@ -40,6 +47,45 @@ export default function BaselineEditor() {
     mutationFn: () => api.publishBaseline(baselineId!),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['baseline', baselineId] }),
   });
+  const handleReferenceUpload = async (file: File) => {
+    if (!baselineId) return;
+    setUploadFileName(file.name);
+    setUploadError('');
+    try {
+      // Step 1: Get presigned URL
+      setUploadPhase('uploading');
+      const contentType = file.type || 'application/pdf';
+      const { uploadUrl, fields, documentKey } = await api.uploadBaselineReference(
+        baselineId, file.name, contentType
+      );
+
+      // Step 2: Upload file to S3
+      const formData = new FormData();
+      Object.entries(fields).forEach(([key, value]) => formData.append(key, value));
+      formData.append('file', file);
+      const uploadResp = await fetch(uploadUrl, { method: 'POST', body: formData });
+      if (!uploadResp.ok) {
+        throw new Error(`Upload failed: ${uploadResp.status}`);
+      }
+
+      // Step 3: Generate requirements from the uploaded document
+      setUploadPhase('generating');
+      const ext = file.name.split('.').pop()?.toLowerCase();
+      const formatMap: Record<string, string> = { pdf: 'pdf', docx: 'docx', pptx: 'pptx' };
+      const sourceFormat = formatMap[ext || ''] || 'pdf';
+      const result = await api.generateRequirements(baselineId, documentKey, sourceFormat);
+      setExtractedCount(result.requirementCount);
+
+      // Step 4: Refresh baseline data
+      setUploadPhase('success');
+      queryClient.invalidateQueries({ queryKey: ['baseline', baselineId] });
+      setTimeout(() => setUploadPhase('idle'), 4000);
+    } catch (err: any) {
+      setUploadPhase('error');
+      setUploadError(err.message || 'Failed to process reference document');
+    }
+  };
+
   const baseline = data?.baseline;
   if (isLoading || !baseline) return <div className="p-8">Loading...</div>;
   const reqs = baseline.requirements || [];
@@ -60,6 +106,76 @@ export default function BaselineEditor() {
             </button>)}
         </div>
       </div>
+      {/* Generate from Document */}
+      {baseline.status === 'draft' && (
+        <div className="mb-6">
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".pdf,.docx,.pptx"
+            className="hidden"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) handleReferenceUpload(file);
+              e.target.value = '';
+            }}
+          />
+          {uploadPhase === 'idle' && (
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              className="w-full border-2 border-dashed border-gray-300 rounded-lg p-6 flex flex-col items-center gap-2 text-gray-500 hover:border-primary-400 hover:text-primary-600 transition-colors cursor-pointer"
+            >
+              <Upload className="w-8 h-8" />
+              <span className="text-sm font-medium">Upload compliance document (PDF, DOCX, PPTX)</span>
+              <span className="text-xs text-gray-400">Auto-extract requirements from a reference document</span>
+            </button>
+          )}
+          {uploadPhase === 'uploading' && (
+            <div className="w-full border-2 border-dashed border-blue-300 rounded-lg p-6 flex items-center gap-3 bg-blue-50">
+              <Loader2 className="w-5 h-5 text-blue-500 animate-spin" />
+              <div>
+                <p className="text-sm font-medium text-blue-700">Uploading {uploadFileName}...</p>
+                <p className="text-xs text-blue-500">Sending file to S3</p>
+              </div>
+            </div>
+          )}
+          {uploadPhase === 'generating' && (
+            <div className="w-full border-2 border-dashed border-amber-300 rounded-lg p-6 flex items-center gap-3 bg-amber-50">
+              <Loader2 className="w-5 h-5 text-amber-500 animate-spin" />
+              <div>
+                <p className="text-sm font-medium text-amber-700">Extracting requirements from {uploadFileName}...</p>
+                <p className="text-xs text-amber-500">Parsing document and generating requirements via LLM</p>
+              </div>
+            </div>
+          )}
+          {uploadPhase === 'success' && (
+            <div className="w-full border-2 border-dashed border-green-300 rounded-lg p-6 flex items-center gap-3 bg-green-50">
+              <CheckCircle className="w-5 h-5 text-green-600" />
+              <p className="text-sm font-medium text-green-700">
+                {extractedCount} requirement{extractedCount !== 1 ? 's' : ''} extracted from {uploadFileName}
+              </p>
+            </div>
+          )}
+          {uploadPhase === 'error' && (
+            <div className="w-full border-2 border-dashed border-red-300 rounded-lg p-6 flex items-center justify-between bg-red-50">
+              <div className="flex items-center gap-3">
+                <AlertCircle className="w-5 h-5 text-red-600" />
+                <div>
+                  <p className="text-sm font-medium text-red-700">Failed to process {uploadFileName}</p>
+                  <p className="text-xs text-red-500">{uploadError}</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setUploadPhase('idle')}
+                className="text-sm text-red-600 hover:text-red-800 underline"
+              >
+                Try again
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Requirements list */}
       <div className="space-y-2">
         {reqs.map((req: any) => (
