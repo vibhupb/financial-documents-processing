@@ -204,6 +204,21 @@ def _store_audit(bucket: str, document_id: str, tree: dict) -> None:
         print(f"[PageIndex] S3 audit write failed: {e}")
 
 
+def _resolve_doc_type(document_id: str) -> str:
+    """Find the actual documentType for a record (may have transitioned from PROCESSING)."""
+    try:
+        resp = table.query(
+            KeyConditionExpression="documentId = :did",
+            ExpressionAttributeValues={":did": document_id},
+            Limit=1,
+        )
+        if resp.get("Items"):
+            return resp["Items"][0]["documentType"]
+    except Exception:
+        pass
+    return "PROCESSING"
+
+
 def _update_status(document_id: str, stage: str, message: str) -> None:
     """Append a processing event to the document record."""
     event = {
@@ -212,8 +227,9 @@ def _update_status(document_id: str, stage: str, message: str) -> None:
         "message": message,
     }
     try:
+        doc_type = _resolve_doc_type(document_id)
         table.update_item(
-            Key={"documentId": document_id, "documentType": "PROCESSING"},
+            Key={"documentId": document_id, "documentType": doc_type},
             UpdateExpression=(
                 "SET processingEvents = list_append("
                 "if_not_exists(processingEvents, :empty), :evt)"
