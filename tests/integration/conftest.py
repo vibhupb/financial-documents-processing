@@ -13,11 +13,12 @@ import json
 import os
 import time
 import uuid
+from io import BytesIO
+from pathlib import Path
 
 import boto3
 import pytest
 import requests
-from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -198,9 +199,17 @@ def upload_and_wait(api):
         _created_doc_ids.append(doc_id)
 
         # Step 2: Upload file via presigned POST (multipart form)
-        with open(pdf_path, "rb") as f:
-            files = {"file": (pdf_path.name, f, "application/pdf")}
-            put_resp = requests.post(upload_url, data=form_fields, files=files)
+        # Append a random trailer comment to the PDF bytes so that each upload
+        # produces a unique SHA-256 hash.  Without this, the Trigger Lambda's
+        # content-based deduplication detects the same sample PDF and skips
+        # processing — the new documentId never gets a DynamoDB record, causing
+        # status polling to return NOT_FOUND indefinitely.
+        pdf_bytes = pdf_path.read_bytes()
+        nonce = f"\n% unique-test-nonce {uuid.uuid4().hex}\n".encode()
+        unique_pdf = pdf_bytes + nonce
+
+        files = {"file": (pdf_path.name, BytesIO(unique_pdf), "application/pdf")}
+        put_resp = requests.post(upload_url, data=form_fields, files=files)
         assert put_resp.status_code in (200, 204), (
             f"S3 presigned POST upload failed: {put_resp.status_code} "
             f"{put_resp.text[:200]}"
