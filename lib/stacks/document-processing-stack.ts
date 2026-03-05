@@ -1242,6 +1242,10 @@ export class DocumentProcessingStack extends cdk.Stack {
       resources: ['*'],
     }));
 
+    // Allow API Lambda to invoke compliance-ingest for reference doc processing
+    complianceIngestLambda.grantInvoke(apiLambda);
+    apiLambda.addEnvironment('COMPLIANCE_INGEST_FUNCTION', complianceIngestLambda.functionName);
+
     // ==========================================
     // API Gateway
     // ==========================================
