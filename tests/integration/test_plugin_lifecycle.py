@@ -24,8 +24,9 @@ class TestPluginLifecycle:
         # 1. Verify plugin registered
         resp = api.get("/plugins")
         assert resp.status_code == 200
-        plugins = resp.json()
-        plugin_ids = [p["plugin_id"] for p in plugins]
+        data = resp.json()
+        plugins = data.get("plugins", data)  # {"plugins": {id: {...}}} or flat dict
+        plugin_ids = list(plugins.keys()) if isinstance(plugins, dict) else [p.get("pluginId", p.get("plugin_id")) for p in plugins]
         assert "test_invoice" in plugin_ids, f"test_invoice not in {plugin_ids}"
 
         # 2. Upload test invoice

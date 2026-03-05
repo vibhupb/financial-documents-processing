@@ -25,12 +25,13 @@ class TestPluginEnhancement:
 
         # 1. Check current plugin schema
         resp = api.get("/plugins")
-        plugins = {p["plugin_id"]: p for p in resp.json()}
+        data = resp.json()
+        plugins = data.get("plugins", data) if isinstance(data, dict) else {p.get("pluginId", p.get("plugin_id")): p for p in data}
 
         if "loan_agreement" not in plugins:
             pytest.skip("loan_agreement plugin not registered")
 
-        schema_str = str(plugins["loan_agreement"].get("output_schema", {}))
+        schema_str = str(plugins["loan_agreement"].get("outputSchema", plugins["loan_agreement"].get("output_schema", {})))
         has_new_field = "prepaymentPenalty" in schema_str
         print(f"prepaymentPenalty in schema: {has_new_field}")
 

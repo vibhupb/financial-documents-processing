@@ -11,6 +11,8 @@ Run with:
     uv run pytest tests/integration/test_compliance_multi_baseline.py -v
 """
 
+import time
+
 import pytest
 
 pytestmark = [pytest.mark.integration, pytest.mark.compliance]
@@ -90,28 +92,30 @@ class TestMultiBaselineEvaluation:
         )
 
         # ── Fetch all compliance reports for this document ─────────────────
-        reports_resp = api.get(f"/documents/{doc_id}/compliance")
-        assert reports_resp.status_code == 200, (
-            f"Fetch reports failed: {reports_resp.status_code} "
-            f"{reports_resp.text}"
-        )
-        reports = reports_resp.json().get("reports", [])
-
-        # ── Find reports for each baseline ─────────────────────────────────
+        # Compliance evaluation runs as an async parallel branch in Step
+        # Functions.  The two baselines may finish at different times, so
+        # poll until both reports appear (or timeout).
         report_a = None
         report_b = None
-        for r in reports:
-            if r.get("baselineId") == baseline_a_id:
-                report_a = r
-            elif r.get("baselineId") == baseline_b_id:
-                report_b = r
+        for _attempt in range(24):  # up to ~120s
+            reports_resp = api.get(f"/documents/{doc_id}/compliance")
+            if reports_resp.status_code == 200:
+                reports = reports_resp.json().get("reports", [])
+                for r in reports:
+                    if r.get("baselineId") == baseline_a_id:
+                        report_a = r
+                    elif r.get("baselineId") == baseline_b_id:
+                        report_b = r
+                if report_a is not None and report_b is not None:
+                    break
+            time.sleep(5)
 
         assert report_a is not None, (
-            f"No report found for baseline A ({baseline_a_id}). "
+            f"No report found for baseline A ({baseline_a_id}) after polling. "
             f"Available: {[r.get('baselineId') for r in reports]}"
         )
         assert report_b is not None, (
-            f"No report found for baseline B ({baseline_b_id}). "
+            f"No report found for baseline B ({baseline_b_id}) after polling. "
             f"Available: {[r.get('baselineId') for r in reports]}"
         )
 

@@ -13,6 +13,7 @@ Run with:
 """
 
 import json
+import time
 from pathlib import Path
 
 import pytest
@@ -103,16 +104,23 @@ class TestComplianceLearningLoop:
             f"RUN 1 did not complete: {status_1} ({elapsed_1:.0f}s)"
         )
 
-        reports_resp = api.get(f"/documents/{doc_id_1}/compliance")
-        assert reports_resp.status_code == 200
-        reports_1 = reports_resp.json().get("reports", [])
-        assert len(reports_1) >= 1, "No compliance reports for RUN 1"
-
-        report_1 = next(
-            (r for r in reports_1 if r.get("baselineId") == baseline_id),
-            None,
+        # Compliance evaluation runs as an async parallel branch and may
+        # finish after the extraction pipeline.  Poll for reports.
+        report_1 = None
+        for _attempt in range(18):  # up to ~90s
+            reports_resp = api.get(f"/documents/{doc_id_1}/compliance")
+            if reports_resp.status_code == 200:
+                reports_1 = reports_resp.json().get("reports", [])
+                report_1 = next(
+                    (r for r in reports_1 if r.get("baselineId") == baseline_id),
+                    None,
+                )
+                if report_1 is not None:
+                    break
+            time.sleep(5)
+        assert report_1 is not None, (
+            "No compliance report for RUN 1 after polling"
         )
-        assert report_1 is not None, "No report for our baseline in RUN 1"
 
         results_1 = report_1.get("results", [])
         assert len(results_1) > 0, "RUN 1 report has no results"
@@ -205,16 +213,22 @@ class TestComplianceLearningLoop:
             f"RUN 2 did not complete: {status_2} ({elapsed_2:.0f}s)"
         )
 
-        reports_resp_2 = api.get(f"/documents/{doc_id_2}/compliance")
-        assert reports_resp_2.status_code == 200
-        reports_2 = reports_resp_2.json().get("reports", [])
-        assert len(reports_2) >= 1, "No compliance reports for RUN 2"
-
-        report_2 = next(
-            (r for r in reports_2 if r.get("baselineId") == baseline_id),
-            None,
+        # Poll for RUN 2 compliance reports (async parallel branch)
+        report_2 = None
+        for _attempt in range(18):  # up to ~90s
+            reports_resp_2 = api.get(f"/documents/{doc_id_2}/compliance")
+            if reports_resp_2.status_code == 200:
+                reports_2 = reports_resp_2.json().get("reports", [])
+                report_2 = next(
+                    (r for r in reports_2 if r.get("baselineId") == baseline_id),
+                    None,
+                )
+                if report_2 is not None:
+                    break
+            time.sleep(5)
+        assert report_2 is not None, (
+            "No compliance report for RUN 2 after polling"
         )
-        assert report_2 is not None, "No report for our baseline in RUN 2"
 
         results_2 = report_2.get("results", [])
         assert len(results_2) > 0, "RUN 2 report has no results"
