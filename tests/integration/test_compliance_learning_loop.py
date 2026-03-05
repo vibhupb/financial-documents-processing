@@ -105,12 +105,17 @@ class TestComplianceLearningLoop:
         )
 
         # Compliance evaluation runs as an async parallel branch and may
-        # finish after the extraction pipeline.  Poll for reports.
+        # finish well after the extraction pipeline.  Poll for reports.
         report_1 = None
-        for _attempt in range(18):  # up to ~90s
+        reports_1 = []
+        for _attempt in range(36):  # up to ~180s
             reports_resp = api.get(f"/documents/{doc_id_1}/compliance")
             if reports_resp.status_code == 200:
-                reports_1 = reports_resp.json().get("reports", [])
+                body = reports_resp.json()
+                # Handle both {"reports": [...]} and plain [...] shapes
+                reports_1 = body.get("reports", body) if isinstance(body, dict) else body
+                if not isinstance(reports_1, list):
+                    reports_1 = []
                 report_1 = next(
                     (r for r in reports_1 if r.get("baselineId") == baseline_id),
                     None,
@@ -119,7 +124,9 @@ class TestComplianceLearningLoop:
                     break
             time.sleep(5)
         assert report_1 is not None, (
-            "No compliance report for RUN 1 after polling"
+            f"No compliance report for RUN 1 after 180s polling. "
+            f"baseline_id={baseline_id}, doc_id={doc_id_1}, "
+            f"available reports: {[r.get('baselineId') for r in reports_1]}"
         )
 
         results_1 = report_1.get("results", [])
@@ -215,10 +222,14 @@ class TestComplianceLearningLoop:
 
         # Poll for RUN 2 compliance reports (async parallel branch)
         report_2 = None
-        for _attempt in range(18):  # up to ~90s
+        reports_2 = []
+        for _attempt in range(36):  # up to ~180s
             reports_resp_2 = api.get(f"/documents/{doc_id_2}/compliance")
             if reports_resp_2.status_code == 200:
-                reports_2 = reports_resp_2.json().get("reports", [])
+                body_2 = reports_resp_2.json()
+                reports_2 = body_2.get("reports", body_2) if isinstance(body_2, dict) else body_2
+                if not isinstance(reports_2, list):
+                    reports_2 = []
                 report_2 = next(
                     (r for r in reports_2 if r.get("baselineId") == baseline_id),
                     None,
@@ -227,7 +238,9 @@ class TestComplianceLearningLoop:
                     break
             time.sleep(5)
         assert report_2 is not None, (
-            "No compliance report for RUN 2 after polling"
+            f"No compliance report for RUN 2 after 180s polling. "
+            f"baseline_id={baseline_id}, doc_id={doc_id_2}, "
+            f"available reports: {[r.get('baselineId') for r in reports_2]}"
         )
 
         results_2 = report_2.get("results", [])

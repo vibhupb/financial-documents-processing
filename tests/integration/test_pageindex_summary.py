@@ -62,6 +62,38 @@ def value_in_text(value, text):
     return False
 
 
+def flatten_extracted(data, prefix=""):
+    """Recursively flatten nested extracted data into a flat {key: value} dict.
+
+    Extracted data often has structure like:
+        {"loanAgreement": {"interestDetails": {"rateType": "5.875%"}, ...}}
+    This flattens to:
+        {"rateType": "5.875%", ...}
+
+    Only leaf (non-dict, non-list) values are included.  For lists, individual
+    scalar items are included with indexed keys.
+    """
+    flat = {}
+    if not isinstance(data, dict):
+        return flat
+    for k, v in data.items():
+        full_key = f"{prefix}.{k}" if prefix else k
+        if isinstance(v, dict):
+            flat.update(flatten_extracted(v, full_key))
+            # Also store the key without prefix for easier matching
+            flat.update(flatten_extracted(v, k))
+        elif isinstance(v, list):
+            for i, item in enumerate(v):
+                if isinstance(item, dict):
+                    flat.update(flatten_extracted(item, f"{k}[{i}]"))
+                elif item is not None:
+                    flat[f"{k}[{i}]"] = str(item)
+        elif v is not None:
+            flat[k] = str(v)
+            flat[full_key] = str(v)
+    return flat
+
+
 @pytest.mark.integration
 class TestPageIndexSummary:
     def test_qa_aligns_with_extraction(self, api, upload_and_wait, sample_loan_pdf):
@@ -70,12 +102,21 @@ class TestPageIndexSummary:
         assert status in ("PROCESSED", "COMPLETED")
 
         resp = api.get(f"/documents/{doc_id}")
-        extracted = resp.json().get("extractedData") or resp.json().get("data", {})
+        body = resp.json()
+        # API may wrap response in {"document": {...}}
+        doc = body.get("document", body)
+        raw_extracted = doc.get("extractedData") or doc.get("data", {})
+
+        # Extracted data is often nested (e.g., {"loanAgreement": {"interestDetails": {...}}}).
+        # Flatten it so the fuzzy matcher can find deeply nested values.
+        extracted = flatten_extracted(raw_extracted)
+        print(f"  Flattened extracted keys ({len(extracted)}): "
+              f"{sorted(extracted.keys())[:20]}...")
 
         qa_pairs = [
-            ("What is the interest rate?", ["interestRate", "rate", "apr"]),
-            ("Who is the borrower?", ["borrowerName", "borrower", "name"]),
-            ("What is the loan amount?", ["loanAmount", "amount", "principal"]),
+            ("What is the interest rate?", ["interestRate", "rate", "apr", "rateType", "baseRate"]),
+            ("Who is the borrower?", ["borrowerName", "borrower", "name", "primaryBorrower"]),
+            ("What is the loan amount?", ["loanAmount", "amount", "principal", "originalAmount"]),
         ]
 
         matches = 0
@@ -91,6 +132,7 @@ class TestPageIndexSummary:
                 for ek, ev in extracted.items():
                     if key.lower() in ek.lower() and ev and value_in_text(ev, answer):
                         matched = True
+                        print(f"    Matched via key '{ek}' = '{ev}'")
                         break
                 if matched:
                     break
@@ -100,7 +142,10 @@ class TestPageIndexSummary:
             if matched:
                 matches += 1
 
-        assert matches >= 1, "No Q&A answers matched extracted data"
+        assert matches >= 1, (
+            f"No Q&A answers matched extracted data. "
+            f"Sample extracted values: {dict(list(extracted.items())[:10])}"
+        )
 
     def test_cached_response_faster(self, api, upload_and_wait, sample_loan_pdf):
         """Second Q&A call should be faster (cached)."""

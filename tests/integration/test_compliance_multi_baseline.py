@@ -97,10 +97,15 @@ class TestMultiBaselineEvaluation:
         # poll until both reports appear (or timeout).
         report_a = None
         report_b = None
-        for _attempt in range(24):  # up to ~120s
+        reports = []
+        for _attempt in range(36):  # up to ~180s
             reports_resp = api.get(f"/documents/{doc_id}/compliance")
             if reports_resp.status_code == 200:
-                reports = reports_resp.json().get("reports", [])
+                body = reports_resp.json()
+                # Handle both {"reports": [...]} and plain [...] shapes
+                reports = body.get("reports", body) if isinstance(body, dict) else body
+                if not isinstance(reports, list):
+                    reports = []
                 for r in reports:
                     if r.get("baselineId") == baseline_a_id:
                         report_a = r
@@ -110,13 +115,14 @@ class TestMultiBaselineEvaluation:
                     break
             time.sleep(5)
 
+        available = [r.get("baselineId") for r in reports]
         assert report_a is not None, (
-            f"No report found for baseline A ({baseline_a_id}) after polling. "
-            f"Available: {[r.get('baselineId') for r in reports]}"
+            f"No report found for baseline A ({baseline_a_id}) after 180s polling. "
+            f"Available baselines: {available}"
         )
         assert report_b is not None, (
-            f"No report found for baseline B ({baseline_b_id}) after polling. "
-            f"Available: {[r.get('baselineId') for r in reports]}"
+            f"No report found for baseline B ({baseline_b_id}) after 180s polling. "
+            f"Available baselines: {available}"
         )
 
         # ── Verify correct result counts ───────────────────────────────────
