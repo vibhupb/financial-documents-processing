@@ -1,0 +1,31 @@
+{
+  "name": "Test Loan Compliance (Strict)",
+  "description": "Integration test baseline with additional regulatory requirements",
+  "requirements": [
+    {
+      "text": "The document must disclose the Annual Percentage Rate (APR)",
+      "category": "disclosure",
+      "criticality": "must-have"
+    },
+    {
+      "text": "The borrower full name must be present in the document",
+      "category": "identity",
+      "criticality": "must-have"
+    },
+    {
+      "text": "A signature date should be included",
+      "category": "execution",
+      "criticality": "should-have"
+    },
+    {
+      "text": "Lender NMLS number must be displayed",
+      "category": "regulatory",
+      "criticality": "must-have"
+    },
+    {
+      "text": "Equal housing logo or statement must be present",
+      "category": "regulatory",
+      "criticality": "nice-to-have"
+    }
+  ]
+}

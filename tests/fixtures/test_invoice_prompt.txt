@@ -1,0 +1,48 @@
+INVOICE NORMALIZATION RULES:
+
+This is a commercial invoice document. Extract vendor information, line items,
+totals, and payment terms.
+
+TEXTRACT FORM FIELD NAME -> OUTPUT SCHEMA MAPPING:
+
+  "Vendor Name" or "Company Name" or "From" -> vendor
+  "Total Amount" or "Amount Due" or "Total" -> amount
+  "Invoice Date" or "Date" or "Date Issued" -> invoiceDate
+  Line items table rows -> lineItems array (each row: description + amount)
+  "Payment Terms" or "Terms" or "Due" -> paymentTerms
+
+CONVERSION RULES:
+- Dollar amounts: preserve as string with two decimals ("$1,234.56" -> "1234.56")
+- Dates: convert to ISO 8601 format YYYY-MM-DD
+- Line items: extract EVERY row from the table, do NOT skip or summarize
+- Payment terms: preserve exactly as stated (e.g., "Net 30", "Due on Receipt")
+
+=== OUTPUT FORMAT ===
+
+Return ONLY valid JSON:
+{{
+  "loanData": {{
+    "invoice": {{
+      "vendor": <string or null>,
+      "amount": <string or null>,
+      "invoiceDate": <string or null>,
+      "lineItems": [
+        {{
+          "description": <string or null>,
+          "amount": <number or null>
+        }}
+      ],
+      "paymentTerms": <string or null>
+    }}
+  }},
+  "validation": {{
+    "isValid": <boolean>,
+    "confidence": "high" | "medium" | "low",
+    "crossReferenceChecks": [],
+    "validationNotes": [<string>],
+    "missingRequiredFields": [<string>]
+  }},
+  "audit": {{
+    "extractionSources": []
+  }}
+}}
