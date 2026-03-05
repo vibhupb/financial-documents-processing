@@ -2243,42 +2243,47 @@ def store_to_dynamodb(
     _preserved_file_name = None
     _preserved_execution_arn = None
 
-    # First, check for and delete any existing PROCESSING record
-    # (This handles the transition from PENDING/CLASSIFIED -> PROCESSED)
+    # Collect data from ALL existing records for this documentId.
+    # There may be multiple records (e.g., PROCESSING + parallel branch writes)
+    # with different sort keys. Merge their data before creating the final record.
     try:
         from boto3.dynamodb.conditions import Key as DynamoKey
         query_result = table.query(
             KeyConditionExpression=DynamoKey("documentId").eq(document_id),
-            Limit=1,
         )
 
-        if query_result.get("Items"):
-            existing_record = query_result["Items"][0]
+        for existing_record in query_result.get("Items", []):
             existing_doc_type = existing_record.get("documentType")
 
-            # Preserve PageIndex tree reference from PROCESSING record
-            # (PageIndex Lambda stores this before normalizer transitions record)
-            if existing_record.get("pageIndexTree"):
+            # Preserve PageIndex tree reference
+            if existing_record.get("pageIndexTree") and not _preserved_page_index_tree:
                 _preserved_page_index_tree = existing_record["pageIndexTree"]
-            elif existing_record.get("pageIndexTreeS3Key"):
+            if existing_record.get("pageIndexTreeS3Key") and not _preserved_page_index_s3_key:
                 _preserved_page_index_s3_key = existing_record["pageIndexTreeS3Key"]
 
-            # Preserve processingEvents (router/extractor/normalizer step logs)
+            # Merge processingEvents from all records
             if existing_record.get("processingEvents"):
-                _preserved_processing_events = existing_record["processingEvents"]
+                if _preserved_processing_events is None:
+                    _preserved_processing_events = []
+                _preserved_processing_events.extend(existing_record["processingEvents"])
 
             # Preserve fileName and executionArn (set by trigger Lambda)
-            if existing_record.get("fileName"):
+            if existing_record.get("fileName") and not _preserved_file_name:
                 _preserved_file_name = existing_record["fileName"]
-            if existing_record.get("executionArn"):
+            if existing_record.get("executionArn") and not _preserved_execution_arn:
                 _preserved_execution_arn = existing_record["executionArn"]
 
-            # Delete the old record if it has a different documentType (e.g., PROCESSING)
+            # Delete records with a different documentType
             if existing_doc_type and existing_doc_type != document_type:
                 table.delete_item(
                     Key={"documentId": document_id, "documentType": existing_doc_type}
                 )
                 print(f"Deleted old {existing_doc_type} record for document: {document_id}")
+
+        # Sort merged events by timestamp
+        if _preserved_processing_events:
+            _preserved_processing_events.sort(key=lambda e: e.get("ts", ""))
+            print(f"Preserved {len(_preserved_processing_events)} processing events from {len(query_result.get('Items', []))} record(s)")
     except Exception as cleanup_err:
         print(f"Warning: Error cleaning up old record: {str(cleanup_err)}")
         # Continue anyway - the put_item will create the new record
