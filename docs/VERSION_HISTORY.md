@@ -1,0 +1,13 @@
+# Version History
+
+| Version | Date | Changes |
+|---------|------|---------|
+| 5.1.0 | 2026-03-05 | Testing Toolkit: CLAUDE.md split into path-scoped rules + on-demand skills (87% context reduction), 9 real-AWS integration tests (plugin lifecycle, enhancement reprocess, PageIndex Q&A alignment, compliance CRUD/eval/learning loop/multi-baseline), 8 Playwright E2E tests with Page Object Models, test-toolkit.sh orchestrator with HTML reports + screenshots. Bug fixes: LLM JSON parsing in compliance-evaluate, multi-baseline creates separate reports per baseline |
+| 5.0.0 | 2026-03-02 | Compliance Engine: baseline CRUD, requirement management, parallel evaluation branch in Step Functions, LLM evidence grounding with char-offsets, reviewer overrides with few-shot learning, compliance-parsers layer (DOCX/PPTX/images), frontend (Baselines pages, ComplianceTab, score gauge, verdict badges, reviewer override), upload baseline selection, work queue compliance badges, E2E test script |
+| 4.0.0 | 2026-03-01 | PageIndex integration: hierarchical document tree, on-demand section summaries (LLM + cached), hybrid Q&A (extracted data + tree navigation), SPA layout fix, view tabs (Summary/Extracted/JSON), processing mode toggle, deferred extraction |
+| 3.0.0 | 2026-02-19 | Plugin architecture: self-registering document types (6 plugins), Map state, KMS encryption, Cognito auth, BSA Profile, W-2, Driver's License, GenericDataFields, common.sh scripts |
+| 2.2.0 | 2024-12-29 | Performance optimization: 2GB Lambda memory, 30 parallel workers, ~35s processing time; Add cleanup.sh script; Add ProcessingMetricsPanel component |
+| 2.1.0 | 2024-12-29 | Complete cost tracking: Add Step Functions + Lambda costs |
+| 2.0.0 | 2024-12-25 | Add React dashboard, Review workflow, Credit Agreement support |
+| 1.1.0 | 2024-12-21 | Cost optimization: Switch normalizer from Sonnet 4 to Claude 3.5 Haiku |
+| 1.0.0 | 2024-12-21 | Initial implementation |

@@ -39,9 +39,16 @@ React Dashboard (CloudFront) → API Gateway → API Lambda → DynamoDB + S3
 ./scripts/cleanup.sh            # Reset S3 + DynamoDB for testing
 
 # Test
-uv run pytest tests/            # Python tests (80 tests)
+uv run pytest tests/            # Python unit tests (80 tests)
 cd frontend && npx vitest run   # Frontend tests (MUST run from frontend/)
 npm test                        # CDK tests
+
+# Integration + E2E Testing Toolkit (real AWS)
+./scripts/test-toolkit.sh                # Run all integration + E2E tests
+./scripts/test-toolkit.sh --integration  # API-level integration tests only
+./scripts/test-toolkit.sh --e2e          # Playwright browser tests only
+./scripts/test-toolkit.sh -k compliance  # Compliance subset
+./scripts/test-toolkit.sh --headed       # Playwright with visible browser
 
 # Dev
 cd frontend && npm run dev      # Vite dev server at localhost:5173
@@ -118,3 +125,18 @@ Detailed guidelines are split across path-scoped rules and on-demand skills:
 | `docs/VERSION_HISTORY.md` | Reference only |
 | `docs/CREDITS.md` | Reference only |
 | `docs/plans/2026-03-05-testing-toolkit-design.md` | Testing toolkit design doc |
+| `docs/plans/2026-03-05-testing-toolkit-plan.md` | Implementation plan (17 tasks) |
+
+## Version History
+
+See `docs/VERSION_HISTORY.md` for full history. Current: **v5.1.0** (2026-03-05)
+
+### v5.1.0 — Testing Toolkit + Bug Fixes (2026-03-05)
+
+- **CLAUDE.md reorganization**: Split 41KB CLAUDE.md into path-scoped `.claude/rules/` (6 files) + on-demand `.claude/skills/` (4 skills). Context per request reduced ~87%.
+- **Integration test suite**: 9 real-AWS tests covering plugin lifecycle, plugin enhancement reprocess, PageIndex Q&A alignment, compliance baseline CRUD, evaluation pipeline, few-shot learning loop, multi-baseline evaluation.
+- **Playwright E2E suite**: 8 browser tests with Page Object Models covering upload/view, plugin rendering, compliance baseline management, evaluation UI, reviewer override, learning proof, work queue badges, evidence navigation.
+- **Orchestrator**: `scripts/test-toolkit.sh` with `--integration`/`--e2e`/`-k`/`--headed` modes, HTML reports, screenshots.
+- **Bug fix**: LLM JSON response parsing in compliance-evaluate (extra text after JSON array).
+- **Bug fix**: Multi-baseline compliance now creates separate report per baseline (was merging into one).
+- **Test fixtures**: Synthetic invoice plugin + PDF generator, compliance baseline JSON fixtures.
