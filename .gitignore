@@ -117,3 +117,4 @@ frontend/.env.production
 
 # Test reports
 reports/
+!reports/.gitkeep
