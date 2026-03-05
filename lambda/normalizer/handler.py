@@ -2240,6 +2240,8 @@ def store_to_dynamodb(
     _preserved_page_index_tree = None
     _preserved_page_index_s3_key = None
     _preserved_processing_events = None
+    _preserved_file_name = None
+    _preserved_execution_arn = None
 
     # First, check for and delete any existing PROCESSING record
     # (This handles the transition from PENDING/CLASSIFIED -> PROCESSED)
@@ -2264,6 +2266,12 @@ def store_to_dynamodb(
             # Preserve processingEvents (router/extractor/normalizer step logs)
             if existing_record.get("processingEvents"):
                 _preserved_processing_events = existing_record["processingEvents"]
+
+            # Preserve fileName and executionArn (set by trigger Lambda)
+            if existing_record.get("fileName"):
+                _preserved_file_name = existing_record["fileName"]
+            if existing_record.get("executionArn"):
+                _preserved_execution_arn = existing_record["executionArn"]
 
             # Delete the old record if it has a different documentType (e.g., PROCESSING)
             if existing_doc_type and existing_doc_type != document_type:
@@ -2331,6 +2339,12 @@ def store_to_dynamodb(
     # Preserve processing events (UI step display)
     if _preserved_processing_events:
         item['processingEvents'] = _preserved_processing_events
+
+    # Preserve fileName and executionArn from trigger record
+    if _preserved_file_name:
+        item['fileName'] = _preserved_file_name
+    if _preserved_execution_arn:
+        item['executionArn'] = _preserved_execution_arn
 
     table.put_item(Item=item)
     print(f"Stored normalized data to DynamoDB: {document_id} (hash: {content_hash[:16] if content_hash else 'N/A'}...)")
