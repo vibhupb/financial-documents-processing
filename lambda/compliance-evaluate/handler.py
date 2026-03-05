@@ -19,13 +19,25 @@ def lambda_handler(event, context):
     tree = event.get("pageIndexTree") or _load_tree_from_s3(event)
     pdf_bytes = _download_pdf(event)
 
-    report = evaluate_document(doc_id, plugin_id, tree, pdf_bytes, baseline_ids=baseline_ids)
-    _store_report(report)
+    result = evaluate_document(doc_id, plugin_id, tree, pdf_bytes, baseline_ids=baseline_ids)
 
-    return {
-        **event,
-        "complianceReport": {
-            "reportId": report["reportId"],
-            "overallScore": report["overallScore"],
-        },
-    }
+    # Handle both single report (dict) and multi-baseline (list of dicts)
+    if isinstance(result, list):
+        for report in result:
+            _store_report(report)
+        return {
+            **event,
+            "complianceReports": [
+                {"reportId": r["reportId"], "overallScore": r["overallScore"]}
+                for r in result
+            ],
+        }
+    else:
+        _store_report(result)
+        return {
+            **event,
+            "complianceReport": {
+                "reportId": result["reportId"],
+                "overallScore": result["overallScore"],
+            },
+        }

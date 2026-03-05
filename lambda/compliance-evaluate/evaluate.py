@@ -57,29 +57,35 @@ def evaluate_document(doc_id, plugin_id, tree, pdf_bytes, baseline_ids=None):
             "status": "no_baselines",
         }
 
-    all_results = []
+    reports = []
     for baseline in baselines:
+        baseline_results = []
         reqs = baseline.get("requirements", [])
         batches = [reqs[i : i + BATCH_SIZE] for i in range(0, len(reqs), BATCH_SIZE)]
         for batch in batches:
             pages = _navigate_tree_for_batch(tree, batch)
             page_text = _extract_pages(pdf_bytes, pages)
             verdicts = _evaluate_batch(batch, page_text, doc_id, baseline["baselineId"])
-            all_results.extend(verdicts)
+            baseline_results.extend(verdicts)
 
-    pass_count = sum(1 for r in all_results if r["verdict"] == "PASS")
-    score = round(pass_count / len(all_results) * 100) if all_results else 0
+        pass_count = sum(1 for r in baseline_results if r["verdict"] == "PASS")
+        score = round(pass_count / len(baseline_results) * 100) if baseline_results else 0
 
-    return {
-        "reportId": str(uuid.uuid4()),
-        "documentId": doc_id,
-        "baselineId": baselines[0]["baselineId"],
-        "baselineVersion": baselines[0].get("version", 1),
-        "status": "completed",
-        "overallScore": score,
-        "results": all_results,
-        "evaluatedAt": datetime.now(timezone.utc).isoformat(),
-    }
+        reports.append({
+            "reportId": str(uuid.uuid4()),
+            "documentId": doc_id,
+            "baselineId": baseline["baselineId"],
+            "baselineVersion": baseline.get("version", 1),
+            "status": "completed",
+            "overallScore": score,
+            "results": baseline_results,
+            "evaluatedAt": datetime.now(timezone.utc).isoformat(),
+        })
+
+    # Return single report for backward compat, or list for multi-baseline
+    if len(reports) == 1:
+        return reports[0]
+    return reports
 
 
 def _find_baselines(plugin_id, baseline_ids=None):
