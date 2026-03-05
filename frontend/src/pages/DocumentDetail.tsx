@@ -91,8 +91,15 @@ export default function DocumentDetail() {
       const data = query.state.data;
       // Document not created yet by trigger Lambda -- keep polling
       if (data && 'error' in data) return 2000;
-      const status = data && 'document' in data ? data.document?.status : undefined;
-      if (!status || isCompletedStatus(status)) return false;
+      const doc = data && 'document' in data ? data.document : undefined;
+      const status = doc?.status;
+      if (!status) return 3000;
+      // Keep polling if processed but PageIndex tree not yet available
+      // (tree builds in a parallel branch and may finish after extraction)
+      if (isCompletedStatus(status) && !doc?.pageIndexTree?.structure?.length) {
+        return 5000; // Slower poll for tree arrival
+      }
+      if (isCompletedStatus(status)) return false;
       return 3000;
     },
   });
