@@ -209,7 +209,26 @@ def _evaluate_batch(batch, page_text, doc_id, baseline_id):
     raw = resp["output"]["message"]["content"][0]["text"].strip()
     raw = re.sub(r"^```(?:json)?\s*", "", raw)
     raw = re.sub(r"```$", "", raw.strip())
-    return json.loads(raw)
+    # LLM sometimes appends explanation text after the JSON array/object.
+    # Extract only the first valid JSON structure.
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        # Find the outermost JSON array or object
+        bracket = "[" if raw.lstrip().startswith("[") else "{"
+        close = "]" if bracket == "[" else "}"
+        depth, end = 0, 0
+        for i, ch in enumerate(raw):
+            if ch == bracket:
+                depth += 1
+            elif ch == close:
+                depth -= 1
+                if depth == 0:
+                    end = i + 1
+                    break
+        if end > 0:
+            return json.loads(raw[:end])
+        raise
 
 
 def _get_corrections_block(baseline_id, batch):
