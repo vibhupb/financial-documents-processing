@@ -1541,6 +1541,11 @@ function handler(event) {
       exportName: 'FinancialDocDashboardUrl',
     });
 
+    new cdk.CfnOutput(this, 'CloudFrontDistributionId', {
+      value: distribution.distributionId,
+      description: 'CloudFront distribution ID for cache invalidation',
+    });
+
     new cdk.CfnOutput(this, 'UploadCommand', {
       value: `aws s3 cp <your-file.pdf> s3://${documentBucket.bucketName}/ingest/`,
       description: 'Command to upload a document for processing',

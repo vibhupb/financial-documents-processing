@@ -142,6 +142,11 @@ confirm_action() {
     if [ "$FORCE" = "true" ]; then
         return 0
     fi
+    # Auto-confirm in non-interactive terminals (CI, Claude Code, piped input)
+    if [ ! -t 0 ]; then
+        info "Non-interactive terminal — auto-confirming"
+        return 0
+    fi
     echo ""
     read -p "$(echo -e "${YELLOW}${message} (y/N): ${NC}")" -n 1 -r
     echo ""

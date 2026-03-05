@@ -49,18 +49,27 @@ aws s3 sync dist/ "s3://$FRONTEND_BUCKET/" --delete --region "$AWS_REGION"
 success "Synced to s3://$FRONTEND_BUCKET/"
 
 # CloudFront invalidation
-DIST_ID=$(aws cloudfront list-distributions \
-    --query "DistributionList.Items[?Origins.Items[?Id=='S3-${FRONTEND_BUCKET}']].Id" \
-    --output text --region "$AWS_REGION" 2>/dev/null)
+# Method 1: Read from CDK stack output (most reliable)
+DIST_ID=$(get_stack_output "CloudFrontDistributionId" || true)
 
+# Method 2: Look up by S3 origin domain name
 if [ -z "$DIST_ID" ] || [ "$DIST_ID" = "None" ]; then
-    # Try alternate lookup
     DIST_ID=$(aws cloudfront list-distributions \
-        --query "DistributionList.Items[?Comment=='Financial Documents Dashboard'].Id" \
+        --query "DistributionList.Items[?Origins.Items[?contains(DomainName,'${FRONTEND_BUCKET}')]].Id | [0]" \
         --output text --region "$AWS_REGION" 2>/dev/null)
 fi
 
-if [ -n "$DIST_ID" ] && [ "$DIST_ID" != "None" ]; then
+# Method 3: Look up by CloudFront URL domain
+if [ -z "$DIST_ID" ] || [ "$DIST_ID" = "None" ]; then
+    CF_DOMAIN=$(echo "$CLOUDFRONT_URL" | sed 's|https://||')
+    if [ -n "$CF_DOMAIN" ]; then
+        DIST_ID=$(aws cloudfront list-distributions \
+            --query "DistributionList.Items[?DomainName=='${CF_DOMAIN}'].Id | [0]" \
+            --output text --region "$AWS_REGION" 2>/dev/null)
+    fi
+fi
+
+if [ -n "$DIST_ID" ] && [ "$DIST_ID" != "None" ] && [ "$DIST_ID" != "null" ]; then
     info "Invalidating CloudFront cache (distribution: $DIST_ID)..."
     aws cloudfront create-invalidation \
         --distribution-id "$DIST_ID" \
