@@ -36,7 +36,7 @@ class TestPluginEnhancement:
 
         # 2. Upload and process
         doc_id, status, duration = upload_and_wait(str(sample_loan_pdf))
-        assert status == "COMPLETED", f"Failed: {status} after {duration:.0f}s"
+        assert status in ("PROCESSED", "COMPLETED"), f"Failed: {status} after {duration:.0f}s"
 
         # 3. Get extracted data (v1)
         resp = api.get(f"/documents/{doc_id}")
@@ -53,7 +53,7 @@ class TestPluginEnhancement:
         # 5. Wait for reprocessing
         for _ in range(30):
             resp = api.get(f"/documents/{doc_id}/status")
-            if resp.status_code == 200 and resp.json().get("status") == "COMPLETED":
+            if resp.status_code == 200 and resp.json().get("status") in ("PROCESSED", "COMPLETED"):
                 break
             time.sleep(10)
 

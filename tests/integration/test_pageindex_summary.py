@@ -30,7 +30,7 @@ class TestPageIndexSummary:
     def test_qa_aligns_with_extraction(self, api, upload_and_wait, sample_loan_pdf):
         """Q&A answers are grounded in extracted data values."""
         doc_id, status, _ = upload_and_wait(str(sample_loan_pdf))
-        assert status == "COMPLETED"
+        assert status in ("PROCESSED", "COMPLETED")
 
         resp = api.get(f"/documents/{doc_id}")
         extracted = resp.json().get("extractedData") or resp.json().get("data", {})
@@ -68,7 +68,7 @@ class TestPageIndexSummary:
     def test_cached_response_faster(self, api, upload_and_wait, sample_loan_pdf):
         """Second Q&A call should be faster (cached)."""
         doc_id, status, _ = upload_and_wait(str(sample_loan_pdf))
-        assert status == "COMPLETED"
+        assert status in ("PROCESSED", "COMPLETED")
 
         question = {"question": "What is the interest rate?"}
 

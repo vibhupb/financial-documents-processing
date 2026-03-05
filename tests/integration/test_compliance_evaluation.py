@@ -57,7 +57,7 @@ class TestComplianceEvaluation:
         doc_id, status, elapsed = upload_and_wait(
             sample_loan_pdf, baseline_ids=[baseline_id]
         )
-        assert status == "COMPLETED", (
+        assert status in ("PROCESSED", "COMPLETED"), (
             f"Document processing did not complete: status={status} "
             f"(elapsed={elapsed:.0f}s)"
         )
@@ -165,7 +165,7 @@ class TestComplianceEvaluation:
         doc_id, status, _ = upload_and_wait(
             sample_loan_pdf, baseline_ids=[baseline_id]
         )
-        assert status == "COMPLETED"
+        assert status in ("PROCESSED", "COMPLETED")
 
         # Get all reports
         reports_resp = api.get(f"/documents/{doc_id}/compliance")

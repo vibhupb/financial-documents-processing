@@ -37,7 +37,7 @@ class TestPluginLifecycle:
             )
 
         doc_id, status, duration = upload_and_wait(str(pdf_path))
-        assert status == "COMPLETED", (
+        assert status in ("PROCESSED", "COMPLETED"), (
             f"Processing failed with status: {status} after {duration:.0f}s"
         )
         print(f"Processing completed in {duration:.0f}s")

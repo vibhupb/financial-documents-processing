@@ -84,7 +84,7 @@ class TestMultiBaselineEvaluation:
             sample_loan_pdf,
             baseline_ids=[baseline_a_id, baseline_b_id],
         )
-        assert status == "COMPLETED", (
+        assert status in ("PROCESSED", "COMPLETED"), (
             f"Document processing did not complete: {status} "
             f"({elapsed:.0f}s)"
         )

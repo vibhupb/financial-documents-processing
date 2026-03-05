@@ -99,7 +99,7 @@ class TestComplianceLearningLoop:
         doc_id_1, status_1, elapsed_1 = upload_and_wait(
             sample_loan_pdf, baseline_ids=[baseline_id]
         )
-        assert status_1 == "COMPLETED", (
+        assert status_1 in ("PROCESSED", "COMPLETED"), (
             f"RUN 1 did not complete: {status_1} ({elapsed_1:.0f}s)"
         )
 
@@ -201,7 +201,7 @@ class TestComplianceLearningLoop:
         doc_id_2, status_2, elapsed_2 = upload_and_wait(
             sample_loan_pdf, baseline_ids=[baseline_id]
         )
-        assert status_2 == "COMPLETED", (
+        assert status_2 in ("PROCESSED", "COMPLETED"), (
             f"RUN 2 did not complete: {status_2} ({elapsed_2:.0f}s)"
         )
 

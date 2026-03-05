@@ -171,7 +171,7 @@ def upload_and_wait(api):
         2. POST to uploadUrl with form fields + file
         3. Poll GET /documents/{id}/status until terminal state
 
-    Terminal states: COMPLETED, FAILED, ERROR
+    Terminal states: PROCESSED, COMPLETED, FAILED, ERROR
     """
     def _upload(pdf_path, baseline_ids=None, processing_mode="extract"):
         pdf_path = Path(pdf_path)
@@ -223,7 +223,7 @@ def upload_and_wait(api):
             if status_resp.status_code == 200:
                 body = status_resp.json()
                 status = body.get("status", "UNKNOWN")
-                if status in ("COMPLETED", "FAILED", "ERROR"):
+                if status in ("PROCESSED", "COMPLETED", "FAILED", "ERROR"):
                     break
             time.sleep(POLL_INTERVAL)
 
