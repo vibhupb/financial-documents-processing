@@ -34,6 +34,31 @@ MODEL_ID = os.environ.get(
 BUCKET = os.environ.get("BUCKET_NAME", "")
 
 
+def _append_event(doc_id, message):
+    """Append a compliance processing event to the document record."""
+    doc_table_name = os.environ.get("TABLE_NAME", "financial-documents")
+    doc_table = dynamodb.Table(doc_table_name)
+    try:
+        resp = doc_table.query(
+            KeyConditionExpression="documentId = :did",
+            ExpressionAttributeValues={":did": doc_id},
+            ProjectionExpression="documentId, documentType",
+            Limit=1,
+        )
+        items = resp.get("Items", [])
+        if items:
+            doc_table.update_item(
+                Key={"documentId": items[0]["documentId"], "documentType": items[0]["documentType"]},
+                UpdateExpression="SET processingEvents = list_append(if_not_exists(processingEvents, :empty), :evt)",
+                ExpressionAttributeValues={
+                    ":evt": [{"ts": datetime.now(timezone.utc).isoformat(), "stage": "compliance", "message": message}],
+                    ":empty": [],
+                },
+            )
+    except Exception as e:
+        print(f"[Compliance] Warning: Could not append event: {e}")
+
+
 def evaluate_document(doc_id, plugin_id, tree, pdf_bytes, baseline_ids=None):
     """Evaluate a document against all applicable baselines.
 
@@ -49,6 +74,7 @@ def evaluate_document(doc_id, plugin_id, tree, pdf_bytes, baseline_ids=None):
     """
     baselines = _find_baselines(plugin_id, baseline_ids=baseline_ids)
     if not baselines:
+        _append_event(doc_id, "No compliance baselines found — skipping evaluation")
         return {
             "reportId": str(uuid.uuid4()),
             "documentId": doc_id,
@@ -57,16 +83,23 @@ def evaluate_document(doc_id, plugin_id, tree, pdf_bytes, baseline_ids=None):
             "status": "no_baselines",
         }
 
+    total_reqs = sum(len(b.get("requirements", [])) for b in baselines)
+    _append_event(doc_id, f"Evaluating against {len(baselines)} baseline(s), {total_reqs} requirements")
+
     reports = []
     for baseline in baselines:
+        bl_name = baseline.get("name", baseline.get("baselineId", "unknown"))
         baseline_results = []
         reqs = baseline.get("requirements", [])
         batches = [reqs[i : i + BATCH_SIZE] for i in range(0, len(reqs), BATCH_SIZE)]
+        evaluated_count = 0
         for batch in batches:
             pages = _navigate_tree_for_batch(tree, batch)
             page_text = _extract_pages(pdf_bytes, pages)
             verdicts = _evaluate_batch(batch, page_text, doc_id, baseline["baselineId"])
             baseline_results.extend(verdicts)
+            evaluated_count += len(verdicts)
+            _append_event(doc_id, f"Evaluated {evaluated_count}/{len(reqs)} requirements ({bl_name})")
 
         pass_count = sum(1 for r in baseline_results if r["verdict"] == "PASS")
         score = round(pass_count / len(baseline_results) * 100) if baseline_results else 0
@@ -81,6 +114,8 @@ def evaluate_document(doc_id, plugin_id, tree, pdf_bytes, baseline_ids=None):
             "results": baseline_results,
             "evaluatedAt": datetime.now(timezone.utc).isoformat(),
         })
+
+        _append_event(doc_id, f"Compliance complete: {bl_name} — score {score}% ({pass_count}/{len(baseline_results)} passed)")
 
     # Return single report for backward compat, or list for multi-baseline
     if len(reports) == 1:
@@ -220,20 +255,30 @@ def _evaluate_batch(batch, page_text, doc_id, baseline_id):
     try:
         return json.loads(raw)
     except json.JSONDecodeError:
-        # Find the outermost JSON array or object
-        bracket = "[" if raw.lstrip().startswith("[") else "{"
-        close = "]" if bracket == "[" else "}"
-        depth, end = 0, 0
-        for i, ch in enumerate(raw):
-            if ch == bracket:
-                depth += 1
-            elif ch == close:
-                depth -= 1
-                if depth == 0:
-                    end = i + 1
-                    break
-        if end > 0:
-            return json.loads(raw[:end])
+        # Find the first JSON array or object anywhere in the response
+        # (LLM may prepend explanation text before the JSON)
+        start_idx = -1
+        bracket = "["
+        close = "]"
+        for marker in ("[", "{"):
+            idx = raw.find(marker)
+            if idx >= 0 and (start_idx < 0 or idx < start_idx):
+                start_idx = idx
+                bracket = marker
+                close = "]" if marker == "[" else "}"
+        if start_idx >= 0:
+            depth, end = 0, 0
+            for i in range(start_idx, len(raw)):
+                ch = raw[i]
+                if ch == bracket:
+                    depth += 1
+                elif ch == close:
+                    depth -= 1
+                    if depth == 0:
+                        end = i + 1
+                        break
+            if end > 0:
+                return json.loads(raw[start_idx:end])
         raise
 
 

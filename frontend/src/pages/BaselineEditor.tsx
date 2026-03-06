@@ -17,6 +17,9 @@ export default function BaselineEditor() {
   const queryClient = useQueryClient();
   const [editingReq, setEditingReq] = useState<string | null>(null);
   const [editText, setEditText] = useState('');
+  const [editingName, setEditingName] = useState(false);
+  const [nameValue, setNameValue] = useState('');
+  const [descValue, setDescValue] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [uploadPhase, setUploadPhase] = useState<UploadPhase>('idle');
   const [uploadFileName, setUploadFileName] = useState('');
@@ -46,6 +49,14 @@ export default function BaselineEditor() {
   const publishMutation = useMutation({
     mutationFn: () => api.publishBaseline(baselineId!),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['baseline', baselineId] }),
+  });
+  const updateBaselineMutation = useMutation({
+    mutationFn: (body: { name?: string; description?: string }) =>
+      api.updateBaseline(baselineId!, body),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['baseline', baselineId] });
+      setEditingName(false);
+    },
   });
   const handleReferenceUpload = async (file: File) => {
     if (!baselineId) return;
@@ -92,12 +103,72 @@ export default function BaselineEditor() {
   return (
     <div className="h-full overflow-auto p-8 max-w-4xl mx-auto">
       <div className="flex items-center justify-between mb-6">
-        <div>
-          <h1 className="text-2xl font-bold flex items-center gap-2">
-            <Shield className="w-6 h-6" /> {baseline.name}</h1>
-          <p className="text-sm text-gray-500 mt-1">{baseline.description}</p>
+        <div className="flex-1 min-w-0">
+          {editingName && baseline.status === 'draft' ? (
+            <div className="space-y-2">
+              <input
+                autoFocus
+                value={nameValue}
+                onChange={(e) => setNameValue(e.target.value)}
+                className="text-2xl font-bold w-full border border-gray-300 rounded-lg px-3 py-1 focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+                placeholder="Baseline name"
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    updateBaselineMutation.mutate({ name: nameValue, description: descValue });
+                  }
+                  if (e.key === 'Escape') setEditingName(false);
+                }}
+              />
+              <input
+                value={descValue}
+                onChange={(e) => setDescValue(e.target.value)}
+                className="text-sm w-full border border-gray-300 rounded-lg px-3 py-1.5 focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+                placeholder="Description (optional)"
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    updateBaselineMutation.mutate({ name: nameValue, description: descValue });
+                  }
+                  if (e.key === 'Escape') setEditingName(false);
+                }}
+              />
+              <div className="flex gap-2">
+                <button
+                  onClick={() => updateBaselineMutation.mutate({ name: nameValue, description: descValue })}
+                  disabled={!nameValue.trim()}
+                  className="btn-primary text-xs flex items-center gap-1 disabled:opacity-50"
+                >
+                  <Save className="w-3 h-3" /> Save
+                </button>
+                <button
+                  onClick={() => setEditingName(false)}
+                  className="text-xs text-gray-500 hover:text-gray-700"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div
+              className={baseline.status === 'draft' ? 'cursor-pointer group' : ''}
+              onClick={() => {
+                if (baseline.status === 'draft') {
+                  setNameValue(baseline.name);
+                  setDescValue(baseline.description || '');
+                  setEditingName(true);
+                }
+              }}
+            >
+              <h1 className="text-2xl font-bold flex items-center gap-2">
+                <Shield className="w-6 h-6" /> {baseline.name}
+                {baseline.status === 'draft' && (
+                  <Pencil className="w-4 h-4 text-gray-300 group-hover:text-gray-500 transition-colors" />
+                )}
+              </h1>
+              <p className="text-sm text-gray-500 mt-1">{baseline.description || 'Click to add description'}</p>
+            </div>
+          )}
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 flex-shrink-0 ml-4">
           {baseline.status === 'draft' && (
             <button onClick={() => publishMutation.mutate()}
               disabled={reqs.length === 0}

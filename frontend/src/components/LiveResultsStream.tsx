@@ -12,6 +12,8 @@ const stageColors: Record<ProcessingEvent['stage'], string> = {
   router: 'text-blue-400',
   extractor: 'text-green-400',
   normalizer: 'text-purple-400',
+  compliance: 'text-amber-400',
+  indexing: 'text-cyan-400',
 };
 
 function formatElapsedTimestamp(eventTs: string, startedAt?: string): string {

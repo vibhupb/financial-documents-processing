@@ -1090,8 +1090,26 @@ export class DocumentProcessingStack extends cdk.Stack {
       retryOnServiceExceptions: true,
     });
 
+    // After compliance (or failure), mark document as PROCESSED via normalizer
+    // (normalizer handles setting status=PROCESSED + reviewStatus=PENDING_REVIEW)
+    const normalizeUnderstand = new tasks.LambdaInvoke(this, 'NormalizeUnderstand', {
+      lambdaFunction: normalizerLambda,
+      outputPath: '$.Payload',
+      retryOnServiceExceptions: true,
+    });
+    normalizeUnderstand.addCatch(handleError, { resultPath: '$.error' });
+
+    // Compliance evaluation for understand-only path (separate from parallel branch)
+    const evaluateComplianceUnderstand = new tasks.LambdaInvoke(this, 'EvaluateComplianceUnderstand', {
+      lambdaFunction: complianceEvaluateLambda,
+      outputPath: '$.Payload',
+      retryOnServiceExceptions: true,
+    });
+    // On compliance failure, continue to normalizer (non-blocking — error stored in $.complianceError)
+    evaluateComplianceUnderstand.addCatch(normalizeUnderstand, { resultPath: '$.complianceError' });
+
     const indexingComplete = new sfn.Succeed(this, 'IndexingComplete', {
-      comment: 'Document indexed (tree built), extraction deferred',
+      comment: 'Document indexed, compliance evaluated, processing complete',
     });
 
     // Route: has_sections → async PageIndex fire-and-forget, then extraction
@@ -1124,7 +1142,10 @@ export class DocumentProcessingStack extends cdk.Stack {
       )
       .otherwise(pageIndexRouteChoice);
 
-    buildPageIndexSync.next(indexingComplete);
+    // Understand-only path: PageIndex → Compliance → Normalize → Complete
+    buildPageIndexSync.next(evaluateComplianceUnderstand);
+    evaluateComplianceUnderstand.next(normalizeUnderstand);
+    normalizeUnderstand.next(indexingComplete);
     buildPageIndexSync.addCatch(handleError, { resultPath: '$.error' });
 
     // Definition: classify → mode check → async PageIndex + extraction (or sync PageIndex)

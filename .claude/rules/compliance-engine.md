@@ -13,9 +13,10 @@ Evaluates processed documents against user-defined regulatory baselines. Runs as
 
 ## Architecture
 ```
-Upload (with baselineIds) → Step Functions Parallel:
-  Branch 1: Router → Extractor → Normalizer (existing pipeline)
-  Branch 2: Compliance Ingest → Compliance Evaluate (new)
+Upload Dialog (mode + baselines + optional pluginId) → Step Functions:
+  Extract mode:    Router → Extractor + Compliance (parallel) → Normalizer
+  Understand mode: Router → sync PageIndex → Compliance Evaluate → Normalizer
+  Both mode:       Router → async PageIndex → Extractor + Compliance (parallel) → Normalizer
 ```
 
 ## Three DynamoDB Tables
@@ -32,6 +33,8 @@ Upload (with baselineIds) → Step Functions Parallel:
 - **Ingest Lambda**: Parses reference docs (PDF/DOCX/PPTX/images), extracts requirements via LLM
 - **Evaluate Lambda**: Compares doc text against each requirement, produces PASS/FAIL/PARTIAL/NOT_FOUND with char-offset evidence
 - **Few-shot Learning**: Reviewer overrides stored as feedback, injected into future evaluation prompts
+- **Processing Events**: Compliance evaluate emits `stage: "compliance"` events to DynamoDB processingEvents (start, per-batch progress, completion with score)
+- **Processing Modes**: `processingMode` field on documents controls pipeline routing and frontend tab visibility
 
 ## API Routes
 

@@ -7,12 +7,10 @@
 ## Architecture
 
 ```
-S3 Upload → Trigger (SHA-256 dedup) → Step Functions:
-  ├─ Router (Claude Haiku 4.5, ~$0.023) → classify doc type + pages
-  ├─ Extractor (Textract, targeted pages) → OCR tables/forms/queries
-  ├─ Normalizer (Claude Haiku 4.5) → validate + JSON output
-  ├─ PageIndex (Claude Haiku 4.5) → hierarchical tree + Q&A
-  └─ Compliance Engine (parallel) → evaluate against baselines
+S3 Upload → Upload Dialog (mode/plugin/baselines) → Trigger (SHA-256 dedup) → Step Functions:
+  Extract mode:  Router → async PageIndex → Extractor → Compliance (parallel) → Normalizer
+  Understand mode: Router → sync PageIndex → Compliance Evaluate → Normalizer
+  Both mode:     Router → async PageIndex → Extractor + Compliance (parallel) → Normalizer
 React Dashboard (CloudFront) → API Gateway → API Lambda → DynamoDB + S3
 ```
 
@@ -36,7 +34,7 @@ React Dashboard (CloudFront) → API Gateway → API Lambda → DynamoDB + S3
 ./scripts/deploy-backend.sh     # Lambda/CDK (sources common.sh)
 ./scripts/deploy-frontend.sh    # React build + S3 sync + CloudFront invalidation
 ./scripts/deploy.sh             # Full deploy (use --force)
-./scripts/cleanup.sh            # Reset S3 + DynamoDB for testing
+./scripts/cleanup.sh            # Reset S3 + DynamoDB (--compliance --plugins --all)
 
 # Test
 uv run pytest tests/            # Python unit tests (80 tests)
@@ -84,7 +82,7 @@ frontend/src/
 | GET | `/documents` | List documents |
 | GET | `/documents/{id}` | Document details |
 | GET | `/documents/{id}/pdf` | Presigned PDF URL |
-| POST | `/upload` | Get presigned upload URL |
+| POST | `/upload` | Get presigned upload URL (accepts processingMode, baselineIds, pluginId) |
 | GET | `/review` | Documents pending review |
 | POST | `/review/{id}/approve` | Approve document |
 | POST | `/review/{id}/reject` | Reject document |
@@ -129,7 +127,7 @@ Detailed guidelines are split across path-scoped rules and on-demand skills:
 
 ## Version History
 
-See `docs/VERSION_HISTORY.md` for full history. Current: **v5.1.0** (2026-03-05)
+See `docs/VERSION_HISTORY.md` for full history. Current: **v5.2.0** (2026-03-06)
 
 ### v5.1.0 — Testing Toolkit + Bug Fixes (2026-03-05)
 
@@ -140,3 +138,16 @@ See `docs/VERSION_HISTORY.md` for full history. Current: **v5.1.0** (2026-03-05)
 - **Bug fix**: LLM JSON response parsing in compliance-evaluate (extra text after JSON array).
 - **Bug fix**: Multi-baseline compliance now creates separate report per baseline (was merging into one).
 - **Test fixtures**: Synthetic invoice plugin + PDF generator, compliance baseline JSON fixtures.
+
+### v5.2.0 — Upload Mode Dialog + Compliance Pipeline Fix (2026-03-06)
+
+- **Upload Mode Dialog**: File drop opens modal with processing mode radio (Extract/Compliance/Both), plugin selector dropdown (auto-detect + registered plugins), baseline checkboxes (required for compliance modes)
+- **Conditional tab visibility**: DataViewTabs filters by `processingMode` — extract hides Compliance, understand hides Extracted/JSON
+- **Compliance pipeline fix**: Step Functions understand-only path now runs Compliance Evaluate → Normalizer (was going straight to Succeed)
+- **Compliance event tracking**: compliance-evaluate Lambda emits processingEvents (start/progress/complete), PipelineTracker shows 4th Compliance stage, LiveResultsStream adds amber compliance + cyan indexing colors
+- **processingMode persistence**: Trigger Lambda now stores processingMode in DynamoDB
+- **pluginId upload support**: API accepts optional pluginId, stored as S3 metadata for router skip
+- **Baseline name editing**: BaselineEditor name/description inline-editable in draft mode
+- **Cleanup enhancements**: `--compliance` `--plugins` `--all` flags for cleanup.sh
+- **Bug fix**: Compliance evaluate JSON parsing handles LLM text before JSON array
+- **Bug fix**: Step Functions catch on compliance failure preserves state for normalizer

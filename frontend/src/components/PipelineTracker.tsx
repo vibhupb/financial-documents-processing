@@ -1,4 +1,4 @@
-import { CheckCircle, Loader2, Circle, XCircle, Search, FileText, Sparkles } from 'lucide-react';
+import { CheckCircle, Loader2, Circle, XCircle, Search, FileText, Sparkles, Shield } from 'lucide-react';
 import clsx from 'clsx';
 import type { StageInfo } from '../types';
 
@@ -7,20 +7,25 @@ interface PipelineTrackerProps {
     classification: StageInfo;
     extraction: StageInfo;
     normalization: StageInfo;
+    compliance?: StageInfo;
   };
 }
 
 interface StageConfig {
-  key: keyof PipelineTrackerProps['stages'];
+  key: string;
   label: string;
   icon: typeof Search;
 }
 
-const stageConfigs: StageConfig[] = [
+const baseStageConfigs: StageConfig[] = [
   { key: 'classification', label: 'Classification', icon: Search },
   { key: 'extraction', label: 'Extraction', icon: FileText },
   { key: 'normalization', label: 'Normalization', icon: Sparkles },
 ];
+
+const complianceStageConfig: StageConfig = {
+  key: 'compliance', label: 'Compliance', icon: Shield,
+};
 
 function getStatusIcon(status: StageInfo['status']) {
   switch (status) {
@@ -65,22 +70,34 @@ function getDetailText(stage: StageInfo): string {
 }
 
 export default function PipelineTracker({ stages }: PipelineTrackerProps) {
+  // Build stage list — include compliance only when the backend sends it
+  const stageConfigs = stages.compliance
+    ? [...baseStageConfigs, complianceStageConfig]
+    : baseStageConfigs;
+
+  const stageMap: Record<string, StageInfo> = {
+    classification: stages.classification,
+    extraction: stages.extraction,
+    normalization: stages.normalization,
+    ...(stages.compliance ? { compliance: stages.compliance } : {}),
+  };
+
   return (
-    <div className="flex items-center gap-0">
+    <div className="flex items-center gap-0 flex-wrap">
       {stageConfigs.map((config, index) => {
-        const stage = stages[config.key];
+        const stage = stageMap[config.key];
+        if (!stage) return null;
         const isPending = stage.status === 'PENDING';
         const isCompleted = stage.status === 'COMPLETED';
         const detail = getDetailText(stage);
 
-        // Show connecting line before all stages except the first
         const showLineBefore = index > 0;
-        const prevStage = index > 0 ? stages[stageConfigs[index - 1].key] : null;
+        const prevKey = index > 0 ? stageConfigs[index - 1].key : null;
+        const prevStage = prevKey ? stageMap[prevKey] : null;
         const prevCompleted = prevStage?.status === 'COMPLETED';
 
         return (
           <div key={config.key} className="flex items-center">
-            {/* Connecting line */}
             {showLineBefore && (
               <div
                 className={clsx(
@@ -90,7 +107,6 @@ export default function PipelineTracker({ stages }: PipelineTrackerProps) {
               />
             )}
 
-            {/* Stage node */}
             <div
               className={clsx(
                 'flex items-center gap-2.5 px-3 py-2 rounded-lg transition-all duration-300',

@@ -440,6 +440,7 @@ def get_processing_status(document_id: str) -> dict[str, Any]:
         router_events = [e for e in events if e.get("stage") == "router"]
         extractor_events = [e for e in events if e.get("stage") == "extractor"]
         normalizer_events = [e for e in events if e.get("stage") == "normalizer"]
+        compliance_events = [e for e in events if e.get("stage") == "compliance"]
 
         # Classification stage
         classification_status = "PENDING"
@@ -536,26 +537,46 @@ def get_processing_status(document_id: str) -> dict[str, Any]:
             except (ValueError, TypeError):
                 return None
 
+        # Compliance stage (runs in parallel with extraction)
+        compliance_status = "PENDING"
+        if compliance_events:
+            if any("Compliance complete" in e.get("message", "") for e in compliance_events):
+                compliance_status = "COMPLETED"
+            elif any("No compliance baselines" in e.get("message", "") for e in compliance_events):
+                compliance_status = "COMPLETED"  # Skipped counts as completed
+            else:
+                compliance_status = "IN_PROGRESS"
+
+        stages: dict[str, Any] = {
+            "classification": {
+                "status": classification_status,
+                "elapsed": _stage_elapsed(router_events),
+                "result": classification_result if classification_result else None,
+            },
+            "extraction": {
+                "status": extraction_status,
+                "elapsed": _stage_elapsed(extractor_events),
+                "progress": extraction_progress,
+            },
+            "normalization": {
+                "status": normalization_status,
+                "elapsed": _stage_elapsed(normalizer_events),
+            },
+        }
+
+        # Only include compliance stage if there are compliance events
+        # (avoids showing empty stage for documents uploaded without baselines)
+        if compliance_events:
+            stages["compliance"] = {
+                "status": compliance_status,
+                "elapsed": _stage_elapsed(compliance_events),
+            }
+
         return {
             "documentId": document_id,
             "status": status,
             "documentType": document_type,
-            "stages": {
-                "classification": {
-                    "status": classification_status,
-                    "elapsed": _stage_elapsed(router_events),
-                    "result": classification_result if classification_result else None,
-                },
-                "extraction": {
-                    "status": extraction_status,
-                    "elapsed": _stage_elapsed(extractor_events),
-                    "progress": extraction_progress,
-                },
-                "normalization": {
-                    "status": normalization_status,
-                    "elapsed": _stage_elapsed(normalizer_events),
-                },
-            },
+            "stages": stages,
             "events": events,
             "startedAt": created_at,
             "completedAt": updated_at if status in ("PROCESSED", "FAILED") else None,

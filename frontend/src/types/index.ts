@@ -1,6 +1,6 @@
 export interface ProcessingEvent {
   ts: string;
-  stage: 'trigger' | 'router' | 'extractor' | 'normalizer';
+  stage: 'trigger' | 'router' | 'extractor' | 'normalizer' | 'compliance' | 'indexing';
   message: string;
 }
 
@@ -29,6 +29,7 @@ export interface EnrichedStatusResponse {
     classification: StageInfo;
     extraction: StageInfo;
     normalization: StageInfo;
+    compliance?: StageInfo;
   };
   events: ProcessingEvent[];
   startedAt?: string;

@@ -1,10 +1,13 @@
 #!/bin/bash
 # cleanup.sh - Reset S3 and DynamoDB for fresh testing/demo
 #
-# Usage: ./scripts/cleanup.sh [--keep-source] [--force] [--dry-run]
+# Usage: ./scripts/cleanup.sh [--keep-source] [--force] [--dry-run] [--compliance] [--plugins] [--all]
 #   --keep-source: Keep the original PDFs in ingest/, only clean processed data
 #   --force:       Skip confirmation prompt
 #   --dry-run:     Show what would be deleted without deleting
+#   --compliance:  Also clean compliance tables (baselines, reports, feedback)
+#   --plugins:     Also clean plugin configs table
+#   --all:         Clean everything (implies --compliance --plugins)
 
 source "$(dirname "$0")/common.sh"
 
@@ -13,14 +16,29 @@ BUCKET_NAME=$(get_bucket_name)
 TABLE_NAME=$(get_table_name)
 PLUGIN_TABLE="document-plugin-configs"
 PII_AUDIT_TABLE="financial-documents-pii-audit"
+COMPLIANCE_BASELINES_TABLE="compliance-baselines"
+COMPLIANCE_REPORTS_TABLE="compliance-reports"
+COMPLIANCE_FEEDBACK_TABLE="compliance-feedback"
 REGION="$AWS_REGION"
 
 # Parse arguments
 KEEP_SOURCE=false
+CLEAN_COMPLIANCE=false
+CLEAN_PLUGINS=false
 for arg in "$@"; do
     case $arg in
         --keep-source)
             KEEP_SOURCE=true
+            ;;
+        --compliance)
+            CLEAN_COMPLIANCE=true
+            ;;
+        --plugins)
+            CLEAN_PLUGINS=true
+            ;;
+        --all)
+            CLEAN_COMPLIANCE=true
+            CLEAN_PLUGINS=true
             ;;
     esac
 done
@@ -32,6 +50,8 @@ warning "This will delete all processed documents!"
 echo ""
 info "Bucket:     $BUCKET_NAME"
 info "Tables:     $TABLE_NAME, $PLUGIN_TABLE, $PII_AUDIT_TABLE"
+[ "$CLEAN_COMPLIANCE" = true ] && info "Compliance: $COMPLIANCE_BASELINES_TABLE, $COMPLIANCE_REPORTS_TABLE, $COMPLIANCE_FEEDBACK_TABLE"
+[ "$CLEAN_PLUGINS" = true ] && info "Plugins:    $PLUGIN_TABLE (full wipe)"
 info "Region:     $REGION"
 if [ "$KEEP_SOURCE" = true ]; then
     echo -e "  Mode:       ${GREEN}Keep source PDFs${NC} (only clean processed data)"
@@ -159,8 +179,21 @@ print(f'  Deleted {deleted}/{len(items)} items from $label')
 echo -e "${BLUE}[1/3] Cleaning DynamoDB tables...${NC}"
 
 dynamo_clean "$TABLE_NAME" "Documents ($TABLE_NAME)"
-dynamo_clean "$PLUGIN_TABLE" "Plugin Configs ($PLUGIN_TABLE)"
 dynamo_clean "$PII_AUDIT_TABLE" "PII Audit ($PII_AUDIT_TABLE)"
+
+if [ "$CLEAN_PLUGINS" = true ]; then
+    dynamo_clean "$PLUGIN_TABLE" "Plugin Configs ($PLUGIN_TABLE)"
+else
+    echo "  ⏭ Plugin Configs — skipped (use --plugins or --all to include)"
+fi
+
+if [ "$CLEAN_COMPLIANCE" = true ]; then
+    dynamo_clean "$COMPLIANCE_BASELINES_TABLE" "Compliance Baselines ($COMPLIANCE_BASELINES_TABLE)"
+    dynamo_clean "$COMPLIANCE_REPORTS_TABLE" "Compliance Reports ($COMPLIANCE_REPORTS_TABLE)"
+    dynamo_clean "$COMPLIANCE_FEEDBACK_TABLE" "Compliance Feedback ($COMPLIANCE_FEEDBACK_TABLE)"
+else
+    echo "  ⏭ Compliance tables — skipped (use --compliance or --all to include)"
+fi
 
 # ============================================
 # Step 2: Clean S3 Bucket (processed data)

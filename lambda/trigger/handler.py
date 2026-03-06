@@ -227,6 +227,7 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 "documentId": document_id,
                 "documentType": "PROCESSING",  # Placeholder until classification determines actual type
                 "status": "PENDING",
+                "processingMode": processing_mode,
                 "createdAt": timestamp,
                 "updatedAt": timestamp,
                 "contentHash": content_hash,
