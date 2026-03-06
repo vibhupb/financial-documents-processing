@@ -263,7 +263,7 @@ def get_document_audit(document_id: str) -> dict[str, Any]:
         return {"error": f"Failed to get audit trail: {str(e)}"}
 
 
-def create_upload_url(filename: str, processing_mode: str = "extract", baseline_ids: list | None = None) -> dict[str, Any]:
+def create_upload_url(filename: str, processing_mode: str = "extract", baseline_ids: list | None = None, plugin_id: str | None = None) -> dict[str, Any]:
     """Generate a presigned POST URL for document upload.
 
     Uses presigned POST instead of PUT for better CORS support with
@@ -274,6 +274,7 @@ def create_upload_url(filename: str, processing_mode: str = "extract", baseline_
         filename: Original filename
         processing_mode: "extract" (default), "understand", or "both"
         baseline_ids: Optional list of compliance baseline IDs to evaluate against
+        plugin_id: Optional plugin ID to skip router classification
     """
     document_id = str(uuid.uuid4())
     key = f"ingest/{document_id}/{filename}"
@@ -298,6 +299,10 @@ def create_upload_url(filename: str, processing_mode: str = "extract", baseline_
         if baseline_ids_str:
             fields["x-amz-meta-baseline-ids"] = baseline_ids_str
             conditions.append({"x-amz-meta-baseline-ids": baseline_ids_str})
+
+        if plugin_id:
+            fields["x-amz-meta-plugin-id"] = plugin_id
+            conditions.append({"x-amz-meta-plugin-id": plugin_id})
 
         # Use presigned POST which has better CORS support
         presigned_post = s3_client.generate_presigned_post(
@@ -2159,7 +2164,8 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             filename = body.get("filename", "document.pdf") if body else "document.pdf"
             processing_mode = body.get("processingMode", "extract") if body else "extract"
             baseline_ids = body.get("baselineIds", []) if body else []
-            return response(200, create_upload_url(filename, processing_mode, baseline_ids))
+            plugin_id = body.get("pluginId") if body else None
+            return response(200, create_upload_url(filename, processing_mode, baseline_ids, plugin_id))
 
         elif path == "/metrics" and http_method == "GET":
             return response(200, get_metrics())

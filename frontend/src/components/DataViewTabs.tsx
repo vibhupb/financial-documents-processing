@@ -8,6 +8,7 @@ interface DataViewTabsProps {
   onTabChange: (tab: DataViewTab) => void;
   hasTree?: boolean;
   hasExtractedData?: boolean;
+  processingMode?: 'extract' | 'understand' | 'both';
   className?: string;
 }
 
@@ -23,11 +24,26 @@ export default function DataViewTabs({
   onTabChange,
   hasTree,
   hasExtractedData,
+  processingMode,
   className,
 }: DataViewTabsProps) {
+  // Filter tabs based on processingMode
+  const visibleTabs = tabs.filter(({ id }) => {
+    if (!processingMode || processingMode === 'both') return true;
+    if (processingMode === 'extract') {
+      // Show: extracted, json, summary (if tree available). Hide: compliance
+      return id !== 'compliance';
+    }
+    if (processingMode === 'understand') {
+      // Show: summary, compliance. Hide: extracted, json
+      return id === 'summary' || id === 'compliance';
+    }
+    return true;
+  });
+
   return (
     <div className={clsx('flex border-b border-gray-200 bg-white', className)}>
-      {tabs.map(({ id, label, icon: Icon }) => {
+      {visibleTabs.map(({ id, label, icon: Icon }) => {
         const isActive = activeTab === id;
         const isDisabled = id === 'summary' && !hasTree;
 

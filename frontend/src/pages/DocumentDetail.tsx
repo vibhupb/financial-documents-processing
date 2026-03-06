@@ -96,7 +96,10 @@ export default function DocumentDetail() {
       if (!status) return 3000;
       // Keep polling if processed but PageIndex tree not yet available
       // (tree builds in a parallel branch and may finish after extraction)
+      // For compliance-only ('understand') mode, don't wait for extraction data
       if (isCompletedStatus(status) && !doc?.pageIndexTree?.structure?.length) {
+        // For understand-only mode, stop polling sooner — tree may still arrive but extraction won't
+        if (doc?.processingMode === 'understand') return 5000;
         return 5000; // Slower poll for tree arrival
       }
       if (isCompletedStatus(status)) return false;

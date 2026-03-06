@@ -61,13 +61,14 @@ export const api = {
     ),
 
   // Upload
-  createUploadUrl: (filename: string, processingMode: string = 'extract', baselineIds?: string[]) =>
+  createUploadUrl: (filename: string, processingMode: string = 'extract', baselineIds?: string[], pluginId?: string) =>
     fetchApi<UploadResponse>('/upload', {
       method: 'POST',
       body: JSON.stringify({
         filename,
         processingMode,
         ...(baselineIds?.length ? { baselineIds } : {}),
+        ...(pluginId ? { pluginId } : {}),
       }),
     }),
 

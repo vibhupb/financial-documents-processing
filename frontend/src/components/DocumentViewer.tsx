@@ -32,10 +32,17 @@ export default function DocumentViewer({
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [totalPages, setTotalPages] = useState<number>(0);
 
-  // Determine default tab based on available data
+  // Determine default tab based on available data and processingMode
   const hasTree = !!(document.pageIndexTree?.structure?.length);
   const hasExtractedData = !!(document.extractedData || document.data);
-  const defaultTab: DataViewTab = hasExtractedData ? 'extracted' : hasTree ? 'summary' : 'extracted';
+  const mode = document.processingMode;
+
+  const defaultTab: DataViewTab = (() => {
+    if (mode === 'understand') return hasTree ? 'summary' : 'compliance';
+    if (mode === 'extract') return hasExtractedData ? 'extracted' : hasTree ? 'summary' : 'extracted';
+    // 'both' or undefined — current logic
+    return hasExtractedData ? 'extracted' : hasTree ? 'summary' : 'extracted';
+  })();
   const [activeTab, setActiveTab] = useState<DataViewTab>(defaultTab);
 
   // API base URL from env
@@ -166,6 +173,7 @@ export default function DocumentViewer({
               onTabChange={setActiveTab}
               hasTree={hasTree}
               hasExtractedData={hasExtractedData}
+              processingMode={mode}
             />
 
             {/* Tab Content */}
