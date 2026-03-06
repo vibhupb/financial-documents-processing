@@ -5,6 +5,7 @@ import json
 import os
 import re
 import uuid
+from decimal import Decimal
 
 import boto3
 from botocore.config import Config
@@ -43,8 +44,21 @@ def extract_requirements(content: ParsedContent) -> list[dict]:
     raw = re.sub(r"```$", "", raw.strip())
     try:
         items = json.loads(raw)
-    except json.JSONDecodeError as e:
-        raise ValueError(f"Failed to parse LLM response: {e}") from e
+    except json.JSONDecodeError:
+        # LLM may append explanation after JSON — extract first valid array
+        bracket_depth, end = 0, 0
+        for i, ch in enumerate(raw):
+            if ch == "[":
+                bracket_depth += 1
+            elif ch == "]":
+                bracket_depth -= 1
+                if bracket_depth == 0:
+                    end = i + 1
+                    break
+        if end > 0:
+            items = json.loads(raw[:end])
+        else:
+            raise ValueError(f"Failed to parse LLM response as JSON array")
     return [
         {
             "requirementId": f"req-{uuid.uuid4().hex[:8]}",
@@ -53,7 +67,7 @@ def extract_requirements(content: ParsedContent) -> list[dict]:
             "sourceReference": it.get("sourceReference", ""),
             "evaluationHint": it.get("evaluationHint", ""),
             "criticality": "should-have",
-            "confidenceThreshold": 0.8,
+            "confidenceThreshold": Decimal("0.8"),
             "status": "active",
         }
         for it in items
