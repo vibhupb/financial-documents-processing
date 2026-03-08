@@ -139,15 +139,17 @@ See `docs/VERSION_HISTORY.md` for full history. Current: **v5.2.0** (2026-03-06)
 - **Bug fix**: Multi-baseline compliance now creates separate report per baseline (was merging into one).
 - **Test fixtures**: Synthetic invoice plugin + PDF generator, compliance baseline JSON fixtures.
 
-### v5.2.0 — Upload Mode Dialog + Compliance Pipeline Fix (2026-03-06)
+### v5.2.0 — Upload Mode Dialog + Compliance Pipeline (2026-03-08)
 
 - **Upload Mode Dialog**: File drop opens modal with processing mode radio (Extract/Compliance/Both), plugin selector dropdown (auto-detect + registered plugins), baseline checkboxes (required for compliance modes)
-- **Conditional tab visibility**: DataViewTabs filters by `processingMode` — extract hides Compliance, understand hides Extracted/JSON
-- **Compliance pipeline fix**: Step Functions understand-only path now runs Compliance Evaluate → Normalizer (was going straight to Succeed)
+- **Conditional tab visibility**: DataViewTabs filters by `processingMode` — extract hides Compliance, understand hides Extracted/JSON. DocumentViewer syncs active tab via useEffect when processingMode arrives from polling.
+- **Compliance pipeline**: Step Functions understand-only path runs Compliance Evaluate → Normalizer. Extract-only path skips compliance via Choice+Pass (no unnecessary baseline lookups).
 - **Compliance event tracking**: compliance-evaluate Lambda emits processingEvents (start/progress/complete), PipelineTracker shows 4th Compliance stage, LiveResultsStream adds amber compliance + cyan indexing colors
-- **processingMode persistence**: Trigger Lambda now stores processingMode in DynamoDB
+- **processingMode persistence**: Trigger Lambda stores processingMode in DynamoDB; Normalizer preserves it through put_item (was being wiped)
 - **pluginId upload support**: API accepts optional pluginId, stored as S3 metadata for router skip
-- **Baseline name editing**: BaselineEditor name/description inline-editable in draft mode
+- **UI naming**: Sidebar "Baselines" → "Compliance Policies"; understand-mode documents show "Compliance Review" instead of router doc type in header and Work Queue
+- **Baseline editing**: BaselineEditor name/description inline-editable in draft mode
 - **Cleanup enhancements**: `--compliance` `--plugins` `--all` flags for cleanup.sh
+- **Compliance-ingest fix**: maxTokens 4096→8192, salvage complete objects from truncated JSON
 - **Bug fix**: Compliance evaluate JSON parsing handles LLM text before JSON array
 - **Bug fix**: Step Functions catch on compliance failure preserves state for normalizer

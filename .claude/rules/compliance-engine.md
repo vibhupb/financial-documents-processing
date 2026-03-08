@@ -9,14 +9,15 @@ paths:
 ---
 # Compliance Engine
 
-Evaluates processed documents against user-defined regulatory baselines. Runs as a **non-blocking parallel branch** in Step Functions alongside extraction.
+Evaluates processed documents against user-defined compliance policies. Compliance runs conditionally: only when baselineIds are present (extract mode skips via Choice+Pass). For understand-only mode, runs sequentially after PageIndex.
 
 ## Architecture
 ```
-Upload Dialog (mode + baselines + optional pluginId) → Step Functions:
-  Extract mode:    Router → Extractor + Compliance (parallel) → Normalizer
+Upload Dialog (mode + policies + optional pluginId) → Step Functions:
+  Extract (no baselines): Router → PageIndex → Extractor → SkipCompliance → Normalizer
+  Extract (with baselines): Router → PageIndex → Extractor + Compliance (parallel) → Normalizer
   Understand mode: Router → sync PageIndex → Compliance Evaluate → Normalizer
-  Both mode:       Router → async PageIndex → Extractor + Compliance (parallel) → Normalizer
+  Both mode: Router → PageIndex → Extractor + Compliance (parallel) → Normalizer
 ```
 
 ## Three DynamoDB Tables
@@ -35,6 +36,7 @@ Upload Dialog (mode + baselines + optional pluginId) → Step Functions:
 - **Few-shot Learning**: Reviewer overrides stored as feedback, injected into future evaluation prompts
 - **Processing Events**: Compliance evaluate emits `stage: "compliance"` events to DynamoDB processingEvents (start, per-batch progress, completion with score)
 - **Processing Modes**: `processingMode` field on documents controls pipeline routing and frontend tab visibility
+- **Normalizer Gotcha**: Normalizer does `put_item` replacing the entire DynamoDB record — must explicitly preserve `processingMode`, `fileName`, `executionArn`, `processingEvents` from the existing record
 
 ## API Routes
 

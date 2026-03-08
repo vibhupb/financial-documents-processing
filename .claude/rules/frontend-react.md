@@ -47,6 +47,18 @@ If tests fail with "document is not defined", you're running from the wrong dire
   - `both` / undefined → All tabs
 - `DocumentViewer` reads `document.processingMode` and passes to DataViewTabs + sets default tab
 
+## UI Naming Conventions
+- Sidebar: "Compliance Policies" (not "Baselines")
+- Document type for `understand` mode: "Compliance Review" (not router classification)
+- Create button: "New Policy" (not "Create Baseline")
+- Default name for new policy: "New Policy"
+
+## useState + Polling Gotcha
+- `useState(initialValue)` only captures value at mount time
+- When data arrives via TanStack Query polling, state won't auto-update
+- Use `useEffect` watching the relevant prop to sync state when it changes
+- Example: DocumentViewer watches `document.processingMode` to update `activeTab`
+
 ## Troubleshooting
 - **Frontend Not Showing Data**: Check `extractedData` vs `data` access; verify API response matches TS types
 - **CORS Errors**: Check `CORS_ORIGIN` env var; ensure presigned URLs use regional S3 endpoint
