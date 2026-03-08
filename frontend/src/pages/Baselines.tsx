@@ -31,12 +31,12 @@ export default function Baselines() {
     <div className="h-full overflow-auto p-8">
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-2xl font-bold flex items-center gap-2">
-          <Shield className="w-6 h-6" /> Compliance Baselines
+          <Shield className="w-6 h-6" /> Compliance Policies
         </h1>
         <button onClick={() => createMutation.mutate({
-          name: 'New Baseline', description: '' })}
+          name: 'New Policy', description: '' })}
           className="btn-primary flex items-center gap-1.5">
-          <Plus className="w-4 h-4" /> Create Baseline
+          <Plus className="w-4 h-4" /> New Policy
         </button>
       </div>
       {/* Status filter tabs */}

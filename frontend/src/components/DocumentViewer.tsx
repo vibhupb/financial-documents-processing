@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { PanelLeftClose, PanelRightClose, Columns } from 'lucide-react';
 import clsx from 'clsx';
 import PDFViewer from './PDFViewer';
@@ -44,6 +44,16 @@ export default function DocumentViewer({
     return hasExtractedData ? 'extracted' : hasTree ? 'summary' : 'extracted';
   })();
   const [activeTab, setActiveTab] = useState<DataViewTab>(defaultTab);
+
+  // Sync active tab when processingMode arrives (component may mount before document data loads)
+  const prevMode = useRef(mode);
+  useEffect(() => {
+    if (mode && mode !== prevMode.current) {
+      prevMode.current = mode;
+      if (mode === 'understand') setActiveTab(hasTree ? 'summary' : 'compliance');
+      else if (mode === 'extract') setActiveTab(hasExtractedData ? 'extracted' : 'summary');
+    }
+  }, [mode, hasTree, hasExtractedData]);
 
   // API base URL from env
   const apiBaseUrl = (import.meta as unknown as { env: Record<string, string> }).env?.VITE_API_URL || '';

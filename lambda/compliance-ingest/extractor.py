@@ -36,7 +36,7 @@ def extract_requirements(content: ParsedContent) -> list[dict]:
     resp = bedrock_client.converse(
         modelId=MODEL_ID,
         messages=[{"role": "user", "content": [{"text": build_extraction_prompt(content)}]}],
-        inferenceConfig={"temperature": 0, "maxTokens": 4096},
+        inferenceConfig={"temperature": 0, "maxTokens": 8192},
     )
     raw = resp["output"]["message"]["content"][0]["text"].strip()
     # Strip markdown code fences if present
@@ -45,20 +45,54 @@ def extract_requirements(content: ParsedContent) -> list[dict]:
     try:
         items = json.loads(raw)
     except json.JSONDecodeError:
-        # LLM may append explanation after JSON — extract first valid array
-        bracket_depth, end = 0, 0
-        for i, ch in enumerate(raw):
-            if ch == "[":
-                bracket_depth += 1
-            elif ch == "]":
-                bracket_depth -= 1
-                if bracket_depth == 0:
-                    end = i + 1
-                    break
-        if end > 0:
-            items = json.loads(raw[:end])
+        # LLM may prepend/append text around JSON — find first [ or { anywhere
+        start_idx = raw.find("[")
+        if start_idx < 0:
+            start_idx = raw.find("{")
+        if start_idx >= 0:
+            bracket = raw[start_idx]
+            close = "]" if bracket == "[" else "}"
+            depth, end = 0, 0
+            for i in range(start_idx, len(raw)):
+                if raw[i] == bracket:
+                    depth += 1
+                elif raw[i] == close:
+                    depth -= 1
+                    if depth == 0:
+                        end = i + 1
+                        break
+            if end > 0:
+                items = json.loads(raw[start_idx:end])
+                # If we got a single object, wrap in list
+                if isinstance(items, dict):
+                    items = [items]
+            else:
+                # JSON likely truncated (maxTokens hit) — salvage complete objects
+                # Find all complete {...} objects within a truncated array
+                salvaged = []
+                obj_depth, obj_start = 0, -1
+                for i in range(start_idx, len(raw)):
+                    if raw[i] == "{":
+                        if obj_depth == 0:
+                            obj_start = i
+                        obj_depth += 1
+                    elif raw[i] == "}":
+                        obj_depth -= 1
+                        if obj_depth == 0 and obj_start >= 0:
+                            try:
+                                salvaged.append(json.loads(raw[obj_start:i + 1]))
+                            except json.JSONDecodeError:
+                                pass
+                            obj_start = -1
+                if salvaged:
+                    print(f"[Ingest] Salvaged {len(salvaged)} complete objects from truncated JSON")
+                    items = salvaged
+                else:
+                    print(f"[Ingest] Could not salvage any objects from LLM response (first 500 chars): {raw[:500]}")
+                    raise ValueError("Failed to parse LLM response as JSON array")
         else:
-            raise ValueError(f"Failed to parse LLM response as JSON array")
+            print(f"[Ingest] No JSON found in LLM response (first 500 chars): {raw[:500]}")
+            raise ValueError("Failed to parse LLM response as JSON array")
     return [
         {
             "requirementId": f"req-{uuid.uuid4().hex[:8]}",

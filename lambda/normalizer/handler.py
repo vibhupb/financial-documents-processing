@@ -2242,6 +2242,7 @@ def store_to_dynamodb(
     _preserved_processing_events = None
     _preserved_file_name = None
     _preserved_execution_arn = None
+    _preserved_processing_mode = None
 
     # Collect data from ALL existing records for this documentId.
     # There may be multiple records (e.g., PROCESSING + parallel branch writes)
@@ -2267,11 +2268,13 @@ def store_to_dynamodb(
                     _preserved_processing_events = []
                 _preserved_processing_events.extend(existing_record["processingEvents"])
 
-            # Preserve fileName and executionArn (set by trigger Lambda)
+            # Preserve fileName, executionArn, processingMode (set by trigger Lambda)
             if existing_record.get("fileName") and not _preserved_file_name:
                 _preserved_file_name = existing_record["fileName"]
             if existing_record.get("executionArn") and not _preserved_execution_arn:
                 _preserved_execution_arn = existing_record["executionArn"]
+            if existing_record.get("processingMode") and not _preserved_processing_mode:
+                _preserved_processing_mode = existing_record["processingMode"]
 
             # Delete records with a different documentType
             if existing_doc_type and existing_doc_type != document_type:
@@ -2345,11 +2348,13 @@ def store_to_dynamodb(
     if _preserved_processing_events:
         item['processingEvents'] = _preserved_processing_events
 
-    # Preserve fileName and executionArn from trigger record
+    # Preserve fileName, executionArn, processingMode from trigger record
     if _preserved_file_name:
         item['fileName'] = _preserved_file_name
     if _preserved_execution_arn:
         item['executionArn'] = _preserved_execution_arn
+    if _preserved_processing_mode:
+        item['processingMode'] = _preserved_processing_mode
 
     table.put_item(Item=item)
     print(f"Stored normalized data to DynamoDB: {document_id} (hash: {content_hash[:16] if content_hash else 'N/A'}...)")

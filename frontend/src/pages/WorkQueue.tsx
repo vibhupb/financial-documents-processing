@@ -336,7 +336,9 @@ export default function WorkQueue() {
 
                     {/* Type column */}
                     <td className="px-4 py-4 text-sm text-gray-600">
-                      {doc.documentType ? formatDocType(doc.documentType) : '-'}
+                      {doc.processingMode === 'understand'
+                        ? 'Compliance Review'
+                        : doc.documentType ? formatDocType(doc.documentType) : '-'}
                     </td>
 
                     {/* Status column */}

@@ -234,7 +234,7 @@ export default function UploadBar() {
                 <div className="space-y-2">
                   {([
                     { value: 'extract' as const, label: 'Document Extraction', desc: 'Extract structured data from the document' },
-                    { value: 'understand' as const, label: 'Compliance Validation', desc: 'Evaluate against compliance baselines' },
+                    { value: 'understand' as const, label: 'Compliance Validation', desc: 'Evaluate against compliance policies' },
                     { value: 'both' as const, label: 'Both', desc: 'Extract data and run compliance checks' },
                   ]).map(({ value, label, desc }) => (
                     <label
@@ -287,11 +287,11 @@ export default function UploadBar() {
               {showBaselineSelector && (
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1.5">
-                    Compliance Baselines
+                    Compliance Policies
                     <span className="text-red-500 ml-0.5">*</span>
                   </label>
                   {publishedBaselines.length === 0 ? (
-                    <p className="text-xs text-gray-400 italic">No published baselines available. Create one in Baselines first.</p>
+                    <p className="text-xs text-gray-400 italic">No published policies available. Create one in Compliance Policies first.</p>
                   ) : (
                     <div className="space-y-1.5 max-h-32 overflow-y-auto">
                       {publishedBaselines.map((bl: any) => (

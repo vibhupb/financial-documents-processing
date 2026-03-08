@@ -457,7 +457,10 @@ interface DetailHeaderProps {
 }
 
 function DetailHeader({ doc, documentId, docType, showMeta }: DetailHeaderProps) {
-  const displayType = docType || doc.documentType;
+  // For compliance-only mode, show "Compliance Review" instead of extraction doc type
+  const displayType = doc.processingMode === 'understand'
+    ? 'Compliance Review'
+    : (docType || doc.documentType);
   const cost = formatCost(doc.processingCost);
   const time = formatTime(doc.processingTime);
 

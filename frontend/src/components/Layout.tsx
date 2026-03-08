@@ -41,7 +41,7 @@ export default function Layout({ children }: LayoutProps) {
             badge: undefined as number | undefined,
           },
           {
-            name: 'Baselines',
+            name: 'Compliance Policies',
             href: '/baselines',
             icon: Shield,
             badge: undefined as number | undefined,

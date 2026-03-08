@@ -1010,13 +1010,27 @@ export class DocumentProcessingStack extends cdk.Stack {
     });
     evaluateCompliance.addCatch(complianceFailed, { resultPath: '$.complianceError' });
 
-    // Parallel: extraction + compliance run side-by-side
+    // Compliance skip: Pass state that does nothing (used when no baselines)
+    const skipCompliance = new sfn.Pass(this, 'SkipCompliance', {
+      comment: 'No baselines selected — skip compliance evaluation',
+      result: sfn.Result.fromObject({ complianceReport: { status: 'skipped' } }),
+    });
+
+    // Choose: run compliance or skip based on whether baselineIds are present
+    const complianceOrSkip = new sfn.Choice(this, 'ComplianceOrSkip', {
+      comment: 'Run compliance evaluation only when baselineIds are present',
+    });
+    complianceOrSkip
+      .when(sfn.Condition.isPresent('$.baselineIds[0]'), evaluateCompliance)
+      .otherwise(skipCompliance);
+
+    // Parallel: extraction + conditional compliance run side-by-side
     const extractionAndCompliance = new sfn.Parallel(this, 'ExtractionAndCompliance', {
-      comment: 'Run extraction and compliance evaluation in parallel',
+      comment: 'Run extraction and (optional) compliance evaluation in parallel',
       resultPath: '$.parallelResults',
     });
     extractionAndCompliance.branch(mapExtraction);                     // Branch 0: extraction (Map)
-    extractionAndCompliance.branch(evaluateCompliance);                // Branch 1: compliance
+    extractionAndCompliance.branch(complianceOrSkip);                  // Branch 1: compliance or skip
     extractionAndCompliance.next(normalizeData);
     extractionAndCompliance.addCatch(handleError, { resultPath: '$.error' });
 
