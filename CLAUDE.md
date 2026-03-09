@@ -127,7 +127,16 @@ Detailed guidelines are split across path-scoped rules and on-demand skills:
 
 ## Version History
 
-See `docs/VERSION_HISTORY.md` for full history. Current: **v5.3.0** (2026-03-09)
+See `docs/VERSION_HISTORY.md` for full history. Current: **v5.4.0** (2026-03-09)
+
+### v5.4.0 — PageIndex Unification (2026-03-09)
+
+- **PageIndex as shared foundation**: All document consumers now use PageIndex tree for structured understanding — compliance policy builder, plugin builder, compliance evaluation
+- **`POST /documents/build-tree`**: New API endpoint for on-demand tree building (async). PageIndex Lambda supports `entityType`/`entityId` for baselines and plugins
+- **Compliance policy builder**: Tree-assisted per-section Sonnet 4.6 extraction (no more 120K truncation). Async invocation avoids API Gateway 29s timeout. Frontend polls for tree build + requirement extraction progress
+- **Plugin builder**: Background tree build on sample upload. Section structure from trees passed to AI config generation for section-aware field suggestions. Text limit increased 5K→30K
+- **Compliance evaluation**: Fixed `page_range` bug (was always null). `_compact_tree` with recursive children gives LLM actual page ranges for navigation
+- **Infra**: Sonnet 4.6 inference profile ID fix, marketplace permissions for Lambda roles, maxTokens increases (ingest 16K, evaluate 8K, dedup 4K)
 
 ### v5.3.0 — Signature Detection, Semantic Compliance, Multi-Doc Builders (2026-03-09)
 
