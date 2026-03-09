@@ -340,7 +340,7 @@ export class DocumentProcessingStack extends cdk.Stack {
       environment: {
         BUCKET_NAME: documentBucket.bucketName,
         BASELINES_TABLE: complianceBaselinesTable.tableName,
-        BEDROCK_MODEL_ID: 'us.anthropic.claude-sonnet-4-6-v1:0',
+        BEDROCK_MODEL_ID: 'us.anthropic.claude-sonnet-4-6',
       },
       tracing: lambda.Tracing.ACTIVE,
     });
@@ -368,7 +368,7 @@ export class DocumentProcessingStack extends cdk.Stack {
         BASELINES_TABLE: complianceBaselinesTable.tableName,
         REPORTS_TABLE: complianceReportsTable.tableName,
         FEEDBACK_TABLE: complianceFeedbackTable.tableName,
-        BEDROCK_MODEL_ID: 'us.anthropic.claude-sonnet-4-6-v1:0',
+        BEDROCK_MODEL_ID: 'us.anthropic.claude-sonnet-4-6',
       },
       tracing: lambda.Tracing.ACTIVE,
     });
