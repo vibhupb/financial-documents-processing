@@ -1299,13 +1299,15 @@ def build_document_tree(body: dict) -> dict:
     payload = {
         "bucket": BUCKET_NAME,
         "key": s3_key,
-        "entityType": entity_type,
-        "entityId": entity_id,
-        "entityDocKey": entity_doc_key,
     }
-    # Add documentId if this is for a regular document
-    if not entity_type:
-        doc_id = s3_key.split("/")[1] if "/ingest/" in s3_key else ""
+    # Only include entity fields when actually provided (avoid sending None)
+    if entity_type and entity_id:
+        payload["entityType"] = entity_type
+        payload["entityId"] = entity_id
+        payload["entityDocKey"] = entity_doc_key
+    else:
+        # Extract documentId from S3 key for regular documents
+        doc_id = s3_key.split("/")[1] if "ingest/" in s3_key else ""
         payload["documentId"] = doc_id
 
     lambda_client.invoke(

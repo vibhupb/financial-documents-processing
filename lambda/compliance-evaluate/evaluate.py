@@ -155,17 +155,11 @@ def _find_baselines(plugin_id, baseline_ids=None):
 
 
 def _compact_tree(nodes, total_pages=0):
-    """Build compact tree representation for LLM navigation.
-
-    Clamps page ranges to the actual document length to handle
-    PageIndex tree offset errors where child nodes may reference
-    pages beyond the document (e.g., TOC offset miscalculation).
-    """
+    """Build compact tree representation for LLM navigation."""
     result = []
     for n in nodes:
         start = int(n.get("start_index", 1))
         end = int(n.get("end_index", start))
-        # Clamp to actual document pages if total_pages is known
         if total_pages > 0:
             start = min(start, total_pages)
             end = min(end, total_pages)

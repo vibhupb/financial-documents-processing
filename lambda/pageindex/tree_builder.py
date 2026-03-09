@@ -718,10 +718,10 @@ def subdivide_large_nodes(
         sub_pages = pages[node["start_index"] - 1 : node["end_index"]]
         sub_entries = generate_structure_no_toc(sub_pages, model=model)
         if sub_entries:
-            offset = node["start_index"] - 1
-            for entry in sub_entries:
-                if entry.get("physical_index") is not None:
-                    entry["physical_index"] = int(entry["physical_index"]) + offset
+            # NOTE: generate_structure_no_toc uses <physical_index_{page_num}> tags
+            # with REAL page numbers, so the LLM returns physical indices directly.
+            # No offset needed — adding one would double-count and produce
+            # page numbers beyond the document (e.g., page 73 + offset 72 = 145).
             sub_tree = list_to_tree(sub_entries, node["end_index"])
             if sub_tree:
                 return sub_tree
