@@ -113,9 +113,9 @@ class TestPluginSpecificFeatures:
         la = get_plugin("loan_agreement")
         assert la["requires_signatures"] is True
 
-    def test_credit_agreement_does_not_require_signatures(self):
+    def test_credit_agreement_requires_signatures(self):
         ca = get_plugin("credit_agreement")
-        assert ca["requires_signatures"] is False
+        assert ca["requires_signatures"] is True
 
     def test_bsa_profile_has_pii_paths(self):
         bsa = get_plugin("bsa_profile")
@@ -133,9 +133,9 @@ class TestPluginSpecificFeatures:
         assert "billingFrequency" in codes
         assert "currency" in codes
 
-    def test_credit_agreement_has_seven_sections(self):
+    def test_credit_agreement_has_eight_sections(self):
         ca = get_plugin("credit_agreement")
-        assert len(ca["sections"]) == 7
+        assert len(ca["sections"]) == 8
 
     def test_loan_agreement_has_eight_sections(self):
         la = get_plugin("loan_agreement")

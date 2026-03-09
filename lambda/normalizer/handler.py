@@ -2491,9 +2491,23 @@ def lambda_handler(event, context):
         try:
             # Build prompt from plugin templates
             raw_data = {"sections": {}}
-            extractions_list = event.get("extractions", [event])
+            # Extract section results: check direct $.extractions first,
+            # then unwrap from $.parallelResults[0].extractions (when
+            # extraction runs inside extractionAndCompliance Parallel state)
+            extractions_list = event.get("extractions")
+            if not extractions_list:
+                parallel_results = event.get("parallelResults", [])
+                if isinstance(parallel_results, list):
+                    for branch in parallel_results:
+                        if isinstance(branch, dict) and "extractions" in branch:
+                            extractions_list = branch["extractions"]
+                            print(f"[PLUGIN] Found extractions inside parallelResults ({len(extractions_list)} sections)")
+                            break
+            if not extractions_list:
+                extractions_list = [event]
+                print("[PLUGIN] WARNING: No extractions found, falling back to event-as-extraction")
             if isinstance(extractions_list, list):
-                for ext in extractions_list:
+                for idx, ext in enumerate(extractions_list):
                     if isinstance(ext, dict):
                         # Hydrate S3-offloaded results
                         if "resultsS3Key" in ext and "results" not in ext:
@@ -2503,7 +2517,8 @@ def lambda_handler(event, context):
                             try:
                                 s3_obj = s3_client.get_object(Bucket=s3_bucket, Key=s3_key)
                                 full_result = json.loads(s3_obj["Body"].read().decode("utf-8"))
-                                ext = full_result  # Replace compact ref with full data
+                                ext = full_result
+                                extractions_list[idx] = full_result  # Update list for downstream consumers
                             except Exception as s3_err:
                                 print(f"[PLUGIN] Failed to hydrate S3 results: {s3_err}")
 
@@ -2513,12 +2528,36 @@ def lambda_handler(event, context):
                         else:
                             raw_data = ext.get("results", ext)
 
+            # Build section→pages map for frontend click-to-jump navigation.
+            # Maps each section ID to its source page numbers from the extraction plan.
+            section_page_map = {}
+            if isinstance(extractions_list, list):
+                for ext in extractions_list:
+                    if isinstance(ext, dict):
+                        sec = ext.get("section") or ext.get("creditAgreementSection")
+                        pages = ext.get("sectionPages") or ext.get("pageNumbers") or []
+                        if sec and pages:
+                            section_page_map[sec] = sorted(int(p) for p in pages)
+
             # Skip legacy clean_extraction_for_normalization for plugin path --
             # it drops forms/keyValues data needed for BSA Profile.
             # build_normalization_prompt handles payload truncation internally.
             prompt = build_normalization_prompt(plugin, raw_data)
             normalized_data, normalizer_tokens = invoke_bedrock_normalize(prompt, plugin)
             normalized_data = apply_field_overrides(normalized_data, plugin)
+
+            # Inject section page map into normalized data for frontend navigation.
+            # Place inside the document-type data so it reaches extractedData in DynamoDB.
+            if section_page_map:
+                loan_data = normalized_data.get("loanData", normalized_data)
+                # Find the document-type key (e.g., "creditAgreement", "loanAgreement")
+                for key in loan_data:
+                    if isinstance(loan_data[key], dict) and key not in ("validation", "audit"):
+                        loan_data[key]["_sectionPageMap"] = section_page_map
+                        break
+                else:
+                    # Flat structure (no loanData wrapper)
+                    normalized_data["_sectionPageMap"] = section_page_map
 
             # Apply document-type-specific post-processing that was in the legacy path.
             # These fix LLM truncation and apply coded defaults that the prompt alone

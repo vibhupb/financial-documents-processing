@@ -119,7 +119,11 @@ def _strip_textract_metadata(results: Dict[str, Any]) -> Dict[str, Any]:
                 "signatureCount": val.get("signatureCount", len(sigs)),
                 "hasSignatures": val.get("hasSignatures", len(sigs) > 0),
                 "signatures": [
-                    {"confidence": s.get("confidence"), "page": s.get("page")}
+                    {
+                        "confidence": s.get("confidence"),
+                        "meetsThreshold": s.get("meetsThreshold"),
+                        "sourcePage": s.get("sourcePage", s.get("page")),
+                    }
                     for s in sigs if isinstance(s, dict)
                 ],
             }
@@ -244,13 +248,22 @@ def extract_section_generic(
         if extract_sigs and page_images:
             if len(page_images) > 1:
                 all_sigs = process_pages_signatures_parallel(page_images, bucket)
+                # Remap sourcePage from image index to actual document page number
+                for sig in all_sigs:
+                    img_idx = sig.get("sourcePage", 1) - 1  # 1-based to 0-based
+                    if 0 <= img_idx < len(pages):
+                        sig["sourcePage"] = pages[img_idx]
                 results["signatures"] = {
                     "signatures": all_sigs,
                     "signatureCount": len(all_sigs),
                     "hasSignatures": len(all_sigs) > 0,
                 }
             else:
-                results["signatures"] = extract_signatures(bucket, "", image_bytes=page_images[0])
+                sig_result = extract_signatures(bucket, "", image_bytes=page_images[0])
+                # Set sourcePage to actual document page number
+                for sig in sig_result.get("signatures", []):
+                    sig["sourcePage"] = pages[0] if pages else 1
+                results["signatures"] = sig_result
 
         # PyPDF text
         if include_pypdf:

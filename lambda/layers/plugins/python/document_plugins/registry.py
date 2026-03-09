@@ -17,6 +17,7 @@ import importlib
 import json
 import os
 import pkgutil
+import time
 from typing import Dict, List, Optional
 
 from document_plugins import types as _types_pkg
@@ -25,6 +26,11 @@ from document_plugins.contract import DocumentPluginConfig, ClassificationConfig
 # Module-level registry, populated once on first import
 _REGISTRY: Dict[str, DocumentPluginConfig] = {}
 _DISCOVERED: bool = False
+
+# TTL-based refresh for DynamoDB dynamic plugins so Plugin Studio
+# publishes are picked up by warm Lambda containers without a deploy.
+_LAST_DYNAMIC_REFRESH: float = 0.0
+DYNAMIC_REFRESH_TTL: float = float(os.environ.get("PLUGIN_REFRESH_TTL", "60"))  # seconds
 
 # DynamoDB table for dynamic plugins (set via Lambda env var)
 PLUGIN_CONFIGS_TABLE = os.environ.get("PLUGIN_CONFIGS_TABLE", "document-plugin-configs")
@@ -36,9 +42,18 @@ def _discover_plugins() -> None:
     File-based plugins are loaded first as defaults. DynamoDB dynamic plugins
     (PUBLISHED status) are loaded second and override file-based ones on
     collision, so user edits via Plugin Studio take precedence.
+
+    After initial discovery, DynamoDB plugins are re-read when the TTL
+    expires (default 60s) so Plugin Studio publishes are picked up by
+    warm Lambda containers without requiring a deploy or cold start.
     """
-    global _DISCOVERED
+    global _DISCOVERED, _LAST_DYNAMIC_REFRESH
+
     if _DISCOVERED:
+        # TTL-based refresh: re-read DynamoDB dynamic plugins periodically
+        if time.time() - _LAST_DYNAMIC_REFRESH > DYNAMIC_REFRESH_TTL:
+            _discover_dynamic_plugins()
+            _LAST_DYNAMIC_REFRESH = time.time()
         return
 
     # Phase 1: File-based plugins (existing behavior, always loaded)
@@ -63,6 +78,7 @@ def _discover_plugins() -> None:
 
     # Phase 2: DynamoDB dynamic plugins (PUBLISHED only, graceful degradation)
     _discover_dynamic_plugins()
+    _LAST_DYNAMIC_REFRESH = time.time()
 
     _DISCOVERED = True
 

@@ -26,12 +26,11 @@ Supports all document types defined in the classification schema:
 - Insurance: Homeowners, Flood
 """
 
-import datetime
 import io
 import json
 import os
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from decimal import Decimal
@@ -84,7 +83,7 @@ def append_processing_event(document_id: str, document_type: str, stage: str, me
             UpdateExpression="SET processingEvents = list_append(if_not_exists(processingEvents, :empty), :event)",
             ExpressionAttributeValues={
                 ":event": [{
-                    "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                    "ts": datetime.now(timezone.utc).isoformat(),
                     "stage": stage,
                     "message": message,
                 }],
@@ -1094,9 +1093,35 @@ def identify_sections_generic(
             f"pages: {sorted(all_found_pages)}"
         )
 
-        # Only add low-quality pages if keyword matching found very few pages.
-        # If keyword matching already found >= 10 pages, the pipeline has
-        # enough content — low-quality pages are likely exhibits/signatures.
+        # Route low-quality pages to dedicated signature sections.
+        # Clusters of consecutive low-quality pages (scanned/handwritten content)
+        # in an otherwise text-based document are the strongest signal for
+        # handwritten signature pages. Only target sections that are dedicated
+        # to signatures (search_last_pages hint), not sections like agreementInfo
+        # that incidentally have extract_signatures for other reasons.
+        for section_id, section_config in sections_config.items():
+            hints = section_config.get("classification_hints", {})
+            is_signature_section = (
+                section_config.get("extract_signatures")
+                and hints.get("search_last_pages")
+            )
+            if is_signature_section:
+                max_sig_pages = int(section_config.get("max_pages", 10))
+                existing = set(section_pages.get(section_id, []))
+                lq_to_add = [p for p in low_quality_pages if p not in existing]
+                if lq_to_add:
+                    combined = sorted(existing.union(set(lq_to_add[:max_sig_pages])))
+                    section_pages[section_id] = combined
+                    all_found_pages.update(combined)
+                    print(
+                        f"[GenericSections] Added {len(lq_to_add[:max_sig_pages])} "
+                        f"low-quality pages to '{section_id}' (signature detection): "
+                        f"{sorted(lq_to_add[:max_sig_pages])}"
+                    )
+
+        # Only add low-quality pages to primary section if keyword matching
+        # found very few pages. If keyword matching already found >= 10 pages,
+        # the pipeline has enough content.
         MIN_PAGES_FOR_SKIP = 10
         MAX_LOW_QUALITY_FALLBACK = 5  # Never add more than 5 low-quality pages
 

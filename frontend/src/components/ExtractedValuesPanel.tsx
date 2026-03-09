@@ -738,8 +738,7 @@ function Form1003Fields({
 // Credit Agreement Fields
 function CreditAgreementFields({
   data,
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  onFieldClick: _onFieldClick,
+  onFieldClick,
 }: {
   data: CreditAgreement;
   onFieldClick?: (pageNumber: number, fieldName: string) => void;
@@ -748,6 +747,10 @@ function CreditAgreementFields({
     val != null ? `$${val.toLocaleString()}` : undefined;
   const formatPercent = (val: number | undefined) =>
     val != null ? `${(val * 100).toFixed(3)}%` : undefined;
+
+  // Section → first page map for click-to-jump navigation
+  const pm = data._sectionPageMap || {};
+  const pg = (section: string) => pm[section]?.[0];
 
   return (
     <div className="space-y-4">
@@ -759,11 +762,11 @@ function CreditAgreementFields({
             Agreement Information
           </h4>
           <div className="space-y-1 pl-1 border-l-2 border-purple-100">
-            <FieldRow label="Document Type" value={data.agreementInfo.documentType} />
-            <FieldRow label="Amendment Number" value={data.agreementInfo.amendmentNumber} />
-            <FieldRow label="Agreement Date" value={data.agreementInfo.agreementDate} />
-            <FieldRow label="Effective Date" value={data.agreementInfo.effectiveDate} />
-            <FieldRow label="Maturity Date" value={data.agreementInfo.maturityDate} />
+            <FieldRow label="Document Type" value={data.agreementInfo.documentType} pageNumber={pg('agreementInfo')} onFieldClick={onFieldClick} />
+            <FieldRow label="Amendment Number" value={data.agreementInfo.amendmentNumber} pageNumber={pg('agreementInfo')} onFieldClick={onFieldClick} />
+            <FieldRow label="Agreement Date" value={data.agreementInfo.agreementDate} pageNumber={pg('agreementInfo')} onFieldClick={onFieldClick} />
+            <FieldRow label="Effective Date" value={data.agreementInfo.effectiveDate} pageNumber={pg('agreementInfo')} onFieldClick={onFieldClick} />
+            <FieldRow label="Maturity Date" value={data.agreementInfo.maturityDate} pageNumber={pg('agreementInfo')} onFieldClick={onFieldClick} />
           </div>
         </div>
       )}
@@ -776,22 +779,22 @@ function CreditAgreementFields({
             Parties
           </h4>
           <div className="space-y-1 pl-1 border-l-2 border-purple-100">
-            <FieldRow label="Borrower" value={data.parties.borrower?.name} />
+            <FieldRow label="Borrower" value={data.parties.borrower?.name} pageNumber={pg('agreementInfo')} onFieldClick={onFieldClick} />
             {data.parties.coBorrowers && data.parties.coBorrowers.length > 0 && (
-              <FieldRow label="Co-Borrower(s)" value={data.parties.coBorrowers.map(cb => typeof cb === 'string' ? cb : cb.name).join(', ')} />
+              <FieldRow label="Co-Borrower(s)" value={data.parties.coBorrowers.map(cb => typeof cb === 'string' ? cb : cb.name).join(', ')} pageNumber={pg('agreementInfo')} onFieldClick={onFieldClick} />
             )}
-            <FieldRow label="Administrative Agent" value={data.parties.administrativeAgent} />
+            <FieldRow label="Administrative Agent" value={data.parties.administrativeAgent} pageNumber={pg('agreementInfo')} onFieldClick={onFieldClick} />
             {data.parties.leadArrangers && data.parties.leadArrangers.length > 0 && (
-              <FieldRow label="Lead Arrangers" value={data.parties.leadArrangers.join(', ')} />
+              <FieldRow label="Lead Arrangers" value={data.parties.leadArrangers.join(', ')} pageNumber={pg('lenderCommitments')} onFieldClick={onFieldClick} />
             )}
             {data.parties.swinglineLender && (
-              <FieldRow label="Swingline Lender" value={data.parties.swinglineLender} />
+              <FieldRow label="Swingline Lender" value={data.parties.swinglineLender} pageNumber={pg('lenderCommitments')} onFieldClick={onFieldClick} />
             )}
             {data.parties.lcIssuer && (
-              <FieldRow label="L/C Issuer" value={data.parties.lcIssuer} />
+              <FieldRow label="L/C Issuer" value={data.parties.lcIssuer} pageNumber={pg('lenderCommitments')} onFieldClick={onFieldClick} />
             )}
             {data.parties.guarantors && data.parties.guarantors.length > 0 && (
-              <FieldRow label="Guarantors" value={data.parties.guarantors.join(', ')} />
+              <FieldRow label="Guarantors" value={data.parties.guarantors.join(', ')} pageNumber={pg('agreementInfo')} onFieldClick={onFieldClick} />
             )}
           </div>
         </div>
@@ -805,28 +808,28 @@ function CreditAgreementFields({
             Facility Terms
           </h4>
           <div className="space-y-1 pl-1 border-l-2 border-purple-100">
-            <FieldRow label="Max Revolving Credit" value={formatCurrency(data.facilityTerms.aggregateMaxRevolvingCreditAmount)} />
-            <FieldRow label="Elected Revolving Commitment" value={formatCurrency(data.facilityTerms.aggregateElectedRevolvingCreditCommitment)} />
+            <FieldRow label="Max Revolving Credit" value={formatCurrency(data.facilityTerms.aggregateMaxRevolvingCreditAmount)} pageNumber={pg('facilityTerms')} onFieldClick={onFieldClick} />
+            <FieldRow label="Elected Revolving Commitment" value={formatCurrency(data.facilityTerms.aggregateElectedRevolvingCreditCommitment)} pageNumber={pg('facilityTerms')} onFieldClick={onFieldClick} />
             {data.facilityTerms.lcCommitment && (
-              <FieldRow label="LC Commitment" value={formatCurrency(data.facilityTerms.lcCommitment)} />
+              <FieldRow label="LC Commitment" value={formatCurrency(data.facilityTerms.lcCommitment)} pageNumber={pg('facilityTerms')} onFieldClick={onFieldClick} />
             )}
             {data.facilityTerms.lcSublimit && (
-              <FieldRow label="LC Sublimit" value={formatCurrency(data.facilityTerms.lcSublimit)} />
+              <FieldRow label="LC Sublimit" value={formatCurrency(data.facilityTerms.lcSublimit)} pageNumber={pg('facilityTerms')} onFieldClick={onFieldClick} />
             )}
             {data.facilityTerms.swinglineSublimit && (
-              <FieldRow label="Swingline Sublimit" value={data.facilityTerms.swinglineSublimit} />
+              <FieldRow label="Swingline Sublimit" value={data.facilityTerms.swinglineSublimit} pageNumber={pg('facilityTerms')} onFieldClick={onFieldClick} />
             )}
             {data.facilityTerms.termLoanACommitment && (
-              <FieldRow label="Term Loan A Commitment" value={formatCurrency(data.facilityTerms.termLoanACommitment)} />
+              <FieldRow label="Term Loan A Commitment" value={formatCurrency(data.facilityTerms.termLoanACommitment)} pageNumber={pg('facilityTerms')} onFieldClick={onFieldClick} />
             )}
             {data.facilityTerms.termLoanBCommitment && (
-              <FieldRow label="Term Loan B Commitment" value={formatCurrency(data.facilityTerms.termLoanBCommitment)} />
+              <FieldRow label="Term Loan B Commitment" value={formatCurrency(data.facilityTerms.termLoanBCommitment)} pageNumber={pg('facilityTerms')} onFieldClick={onFieldClick} />
             )}
             {data.facilityTerms.termLoanBondRedemption && (
-              <FieldRow label="Term Loan Bond Redemption" value={formatCurrency(data.facilityTerms.termLoanBondRedemption)} />
+              <FieldRow label="Term Loan Bond Redemption" value={formatCurrency(data.facilityTerms.termLoanBondRedemption)} pageNumber={pg('facilityTerms')} onFieldClick={onFieldClick} />
             )}
             {data.facilityTerms.termCommitment && (
-              <FieldRow label="Total Term Commitment" value={formatCurrency(data.facilityTerms.termCommitment)} />
+              <FieldRow label="Total Term Commitment" value={formatCurrency(data.facilityTerms.termCommitment)} pageNumber={pg('facilityTerms')} onFieldClick={onFieldClick} />
             )}
           </div>
         </div>
@@ -842,9 +845,9 @@ function CreditAgreementFields({
           <div className="space-y-2 pl-1 border-l-2 border-purple-100">
             {data.facilities.map((facility, idx) => (
               <div key={idx} className="bg-gray-50 rounded p-2">
-                <FieldRow label="Type" value={facility.facilityType} />
-                <FieldRow label="Commitment" value={formatCurrency(facility.commitmentAmount)} />
-                <FieldRow label="Maturity" value={facility.maturityDate} />
+                <FieldRow label="Type" value={facility.facilityType} pageNumber={pg('facilityTerms')} onFieldClick={onFieldClick} />
+                <FieldRow label="Commitment" value={formatCurrency(facility.commitmentAmount)} pageNumber={pg('facilityTerms')} onFieldClick={onFieldClick} />
+                <FieldRow label="Maturity" value={facility.maturityDate} pageNumber={pg('facilityTerms')} onFieldClick={onFieldClick} />
               </div>
             ))}
           </div>
@@ -859,10 +862,10 @@ function CreditAgreementFields({
             Applicable Rates / Pricing Grid
           </h4>
           <div className="space-y-1 pl-1 border-l-2 border-purple-100">
-            <FieldRow label="Reference Rate" value={data.applicableRates.referenceRate} />
-            <FieldRow label="Pricing Basis" value={data.applicableRates.pricingBasis} />
+            <FieldRow label="Reference Rate" value={data.applicableRates.referenceRate} pageNumber={pg('applicableRates')} onFieldClick={onFieldClick} />
+            <FieldRow label="Pricing Basis" value={data.applicableRates.pricingBasis} pageNumber={pg('applicableRates')} onFieldClick={onFieldClick} />
             {data.applicableRates.floor !== undefined && (
-              <FieldRow label="Floor Rate" value={formatPercent(data.applicableRates.floor)} />
+              <FieldRow label="Floor Rate" value={formatPercent(data.applicableRates.floor)} pageNumber={pg('applicableRates')} onFieldClick={onFieldClick} />
             )}
           </div>
           {/* Pricing Tiers Table */}
@@ -904,10 +907,10 @@ function CreditAgreementFields({
           </h4>
           <div className="space-y-1 pl-1 border-l-2 border-purple-100">
             {data.paymentTerms.interestPeriodOptions && (
-              <FieldRow label="Interest Period Options" value={data.paymentTerms.interestPeriodOptions.join(', ')} />
+              <FieldRow label="Interest Period Options" value={data.paymentTerms.interestPeriodOptions.join(', ')} pageNumber={pg('definitions')} onFieldClick={onFieldClick} />
             )}
             {data.paymentTerms.interestPaymentDates && (
-              <FieldRow label="Interest Payment Dates" value={data.paymentTerms.interestPaymentDates.join(', ')} />
+              <FieldRow label="Interest Payment Dates" value={data.paymentTerms.interestPaymentDates.join(', ')} pageNumber={pg('definitions')} onFieldClick={onFieldClick} />
             )}
           </div>
         </div>
@@ -922,16 +925,16 @@ function CreditAgreementFields({
           </h4>
           <div className="space-y-1 pl-1 border-l-2 border-purple-100">
             {data.fees.commitmentFeeRate !== undefined && (
-              <FieldRow label="Commitment Fee Rate" value={formatPercent(data.fees.commitmentFeeRate)} />
+              <FieldRow label="Commitment Fee Rate" value={formatPercent(data.fees.commitmentFeeRate)} pageNumber={pg('fees')} onFieldClick={onFieldClick} />
             )}
             {data.fees.lcFeeRate !== undefined && (
-              <FieldRow label="LC Fee Rate" value={formatPercent(data.fees.lcFeeRate)} />
+              <FieldRow label="LC Fee Rate" value={formatPercent(data.fees.lcFeeRate)} pageNumber={pg('fees')} onFieldClick={onFieldClick} />
             )}
             {data.fees.frontingFeeRate !== undefined && (
-              <FieldRow label="Fronting Fee Rate" value={formatPercent(data.fees.frontingFeeRate)} />
+              <FieldRow label="Fronting Fee Rate" value={formatPercent(data.fees.frontingFeeRate)} pageNumber={pg('fees')} onFieldClick={onFieldClick} />
             )}
             {data.fees.agencyFee !== undefined && (
-              <FieldRow label="Agency Fee" value={formatCurrency(data.fees.agencyFee)} />
+              <FieldRow label="Agency Fee" value={formatCurrency(data.fees.agencyFee)} pageNumber={pg('fees')} onFieldClick={onFieldClick} />
             )}
           </div>
         </div>
@@ -986,9 +989,11 @@ function CreditAgreementFields({
                 <FieldRow
                   label="Fixed Charge Coverage Ratio (Min)"
                   value={data.covenants.fixedChargeCoverageRatio.minimum?.toString()}
+                  pageNumber={pg('covenants')}
+                  onFieldClick={onFieldClick}
                 />
                 {data.covenants.fixedChargeCoverageRatio.testPeriod && (
-                  <FieldRow label="Test Period" value={data.covenants.fixedChargeCoverageRatio.testPeriod} />
+                  <FieldRow label="Test Period" value={data.covenants.fixedChargeCoverageRatio.testPeriod} pageNumber={pg('covenants')} onFieldClick={onFieldClick} />
                 )}
               </>
             )}

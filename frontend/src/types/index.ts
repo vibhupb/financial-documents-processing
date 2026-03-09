@@ -483,6 +483,8 @@ export interface CreditAgreement {
     electedRevolvingCreditCommitment?: number;
     maxRevolvingCreditAmount?: number;
   }>;
+  // Section→pages map for click-to-jump (from extraction plan)
+  _sectionPageMap?: Record<string, number[]>;
 }
 
 // Review workflow types

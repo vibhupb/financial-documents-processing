@@ -1,5 +1,5 @@
 import { useParams, Link, useNavigate } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   ArrowLeft,
   AlertCircle,
@@ -8,6 +8,7 @@ import {
   Timer,
   ChevronRight,
   FileText,
+  RotateCcw,
 } from 'lucide-react';
 import { api } from '../services/api';
 import StatusBadge from '../components/StatusBadge';
@@ -73,6 +74,16 @@ function formatTime(time?: { totalSeconds: number }): string {
 export default function DocumentDetail() {
   const { documentId } = useParams<{ documentId: string }>();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
+
+  // --- Reprocess mutation ---
+  const reprocessMutation = useMutation({
+    mutationFn: () => api.reprocessDocument(documentId!),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['document', documentId] });
+      queryClient.invalidateQueries({ queryKey: ['documents'] });
+    },
+  });
 
   // --- Data fetching ---
 
@@ -304,6 +315,8 @@ export default function DocumentDetail() {
         <DetailHeader
           doc={doc}
           documentId={documentId!}
+          onReprocess={() => reprocessMutation.mutate()}
+          isReprocessing={reprocessMutation.isPending}
         />
 
         <div className="flex-1 overflow-y-auto">
@@ -378,6 +391,8 @@ export default function DocumentDetail() {
           doc={doc}
           documentId={documentId!}
           showMeta
+          onReprocess={() => reprocessMutation.mutate()}
+          isReprocessing={reprocessMutation.isPending}
         />
 
         <div className="flex-1 flex items-center justify-center">
@@ -401,6 +416,8 @@ export default function DocumentDetail() {
           doc={doc}
           documentId={documentId!}
           showMeta
+          onReprocess={() => reprocessMutation.mutate()}
+          isReprocessing={reprocessMutation.isPending}
         />
 
         <div className="flex-1 flex overflow-hidden">
@@ -433,6 +450,8 @@ export default function DocumentDetail() {
         doc={doc}
         documentId={documentId!}
         showMeta
+        onReprocess={() => reprocessMutation.mutate()}
+        isReprocessing={reprocessMutation.isPending}
       />
 
       <div className="flex-1 overflow-hidden">
@@ -454,9 +473,11 @@ interface DetailHeaderProps {
   documentId: string;
   docType?: string;
   showMeta?: boolean;
+  onReprocess?: () => void;
+  isReprocessing?: boolean;
 }
 
-function DetailHeader({ doc, documentId, docType, showMeta }: DetailHeaderProps) {
+function DetailHeader({ doc, documentId, docType, showMeta, onReprocess, isReprocessing }: DetailHeaderProps) {
   // For compliance-only mode, show "Compliance Review" instead of extraction doc type
   const displayType = doc.processingMode === 'understand'
     ? 'Compliance Review'
@@ -500,6 +521,17 @@ function DetailHeader({ doc, documentId, docType, showMeta }: DetailHeaderProps)
             <Timer className="w-3.5 h-3.5" />
             {time}
           </span>
+        )}
+        {onReprocess && (
+          <button
+            onClick={onReprocess}
+            disabled={isReprocessing}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md bg-orange-50 text-orange-700 hover:bg-orange-100 disabled:opacity-50 transition-colors"
+            title="Reprocess with latest plugin config"
+          >
+            <RotateCcw className={`w-3.5 h-3.5 ${isReprocessing ? 'animate-spin' : ''}`} />
+            {isReprocessing ? 'Reprocessing...' : 'Reprocess'}
+          </button>
         )}
         <StatusBadge status={doc.reviewStatus || doc.status} />
       </div>
