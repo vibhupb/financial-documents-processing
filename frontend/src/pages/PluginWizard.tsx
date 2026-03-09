@@ -51,6 +51,8 @@ export default function PluginWizard() {
   const [uploading, setUploading] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
   const [analysis, setAnalysis] = useState<AnalysisResult | null>(null);
+  const [sampleFiles, setSampleFiles] = useState<{ name: string; pageCount: number; fieldCount: number }[]>([]);
+  const [uploadProgress, setUploadProgress] = useState('');
   const [uploadError, setUploadError] = useState('');
 
   // sampleDoc state
@@ -103,43 +105,91 @@ export default function PluginWizard() {
       });
   }, [sampleDocId]);
 
-  // --- Step 1: Upload & Analyze ---
+  // --- Step 1: Upload & Analyze (supports multiple samples) ---
   const onDrop = useCallback(async (files: File[]) => {
-    const file = files[0];
-    if (!file) return;
+    if (!files.length) return;
     setUploadError('');
     setUploading(true);
 
     try {
-      const urlRes = await api.createUploadUrl(file.name);
-      await api.uploadFile(urlRes.uploadUrl, urlRes.fields, file);
+      const newAnalyses: AnalysisResult[] = [];
+      const newSamples: { name: string; pageCount: number; fieldCount: number }[] = [];
 
-      setUploading(false);
-      setAnalyzing(true);
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        setUploadProgress(`Uploading ${i + 1}/${files.length}: ${file.name}`);
+        const urlRes = await api.createUploadUrl(file.name);
+        await api.uploadFile(urlRes.uploadUrl, urlRes.fields, file);
 
-      const result = await api.analyzeSample({
-        s3Key: urlRes.key,
-        bucket: '', // backend uses BUCKET_NAME env var as default
-      });
+        setUploadProgress(`Analyzing ${i + 1}/${files.length}: ${file.name}`);
+        setAnalyzing(true);
+        const result = await api.analyzeSample({
+          s3Key: urlRes.key,
+          bucket: '',
+        });
 
-      if (result.error) {
-        setUploadError(result.error);
-      } else {
-        setAnalysis(result);
-        if (!docName) setDocName(file.name.replace(/\.pdf$/i, ''));
+        if (result.error) {
+          setUploadError(`Analysis failed for ${file.name}: ${result.error}`);
+          continue;
+        }
+        newAnalyses.push(result);
+        newSamples.push({
+          name: file.name,
+          pageCount: result.pageCount,
+          fieldCount: result.formFieldCount || 0,
+        });
+      }
+
+      if (newAnalyses.length > 0) {
+        // Merge analyses: combine text, union form fields, sum pages
+        const merged: AnalysisResult = {
+          pages: newAnalyses.flatMap(a => a.pages || []),
+          pageCount: newAnalyses.reduce((sum, a) => sum + a.pageCount, 0),
+          text: newAnalyses.map((a, i) =>
+            `=== Sample ${i + 1}: ${files[i]?.name || 'unknown'} ===\n${a.text}`
+          ).join('\n\n'),
+          forms: {},
+          formFieldCount: 0,
+        };
+        // Union form fields — keep highest confidence for duplicates
+        for (const a of newAnalyses) {
+          for (const [key, val] of Object.entries(a.forms || {})) {
+            if (!merged.forms[key] || val.confidence > merged.forms[key].confidence) {
+              merged.forms[key] = val;
+            }
+          }
+        }
+        merged.formFieldCount = Object.keys(merged.forms).length;
+
+        // Append to existing if user uploads more samples
+        if (analysis) {
+          merged.text = analysis.text + '\n\n' + merged.text;
+          merged.pageCount += analysis.pageCount;
+          merged.pages = [...(analysis.pages || []), ...merged.pages];
+          for (const [key, val] of Object.entries(analysis.forms || {})) {
+            if (!merged.forms[key] || val.confidence > merged.forms[key].confidence) {
+              merged.forms[key] = val;
+            }
+          }
+          merged.formFieldCount = Object.keys(merged.forms).length;
+        }
+
+        setAnalysis(merged);
+        setSampleFiles(prev => [...prev, ...newSamples]);
+        if (!docName && files[0]) setDocName(files[0].name.replace(/\.pdf$/i, ''));
       }
     } catch (err: any) {
       setUploadError(err.message || 'Upload failed');
     } finally {
       setUploading(false);
       setAnalyzing(false);
+      setUploadProgress('');
     }
-  }, [docName]);
+  }, [docName, analysis]);
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
     accept: { 'application/pdf': ['.pdf'] },
-    maxFiles: 1,
     maxSize: 50 * 1024 * 1024,
     disabled: uploading || analyzing,
   });
@@ -355,12 +405,13 @@ export default function PluginWizard() {
                 {uploading || analyzing ? (
                   <div>
                     <Loader2 className="w-10 h-10 text-primary-600 animate-spin mx-auto mb-3" />
-                    <p className="text-sm text-gray-600">{uploading ? 'Uploading...' : 'Analyzing document...'}</p>
+                    <p className="text-sm text-gray-600">{uploadProgress || 'Processing...'}</p>
                   </div>
                 ) : (
                   <div>
                     <Upload className="w-10 h-10 text-gray-300 mx-auto mb-3" />
-                    <p className="text-sm text-gray-600">Drop a sample PDF here or click to browse</p>
+                    <p className="text-sm text-gray-600">Drop sample PDF(s) here or click to browse</p>
+                    <p className="text-xs text-gray-400 mt-1">Upload multiple samples for more comprehensive field detection</p>
                   </div>
                 )}
               </div>
@@ -372,7 +423,11 @@ export default function PluginWizard() {
                 <div className="flex items-center gap-3">
                   <CheckCircle className="w-5 h-5 text-green-600" />
                   <div className="flex-1">
-                    <p className="text-sm font-medium text-green-800">Analysis complete</p>
+                    <p className="text-sm font-medium text-green-800">
+                      {sampleFiles.length > 1
+                        ? `${sampleFiles.length} samples analyzed`
+                        : 'Analysis complete'}
+                    </p>
                     <p className="text-xs text-green-600 mt-0.5">
                       {analysis.pageCount} pages &middot; {analysis.formFieldCount || 0} form fields detected
                       &middot; {(analysis.text?.length || 0).toLocaleString()} chars extracted
@@ -380,10 +435,25 @@ export default function PluginWizard() {
                   </div>
                 </div>
 
+                {/* Per-sample breakdown */}
+                {sampleFiles.length > 1 && (
+                  <div className="mt-3">
+                    <p className="text-xs font-medium text-gray-500 mb-1">Samples:</p>
+                    <div className="space-y-1">
+                      {sampleFiles.map((sf, i) => (
+                        <div key={i} className="text-xs bg-white rounded px-2 py-1 border border-green-100 flex justify-between">
+                          <span className="font-medium text-gray-700 truncate">{sf.name}</span>
+                          <span className="text-gray-400 flex-shrink-0 ml-2">{sf.pageCount}p &middot; {sf.fieldCount} fields</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
                 {/* Form fields preview */}
                 {analysis.forms && Object.keys(analysis.forms).length > 0 && (
                   <div className="mt-3 max-h-40 overflow-y-auto">
-                    <p className="text-xs font-medium text-gray-500 mb-1">Detected form fields:</p>
+                    <p className="text-xs font-medium text-gray-500 mb-1">Detected form fields (merged):</p>
                     <div className="grid grid-cols-2 gap-1">
                       {Object.entries(analysis.forms).slice(0, 20).map(([key, val]) => (
                         <div key={key} className="text-xs bg-white rounded px-2 py-1 border border-green-100">
@@ -393,6 +463,26 @@ export default function PluginWizard() {
                       ))}
                     </div>
                   </div>
+                )}
+
+                {/* Add more samples button */}
+                {!sampleDocId && (
+                  <button
+                    onClick={() => {
+                      const input = document.createElement('input');
+                      input.type = 'file';
+                      input.accept = '.pdf';
+                      input.multiple = true;
+                      input.onchange = (e) => {
+                        const files = (e.target as HTMLInputElement).files;
+                        if (files?.length) onDrop(Array.from(files));
+                      };
+                      input.click();
+                    }}
+                    className="mt-3 text-xs text-primary-600 hover:text-primary-700 font-medium flex items-center gap-1"
+                  >
+                    <Upload className="w-3 h-3" /> Add more samples
+                  </button>
                 )}
               </div>
             )}
@@ -568,7 +658,11 @@ export default function PluginWizard() {
 
           <div className="card bg-gray-50">
             <h3 className="text-sm font-medium text-gray-700 mb-2">Summary</h3>
-            <div className="grid grid-cols-3 gap-4 text-sm">
+            <div className="grid grid-cols-4 gap-4 text-sm">
+              <div>
+                <span className="text-gray-500">Samples:</span>{' '}
+                <span className="font-medium">{sampleFiles.length || 1}</span>
+              </div>
               <div>
                 <span className="text-gray-500">Fields:</span>{' '}
                 <span className="font-medium">{fields.length}</span>
