@@ -3,6 +3,7 @@ const colors: Record<string, string> = {
   FAIL: 'bg-red-100 text-red-700',
   PARTIAL: 'bg-yellow-100 text-yellow-700',
   NOT_FOUND: 'bg-gray-100 text-gray-500',
+  NOT_APPLICABLE: 'bg-blue-100 text-blue-600',
 };
 
 export default function VerdictBadge({ verdict }: { verdict: string }) {

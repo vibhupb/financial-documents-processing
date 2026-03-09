@@ -40,6 +40,9 @@ export default function ComplianceTab({ documentId, onPageClick }: Props) {
                 </button>
               </div>
             </div>
+            {r.reasoning && (
+              <p className="text-xs text-gray-500 mt-1 italic">{r.reasoning}</p>
+            )}
             {r.evidence && (
               <p
                 className="text-xs text-gray-600 mt-1 cursor-pointer hover:text-primary-600"
@@ -47,8 +50,8 @@ export default function ComplianceTab({ documentId, onPageClick }: Props) {
                   r.pageReferences?.[0] && onPageClick?.(r.pageReferences[0])
                 }
                 title={
-                  r.evidenceCharStart != null
-                    ? `Chars ${r.evidenceCharStart}–${r.evidenceCharEnd} on page ${r.pageReferences?.[0]}`
+                  r.pageReferences?.[0]
+                    ? `Page ${r.pageReferences[0]}`
                     : undefined
                 }
               >

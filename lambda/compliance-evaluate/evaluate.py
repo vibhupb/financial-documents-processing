@@ -101,8 +101,10 @@ def evaluate_document(doc_id, plugin_id, tree, pdf_bytes, baseline_ids=None):
             evaluated_count += len(verdicts)
             _append_event(doc_id, f"Evaluated {evaluated_count}/{len(reqs)} requirements ({bl_name})")
 
-        pass_count = sum(1 for r in baseline_results if r["verdict"] == "PASS")
-        score = round(pass_count / len(baseline_results) * 100) if baseline_results else 0
+        # Score excludes NOT_APPLICABLE requirements (they don't apply to this doc type)
+        applicable = [r for r in baseline_results if r.get("verdict") != "NOT_APPLICABLE"]
+        pass_count = sum(1 for r in applicable if r["verdict"] == "PASS")
+        score = round(pass_count / len(applicable) * 100) if applicable else 0
 
         reports.append({
             "reportId": str(uuid.uuid4()),
@@ -221,9 +223,10 @@ def _extract_pages(pdf_bytes, pages):
 def _evaluate_batch(batch, page_text, doc_id, baseline_id):
     """Evaluate a batch of requirements against page content.
 
-    Sends the requirements and extracted page text to Claude Haiku,
+    Sends the requirements and extracted page text to the LLM,
     which returns verdict, confidence, and evidence for each requirement.
-    Includes any prior feedback corrections as few-shot examples.
+    Uses semantic evaluation — assesses intent and substance, not literal
+    wording. Includes any prior feedback corrections as few-shot examples.
     """
     corrections_block = _get_corrections_block(baseline_id, batch)
     reqs_text = "\n".join(
@@ -232,20 +235,39 @@ def _evaluate_batch(batch, page_text, doc_id, baseline_id):
         for i, r in enumerate(batch)
     )
     prompt = (
-        f"Evaluate these compliance requirements against the document.\n\n"
+        "You are a compliance analyst evaluating whether a document meets "
+        "regulatory and policy requirements. Evaluate INTENT and SUBSTANCE, "
+        "not exact wording.\n\n"
+        "EVALUATION PRINCIPLES:\n"
+        "- A requirement is MET if the document addresses the same obligation, "
+        "even using different terminology or phrasing.\n"
+        "- Look for EQUIVALENT CONCEPTS: e.g., 'maintain insurance' may appear "
+        "as 'keep policies in force', 'coverage shall remain effective', etc.\n"
+        "- Consider the SPIRIT of each requirement, not just literal keywords.\n"
+        "- Financial terms may be expressed differently across document types "
+        "(e.g., 'interest rate' vs 'applicable margin', 'borrower' vs 'obligor').\n"
+        "- Partial compliance counts: if a document addresses part of a "
+        "requirement but not all aspects, use PARTIAL.\n\n"
         f"{corrections_block}"
         f"REQUIREMENTS:\n{reqs_text}\n\nDOCUMENT CONTENT:\n{page_text}\n\n"
-        "Respond with a JSON array: [{requirementId, verdict, confidence, "
-        "evidence, evidenceCharStart, evidenceCharEnd, pageReferences}].\n"
-        "IMPORTANT: 'evidence' must be an EXACT quote from the document "
-        "(copy-paste, not paraphrased). 'evidenceCharStart' and "
-        "'evidenceCharEnd' are the 0-based character offsets of the quote "
-        "within the page text provided. Verdicts: PASS/FAIL/PARTIAL/NOT_FOUND."
+        "Respond with a JSON array. For each requirement:\n"
+        "- requirementId: the ID from above\n"
+        "- verdict: PASS (requirement substantively met), FAIL (document "
+        "contradicts or clearly does not meet), PARTIAL (some aspects met), "
+        "NOT_FOUND (no relevant content found), or NOT_APPLICABLE (requirement "
+        "does not apply to this document type)\n"
+        "- confidence: 0.0-1.0 how confident you are in the verdict\n"
+        "- evidence: the relevant passage from the document (may be summarized "
+        "or quoted — include enough context to justify the verdict)\n"
+        "- pageReferences: array of page numbers where evidence was found\n"
+        "- reasoning: brief explanation of WHY this verdict was reached, "
+        "especially for PARTIAL or FAIL verdicts\n\n"
+        "Return ONLY the JSON array."
     )
     resp = bedrock_client.converse(
         modelId=MODEL_ID,
         messages=[{"role": "user", "content": [{"text": prompt}]}],
-        inferenceConfig={"temperature": 0, "maxTokens": 2048},
+        inferenceConfig={"temperature": 0, "maxTokens": 4096},
     )
     raw = resp["output"]["message"]["content"][0]["text"].strip()
     raw = re.sub(r"^```(?:json)?\s*", "", raw)

@@ -352,6 +352,7 @@ export class DocumentProcessingStack extends cdk.Stack {
     }));
 
     // compliance-evaluate: evaluate documents against baselines
+    // Uses Sonnet 4.6 for stronger semantic reasoning in compliance assessment
     const complianceEvaluateLambda = new lambda.Function(this, 'ComplianceEvaluateLambda', {
       functionName: 'doc-processor-compliance-evaluate',
       runtime: lambda.Runtime.PYTHON_3_13,
@@ -366,7 +367,7 @@ export class DocumentProcessingStack extends cdk.Stack {
         BASELINES_TABLE: complianceBaselinesTable.tableName,
         REPORTS_TABLE: complianceReportsTable.tableName,
         FEEDBACK_TABLE: complianceFeedbackTable.tableName,
-        BEDROCK_MODEL_ID: 'us.anthropic.claude-haiku-4-5-20251001-v1:0',
+        BEDROCK_MODEL_ID: 'us.anthropic.claude-sonnet-4-6-v1:0',
       },
       tracing: lambda.Tracing.ACTIVE,
     });
