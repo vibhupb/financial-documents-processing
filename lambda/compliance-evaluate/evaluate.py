@@ -154,17 +154,28 @@ def _find_baselines(plugin_id, baseline_ids=None):
     return resp.get("Items", [])
 
 
-def _compact_tree(nodes):
-    """Build compact tree representation for LLM navigation."""
+def _compact_tree(nodes, total_pages=0):
+    """Build compact tree representation for LLM navigation.
+
+    Clamps page ranges to the actual document length to handle
+    PageIndex tree offset errors where child nodes may reference
+    pages beyond the document (e.g., TOC offset miscalculation).
+    """
     result = []
     for n in nodes:
+        start = int(n.get("start_index", 1))
+        end = int(n.get("end_index", start))
+        # Clamp to actual document pages if total_pages is known
+        if total_pages > 0:
+            start = min(start, total_pages)
+            end = min(end, total_pages)
         entry = {
             "title": n.get("title", ""),
-            "pages": f"{n.get('start_index', '?')}-{n.get('end_index', '?')}",
+            "pages": f"{start}-{end}",
         }
         children = n.get("nodes", [])
         if children:
-            entry["sections"] = _compact_tree(children)
+            entry["sections"] = _compact_tree(children, total_pages)
         result.append(entry)
     return result
 
@@ -173,17 +184,19 @@ def _navigate_tree_for_batch(tree, batch):
     """Use LLM to find relevant pages for a batch of requirements.
 
     Sends the document's PageIndex tree structure and the requirement
-    hints to Claude Haiku, which returns the page numbers most likely
-    to contain evidence for the requirements.
+    hints to the LLM, which returns page numbers to examine.
+    Clamps returned pages to actual document length.
     """
+    total_pages = int(tree.get("total_pages", 0))
     hints = "\n".join(
         f"- {r['text']} (hint: {r.get('evaluationHint', '')})" for r in batch
     )
-    compact = json.dumps(_compact_tree(tree.get("structure", [])), indent=1)
+    compact = json.dumps(_compact_tree(tree.get("structure", []), total_pages), indent=1)
     prompt = (
         f"Given these requirements:\n{hints}\n\n"
-        f"And this document structure:\n{compact}\n\n"
-        "Return a JSON array of page numbers (integers) to examine."
+        f"And this document structure (total {total_pages} pages):\n{compact}\n\n"
+        "Return a JSON array of page numbers (integers) to examine. "
+        "Include pages from ALL relevant sections, not just the first match."
     )
     resp = bedrock_client.converse(
         modelId=MODEL_ID,
@@ -191,7 +204,11 @@ def _navigate_tree_for_batch(tree, batch):
         inferenceConfig={"temperature": 0, "maxTokens": 512},
     )
     text = resp["output"]["message"]["content"][0]["text"]
-    return _parse_page_list(text)
+    pages = _parse_page_list(text)
+    # Clamp to actual document length
+    if total_pages > 0:
+        pages = [min(p, total_pages) for p in pages if p >= 1]
+    return sorted(set(pages))
 
 
 def _parse_page_list(text):
