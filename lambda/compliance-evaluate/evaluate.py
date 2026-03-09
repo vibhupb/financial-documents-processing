@@ -267,7 +267,7 @@ def _evaluate_batch(batch, page_text, doc_id, baseline_id):
     resp = bedrock_client.converse(
         modelId=MODEL_ID,
         messages=[{"role": "user", "content": [{"text": prompt}]}],
-        inferenceConfig={"temperature": 0, "maxTokens": 4096},
+        inferenceConfig={"temperature": 0, "maxTokens": 8192},
     )
     raw = resp["output"]["message"]["content"][0]["text"].strip()
     raw = re.sub(r"^```(?:json)?\s*", "", raw)

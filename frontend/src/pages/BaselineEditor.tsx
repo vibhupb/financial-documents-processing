@@ -85,13 +85,34 @@ export default function BaselineEditor() {
         documentKeys.push(documentKey);
       }
 
-      // Step 2: Generate requirements from all documents at once
+      // Step 2: Trigger async requirement generation
       setUploadPhase('generating');
-      setUploadProgress(`Extracting requirements from ${documentKeys.length} document(s)...`);
-      const result = await api.generateRequirementsMulti(baselineId, documentKeys);
-      setExtractedCount(result.requirementCount);
+      setUploadProgress(`Extracting requirements from ${documentKeys.length} document(s) using Sonnet 4.6...`);
+      await api.generateRequirementsMulti(baselineId, documentKeys);
 
-      // Step 3: Refresh baseline data
+      // Step 3: Poll baseline until requirements appear (async Lambda)
+      const startReqs = data?.baseline?.requirements?.length || 0;
+      let attempts = 0;
+      const maxAttempts = 60; // 5 minutes max (5s intervals)
+      while (attempts < maxAttempts) {
+        await new Promise(resolve => setTimeout(resolve, 5000));
+        attempts++;
+        setUploadProgress(
+          `Extracting requirements from ${documentKeys.length} document(s)... (${attempts * 5}s)`
+        );
+        const updated = await api.getBaseline(baselineId);
+        const newReqs = updated?.baseline?.requirements?.length || 0;
+        const genStatus = updated?.baseline?.generatingStatus;
+        if (genStatus === 'complete' || newReqs > startReqs) {
+          setExtractedCount(newReqs - startReqs);
+          break;
+        }
+        if (genStatus === 'error') {
+          throw new Error('Requirement extraction failed');
+        }
+      }
+
+      // Step 4: Refresh and show success
       setUploadPhase('success');
       queryClient.invalidateQueries({ queryKey: ['baseline', baselineId] });
       setTimeout(() => setUploadPhase('idle'), 4000);

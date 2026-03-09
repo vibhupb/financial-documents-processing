@@ -82,6 +82,7 @@ def lambda_handler(event, context):
         UpdateExpression=(
             "SET requirements = :r, categories = :c, "
             "sourceDocumentKeys = list_append(if_not_exists(sourceDocumentKeys, :empty), :keys), "
+            "generatingStatus = :done, "
             "updatedAt = :n"
         ),
         ExpressionAttributeValues={
@@ -89,6 +90,7 @@ def lambda_handler(event, context):
             ":c": all_cats,
             ":keys": source_docs,
             ":empty": [],
+            ":done": "complete",
             ":n": now,
         },
     )

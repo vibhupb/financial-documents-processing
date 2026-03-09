@@ -2515,7 +2515,12 @@ def upload_baseline_reference(baseline_id: str, filename: str, content_type: str
 
 
 def generate_baseline_requirements(baseline_id: str, document_key: str = "", source_format: str = None, document_keys: list = None) -> dict:
-    """Invoke compliance-ingest Lambda to extract requirements from reference document(s)."""
+    """Invoke compliance-ingest Lambda asynchronously to extract requirements.
+
+    Fires the ingest Lambda and returns immediately. The frontend polls
+    the baseline for updated requirements. This avoids the 29s API Gateway
+    timeout when Sonnet 4.6 processes large reference documents.
+    """
     import json as json_mod
 
     # Support both single key and array of keys
@@ -2525,7 +2530,18 @@ def generate_baseline_requirements(baseline_id: str, document_key: str = "", sou
     if not keys:
         return {"error": "documentKey or documentKeys is required"}
 
-    # Invoke compliance-ingest Lambda synchronously
+    # Mark baseline as generating (so frontend can show progress)
+    bl_table = dynamodb.Table(BASELINES_TABLE)
+    bl_table.update_item(
+        Key={"baselineId": baseline_id},
+        UpdateExpression="SET generatingStatus = :s, generatingDocCount = :c",
+        ExpressionAttributeValues={
+            ":s": "generating",
+            ":c": len(keys),
+        },
+    )
+
+    # Invoke compliance-ingest Lambda ASYNCHRONOUSLY (fire-and-forget)
     lambda_client = boto3.client("lambda")
     function_name = os.environ.get(
         "COMPLIANCE_INGEST_FUNCTION", "doc-processor-compliance-ingest"
@@ -2536,29 +2552,17 @@ def generate_baseline_requirements(baseline_id: str, document_key: str = "", sou
         "sourceDocumentKeys": keys,
     }
 
-    resp = lambda_client.invoke(
+    lambda_client.invoke(
         FunctionName=function_name,
-        InvocationType="RequestResponse",
+        InvocationType="Event",  # Async — returns immediately
         Payload=json_mod.dumps(payload),
     )
 
-    # Parse response
-    response_payload = json_mod.loads(resp["Payload"].read())
-
-    if "errorMessage" in response_payload:
-        return {"error": response_payload["errorMessage"], "statusCode": 500}
-
-    # Fetch updated baseline to return full requirements list
-    bl_table = dynamodb.Table(BASELINES_TABLE)
-    baseline = bl_table.get_item(Key={"baselineId": baseline_id}).get("Item", {})
-
     return {
         "baselineId": baseline_id,
-        "requirementCount": response_payload.get("requirementCount", 0),
-        "totalRequirements": response_payload.get("totalRequirements", 0),
-        "categories": response_payload.get("categories", []),
-        "requirements": baseline.get("requirements", []),
-        "documentsProcessed": response_payload.get("documentsProcessed", 0),
+        "status": "generating",
+        "message": f"Extracting requirements from {len(keys)} document(s) — this may take 1-2 minutes",
+        "documentCount": len(keys),
     }
 
 
