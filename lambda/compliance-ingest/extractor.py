@@ -23,15 +23,28 @@ MODEL_ID = os.environ.get(
 def build_extraction_prompt(content: ParsedContent) -> str:
     """Build the prompt for LLM requirement extraction."""
     return (
-        "Extract all testable compliance requirements from this document.\n\n"
-        "DOCUMENT:\n" + content.text[:80_000] + "\n\n"
-        'For each requirement, return a JSON object with: '
-        '"text", "category", "sourceReference", "evaluationHint".\n'
+        "You are a compliance analyst extracting testable requirements from "
+        "a regulatory or policy document.\n\n"
+        "EXTRACTION PRINCIPLES:\n"
+        "- Extract EVERY distinct obligation, rule, threshold, or condition\n"
+        "- Include quantitative requirements (ratios, percentages, limits)\n"
+        "- Include procedural requirements (must file, must notify, must maintain)\n"
+        "- Include definitional requirements (what constitutes compliance)\n"
+        "- For each requirement, provide a clear evaluationHint that describes "
+        "what to look for in a target document to verify compliance\n"
+        "- Category should reflect the domain (e.g., 'Financial Covenants', "
+        "'Insurance', 'Reporting', 'Collateral', 'Governance')\n\n"
+        "DOCUMENT:\n" + content.text[:120_000] + "\n\n"
+        "For each requirement return a JSON object with:\n"
+        '- "text": the requirement statement\n'
+        '- "category": domain category\n'
+        '- "sourceReference": section/page reference in the source document\n'
+        '- "evaluationHint": what to look for when evaluating a target document\n\n'
         "Return a JSON array only, no other text."
     )
 
 
-def extract_requirements(content: ParsedContent) -> list[dict]:
+def extract_requirements(content: ParsedContent, source_document: str = "") -> list[dict]:
     """Call Bedrock to extract requirements, return structured list."""
     resp = bedrock_client.converse(
         modelId=MODEL_ID,
@@ -100,9 +113,53 @@ def extract_requirements(content: ParsedContent) -> list[dict]:
             "category": it.get("category", "General"),
             "sourceReference": it.get("sourceReference", ""),
             "evaluationHint": it.get("evaluationHint", ""),
+            "sourceDocument": source_document,
             "criticality": "should-have",
             "confidenceThreshold": Decimal("0.8"),
             "status": "active",
         }
         for it in items
     ]
+
+
+def deduplicate_requirements(reqs: list[dict]) -> list[dict]:
+    """Use LLM to deduplicate overlapping requirements from multiple documents.
+
+    When multiple reference documents are ingested, they may express the same
+    requirement in different words. This function sends all requirements to
+    the LLM to identify and merge duplicates.
+    """
+    if len(reqs) <= 5:
+        return reqs  # Too few to have meaningful duplicates
+
+    req_texts = "\n".join(
+        f"{i + 1}. [{r['requirementId']}] {r['text']} (category: {r['category']})"
+        for i, r in enumerate(reqs)
+    )
+    prompt = (
+        "Review these compliance requirements extracted from multiple documents. "
+        "Identify duplicates or near-duplicates (same obligation expressed differently).\n\n"
+        f"REQUIREMENTS:\n{req_texts}\n\n"
+        "Return a JSON array of requirement IDs to REMOVE (the duplicates). "
+        "Keep the most comprehensive version of each duplicate pair. "
+        "Only remove true duplicates — requirements that cover the SAME obligation. "
+        "Similar but distinct requirements should both be kept.\n\n"
+        "Return JSON array of IDs to remove, e.g.: [\"req-abc123\", \"req-def456\"]\n"
+        "If no duplicates found, return an empty array: []"
+    )
+    try:
+        resp = bedrock_client.converse(
+            modelId=MODEL_ID,
+            messages=[{"role": "user", "content": [{"text": prompt}]}],
+            inferenceConfig={"temperature": 0, "maxTokens": 2048},
+        )
+        raw = resp["output"]["message"]["content"][0]["text"].strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw)
+        raw = re.sub(r"```$", "", raw.strip())
+        ids_to_remove = set(json.loads(raw))
+        if ids_to_remove:
+            print(f"[Ingest] Removing {len(ids_to_remove)} duplicate requirements")
+        return [r for r in reqs if r["requirementId"] not in ids_to_remove]
+    except Exception as e:
+        print(f"[Ingest] Deduplication failed (keeping all): {e}")
+        return reqs

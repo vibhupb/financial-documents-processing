@@ -220,4 +220,10 @@ export const api = {
       `/baselines/${baselineId}/generate-requirements`,
       { method: 'POST', body: JSON.stringify({ documentKey, sourceFormat }) }
     ),
+
+  generateRequirementsMulti: (baselineId: string, documentKeys: string[]) =>
+    fetchApi<{ baselineId: string; requirementCount: number; totalRequirements: number; categories: string[]; requirements: any[]; documentsProcessed: number }>(
+      `/baselines/${baselineId}/generate-requirements`,
+      { method: 'POST', body: JSON.stringify({ documentKeys }) }
+    ),
 };

@@ -2262,8 +2262,9 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             baseline_id = path.split("/")[2]
             return response(200, generate_baseline_requirements(
                 baseline_id,
-                (body or {}).get("documentKey", ""),
-                (body or {}).get("sourceFormat"),
+                document_key=(body or {}).get("documentKey", ""),
+                source_format=(body or {}).get("sourceFormat"),
+                document_keys=(body or {}).get("documentKeys"),
             ))
 
         elif path.startswith("/baselines/") and http_method == "GET":
@@ -2513,16 +2514,16 @@ def upload_baseline_reference(baseline_id: str, filename: str, content_type: str
     }
 
 
-def generate_baseline_requirements(baseline_id: str, document_key: str, source_format: str = None) -> dict:
-    """Invoke compliance-ingest Lambda to extract requirements from a reference document."""
+def generate_baseline_requirements(baseline_id: str, document_key: str = "", source_format: str = None, document_keys: list = None) -> dict:
+    """Invoke compliance-ingest Lambda to extract requirements from reference document(s)."""
     import json as json_mod
 
-    if not document_key:
-        return {"error": "documentKey is required"}
-
-    # Determine format from extension if not provided
-    if not source_format:
-        source_format = document_key.rsplit(".", 1)[-1].lower()
+    # Support both single key and array of keys
+    keys = document_keys or []
+    if not keys and document_key:
+        keys = [document_key]
+    if not keys:
+        return {"error": "documentKey or documentKeys is required"}
 
     # Invoke compliance-ingest Lambda synchronously
     lambda_client = boto3.client("lambda")
@@ -2532,8 +2533,7 @@ def generate_baseline_requirements(baseline_id: str, document_key: str, source_f
 
     payload = {
         "baselineId": baseline_id,
-        "sourceDocumentKey": document_key,
-        "sourceFormat": source_format,
+        "sourceDocumentKeys": keys,
     }
 
     resp = lambda_client.invoke(
@@ -2555,9 +2555,10 @@ def generate_baseline_requirements(baseline_id: str, document_key: str, source_f
     return {
         "baselineId": baseline_id,
         "requirementCount": response_payload.get("requirementCount", 0),
+        "totalRequirements": response_payload.get("totalRequirements", 0),
         "categories": response_payload.get("categories", []),
         "requirements": baseline.get("requirements", []),
-        "sourceDocument": document_key,
+        "documentsProcessed": response_payload.get("documentsProcessed", 0),
     }
 
 

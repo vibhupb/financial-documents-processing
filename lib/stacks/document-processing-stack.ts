@@ -336,10 +336,11 @@ export class DocumentProcessingStack extends cdk.Stack {
       layers: [pypdfLayer, complianceParsersLayer],
       memorySize: 2048,
       timeout: cdk.Duration.seconds(300),
+      // Uses Sonnet 4.6 for comprehensive requirement extraction from reference docs
       environment: {
         BUCKET_NAME: documentBucket.bucketName,
         BASELINES_TABLE: complianceBaselinesTable.tableName,
-        BEDROCK_MODEL_ID: 'us.anthropic.claude-haiku-4-5-20251001-v1:0',
+        BEDROCK_MODEL_ID: 'us.anthropic.claude-sonnet-4-6-v1:0',
       },
       tracing: lambda.Tracing.ACTIVE,
     });

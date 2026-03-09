@@ -60,3 +60,24 @@ def parse_pdf(fb: bytes) -> ParsedContent:
         for i, p in enumerate(reader.pages)
     )
     return ParsedContent(text=text)
+
+
+def parse_xlsx(fb: bytes) -> ParsedContent:
+    """Parse an Excel spreadsheet, extracting all sheet data as structured text."""
+    from openpyxl import load_workbook
+
+    wb = load_workbook(io.BytesIO(fb), data_only=True)
+    parts: list[str] = []
+    tables: list = []
+    for sheet_name in wb.sheetnames:
+        ws = wb[sheet_name]
+        parts.append(f"--- Sheet: {sheet_name} ---")
+        rows = []
+        for row in ws.iter_rows(values_only=True):
+            cells = [str(c) if c is not None else "" for c in row]
+            if any(cells):
+                rows.append(cells)
+                parts.append(" | ".join(cells))
+        if rows:
+            tables.append(rows)
+    return ParsedContent(text="\n".join(parts), tables=tables)

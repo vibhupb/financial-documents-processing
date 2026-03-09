@@ -22,9 +22,10 @@ export default function BaselineEditor() {
   const [descValue, setDescValue] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [uploadPhase, setUploadPhase] = useState<UploadPhase>('idle');
-  const [uploadFileName, setUploadFileName] = useState('');
+  const [uploadFileNames, setUploadFileNames] = useState<string[]>([]);
   const [uploadError, setUploadError] = useState('');
   const [extractedCount, setExtractedCount] = useState(0);
+  const [uploadProgress, setUploadProgress] = useState('');
   const { data, isLoading } = useQuery({
     queryKey: ['baseline', baselineId],
     queryFn: () => api.getBaseline(baselineId!),
@@ -58,42 +59,45 @@ export default function BaselineEditor() {
       setEditingName(false);
     },
   });
-  const handleReferenceUpload = async (file: File) => {
-    if (!baselineId) return;
-    setUploadFileName(file.name);
+  const handleReferenceUpload = async (files: FileList) => {
+    if (!baselineId || files.length === 0) return;
+    const fileArray = Array.from(files);
+    setUploadFileNames(fileArray.map(f => f.name));
     setUploadError('');
     try {
-      // Step 1: Get presigned URL
+      // Step 1: Upload all files to S3
       setUploadPhase('uploading');
-      const contentType = file.type || 'application/pdf';
-      const { uploadUrl, fields, documentKey } = await api.uploadBaselineReference(
-        baselineId, file.name, contentType
-      );
-
-      // Step 2: Upload file to S3
-      const formData = new FormData();
-      Object.entries(fields).forEach(([key, value]) => formData.append(key, value));
-      formData.append('file', file);
-      const uploadResp = await fetch(uploadUrl, { method: 'POST', body: formData });
-      if (!uploadResp.ok) {
-        throw new Error(`Upload failed: ${uploadResp.status}`);
+      const documentKeys: string[] = [];
+      for (let i = 0; i < fileArray.length; i++) {
+        const file = fileArray[i];
+        setUploadProgress(`Uploading ${i + 1}/${fileArray.length}: ${file.name}`);
+        const contentType = file.type || 'application/pdf';
+        const { uploadUrl, fields, documentKey } = await api.uploadBaselineReference(
+          baselineId, file.name, contentType
+        );
+        const formData = new FormData();
+        Object.entries(fields).forEach(([key, value]) => formData.append(key, value));
+        formData.append('file', file);
+        const uploadResp = await fetch(uploadUrl, { method: 'POST', body: formData });
+        if (!uploadResp.ok) {
+          throw new Error(`Upload failed for ${file.name}: ${uploadResp.status}`);
+        }
+        documentKeys.push(documentKey);
       }
 
-      // Step 3: Generate requirements from the uploaded document
+      // Step 2: Generate requirements from all documents at once
       setUploadPhase('generating');
-      const ext = file.name.split('.').pop()?.toLowerCase();
-      const formatMap: Record<string, string> = { pdf: 'pdf', docx: 'docx', pptx: 'pptx' };
-      const sourceFormat = formatMap[ext || ''] || 'pdf';
-      const result = await api.generateRequirements(baselineId, documentKey, sourceFormat);
+      setUploadProgress(`Extracting requirements from ${documentKeys.length} document(s)...`);
+      const result = await api.generateRequirementsMulti(baselineId, documentKeys);
       setExtractedCount(result.requirementCount);
 
-      // Step 4: Refresh baseline data
+      // Step 3: Refresh baseline data
       setUploadPhase('success');
       queryClient.invalidateQueries({ queryKey: ['baseline', baselineId] });
       setTimeout(() => setUploadPhase('idle'), 4000);
     } catch (err: any) {
       setUploadPhase('error');
-      setUploadError(err.message || 'Failed to process reference document');
+      setUploadError(err.message || 'Failed to process reference documents');
     }
   };
 
@@ -183,11 +187,12 @@ export default function BaselineEditor() {
           <input
             ref={fileInputRef}
             type="file"
-            accept=".pdf,.docx,.pptx"
+            multiple
+            accept=".pdf,.docx,.pptx,.xlsx,.xls"
             className="hidden"
             onChange={(e) => {
-              const file = e.target.files?.[0];
-              if (file) handleReferenceUpload(file);
+              const files = e.target.files;
+              if (files && files.length > 0) handleReferenceUpload(files);
               e.target.value = '';
             }}
           />
@@ -197,16 +202,16 @@ export default function BaselineEditor() {
               className="w-full border-2 border-dashed border-gray-300 rounded-lg p-6 flex flex-col items-center gap-2 text-gray-500 hover:border-primary-400 hover:text-primary-600 transition-colors cursor-pointer"
             >
               <Upload className="w-8 h-8" />
-              <span className="text-sm font-medium">Upload compliance document (PDF, DOCX, PPTX)</span>
-              <span className="text-xs text-gray-400">Auto-extract requirements from a reference document</span>
+              <span className="text-sm font-medium">Upload reference documents (PDF, DOCX, PPTX, XLSX)</span>
+              <span className="text-xs text-gray-400">Select one or more reference documents to extract requirements</span>
             </button>
           )}
           {uploadPhase === 'uploading' && (
             <div className="w-full border-2 border-dashed border-blue-300 rounded-lg p-6 flex items-center gap-3 bg-blue-50">
               <Loader2 className="w-5 h-5 text-blue-500 animate-spin" />
               <div>
-                <p className="text-sm font-medium text-blue-700">Uploading {uploadFileName}...</p>
-                <p className="text-xs text-blue-500">Sending file to S3</p>
+                <p className="text-sm font-medium text-blue-700">{uploadProgress}</p>
+                <p className="text-xs text-blue-500">{uploadFileNames.length} file{uploadFileNames.length !== 1 ? 's' : ''} selected</p>
               </div>
             </div>
           )}
@@ -214,8 +219,8 @@ export default function BaselineEditor() {
             <div className="w-full border-2 border-dashed border-amber-300 rounded-lg p-6 flex items-center gap-3 bg-amber-50">
               <Loader2 className="w-5 h-5 text-amber-500 animate-spin" />
               <div>
-                <p className="text-sm font-medium text-amber-700">Extracting requirements from {uploadFileName}...</p>
-                <p className="text-xs text-amber-500">Parsing document and generating requirements via LLM</p>
+                <p className="text-sm font-medium text-amber-700">{uploadProgress}</p>
+                <p className="text-xs text-amber-500">Using Claude Sonnet 4.6 for comprehensive requirement extraction</p>
               </div>
             </div>
           )}
@@ -223,7 +228,7 @@ export default function BaselineEditor() {
             <div className="w-full border-2 border-dashed border-green-300 rounded-lg p-6 flex items-center gap-3 bg-green-50">
               <CheckCircle className="w-5 h-5 text-green-600" />
               <p className="text-sm font-medium text-green-700">
-                {extractedCount} requirement{extractedCount !== 1 ? 's' : ''} extracted from {uploadFileName}
+                {extractedCount} requirement{extractedCount !== 1 ? 's' : ''} extracted from {uploadFileNames.length} document{uploadFileNames.length !== 1 ? 's' : ''}
               </p>
             </div>
           )}
@@ -232,7 +237,7 @@ export default function BaselineEditor() {
               <div className="flex items-center gap-3">
                 <AlertCircle className="w-5 h-5 text-red-600" />
                 <div>
-                  <p className="text-sm font-medium text-red-700">Failed to process {uploadFileName}</p>
+                  <p className="text-sm font-medium text-red-700">Failed to process documents</p>
                   <p className="text-xs text-red-500">{uploadError}</p>
                 </div>
               </div>
