@@ -228,11 +228,36 @@ export default function PluginWizard() {
     if (!analysis) return;
     setGenerating(true);
     try {
+      // Try to fetch section structure from any available PageIndex trees
+      let sectionStructure: { title: string; start: number; end: number }[] = [];
+      const tentativeId = pluginId || docName.replace(/\s+/g, '_').toLowerCase();
+      if (tentativeId) {
+        try {
+          const pluginData = await api.getPlugin(tentativeId).catch(() => null);
+          const sampleTree = (pluginData as any)?.config?.sampleTree;
+          if (sampleTree && typeof sampleTree === 'object') {
+            // Flatten tree sections from first available tree
+            const firstTree = Object.values(sampleTree)[0] as any;
+            if (firstTree?.structure) {
+              const flatten = (nodes: any[]): { title: string; start: number; end: number }[] =>
+                nodes.flatMap((n: any) => {
+                  const children = n.nodes || [];
+                  if (children.length > 0) return flatten(children);
+                  return [{ title: n.title || '', start: n.start_index || 1, end: n.end_index || 1 }];
+                });
+              sectionStructure = flatten(firstTree.structure);
+            }
+          }
+        } catch { /* Tree not available yet — that's OK */ }
+      }
+
       const result = await api.generatePluginConfig({
         text: analysis.text,
         formFields: analysis.forms,
         name: docName,
         pageCount: analysis.pageCount,
+        sectionStructure: sectionStructure.length > 0 ? sectionStructure : undefined,
+        sampleCount: sampleFiles.length || 1,
       });
       if (result.error) {
         setUploadError(result.error);

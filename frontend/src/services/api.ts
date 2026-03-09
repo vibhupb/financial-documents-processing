@@ -129,7 +129,8 @@ export const api = {
   deletePlugin: (pluginId: string) => fetchApi<any>(`/plugins/${pluginId}`, { method: 'DELETE' }),
   analyzeSample: (data: { s3Key: string; bucket: string }) =>
     fetchApi<any>('/plugins/analyze', { method: 'POST', body: JSON.stringify(data) }),
-  generatePluginConfig: (data: { text: string; formFields: any; name: string; pageCount: number }) =>
+  getPlugin: (pluginId: string) => fetchApi<any>(`/plugins/${pluginId}`),
+  generatePluginConfig: (data: { text: string; formFields: any; name: string; pageCount: number; sectionStructure?: any; sampleCount?: number }) =>
     fetchApi<any>('/plugins/generate', { method: 'POST', body: JSON.stringify(data) }),
   refinePluginConfig: (data: { config: any; instruction: string }) =>
     fetchApi<any>('/plugins/refine', { method: 'POST', body: JSON.stringify(data) }),

@@ -997,20 +997,23 @@ def analyze_sample_document(body: dict[str, Any]) -> dict[str, Any]:
 def generate_plugin_config(body: dict[str, Any]) -> dict[str, Any]:
     """Use Claude to auto-generate a plugin config from sample extraction data.
 
-    Sends the raw extraction text + form fields to Claude with existing plugin
-    examples, and gets back a draft plugin config + prompt template.
+    Sends the raw extraction text + form fields + optional section structure
+    to Claude with existing plugin examples, and gets back a draft plugin config.
+    When PageIndex trees are available, uses section structure for better
+    section definitions and per-section field suggestions.
     """
-    extracted_text = body.get("text", "")[:8000]
+    extracted_text = body.get("text", "")[:40000]
     form_fields_raw = body.get("formFields", {})
     doc_name = body.get("name", "New Document Type")
     page_count = body.get("pageCount", 1)
+    section_structure = body.get("sectionStructure", [])
+    sample_count = body.get("sampleCount", 1)
 
     if not extracted_text and not form_fields_raw:
         return {"error": "No extraction data provided"}
 
     # Normalize form_fields: accept both dict and list formats
     if isinstance(form_fields_raw, list):
-        # Frontend sends [{key, value}, ...] — convert to dict
         form_fields = {
             f.get("key", ""): {"value": f.get("value", "")}
             for f in form_fields_raw if f.get("key")
@@ -1023,18 +1026,33 @@ def generate_plugin_config(body: dict[str, Any]) -> dict[str, Any]:
     # Build the meta-prompt
     form_summary = "\n".join(f"  {k}: {v.get('value', '')}" for k, v in list(form_fields.items())[:50])
 
+    # Section structure from PageIndex trees (when available)
+    section_block = ""
+    if section_structure:
+        section_lines = []
+        for sec in section_structure:
+            pages = f"pp. {sec.get('start', '?')}-{sec.get('end', '?')}"
+            section_lines.append(f"  - {sec.get('title', 'Unknown')} ({pages})")
+        section_block = (
+            f"\nDOCUMENT SECTION STRUCTURE (from PageIndex analysis):\n"
+            + "\n".join(section_lines) + "\n\n"
+            "IMPORTANT: Use these sections to define extraction sections in the plugin. "
+            "Each section should map to a group of related fields.\n"
+        )
+
     prompt = f"""You are an expert at configuring document extraction pipelines.
 
-Analyze this document and generate a plugin configuration for extracting structured data from it.
+Analyze this document and generate a plugin configuration for extracting structured data.
+{f'This analysis is based on {sample_count} sample document(s) of the same type.' if sample_count > 1 else ''}
 
 DOCUMENT NAME: {doc_name}
 PAGE COUNT: {page_count}
 
 TEXTRACT FORM FIELDS DETECTED:
 {form_summary}
-
-SAMPLE TEXT (first pages):
-{extracted_text[:5000]}
+{section_block}
+SAMPLE TEXT:
+{extracted_text[:30000]}
 
 Generate a JSON response with:
 1. "pluginId": a snake_case identifier for this document type
@@ -1047,6 +1065,7 @@ Generate a JSON response with:
    - "type": "string" | "number" | "date" | "boolean" | "currency"
    - "query": a Textract query question to extract this field
    - "formKey": the Textract form key name if detected (from the form fields above)
+   - "section": which document section this field belongs to (if section structure provided)
 6. "promptRules": 5-10 normalization rules specific to this document type
 
 Return ONLY valid JSON."""
