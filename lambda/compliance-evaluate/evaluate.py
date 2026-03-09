@@ -154,6 +154,21 @@ def _find_baselines(plugin_id, baseline_ids=None):
     return resp.get("Items", [])
 
 
+def _compact_tree(nodes):
+    """Build compact tree representation for LLM navigation."""
+    result = []
+    for n in nodes:
+        entry = {
+            "title": n.get("title", ""),
+            "pages": f"{n.get('start_index', '?')}-{n.get('end_index', '?')}",
+        }
+        children = n.get("nodes", [])
+        if children:
+            entry["sections"] = _compact_tree(children)
+        result.append(entry)
+    return result
+
+
 def _navigate_tree_for_batch(tree, batch):
     """Use LLM to find relevant pages for a batch of requirements.
 
@@ -164,11 +179,7 @@ def _navigate_tree_for_batch(tree, batch):
     hints = "\n".join(
         f"- {r['text']} (hint: {r.get('evaluationHint', '')})" for r in batch
     )
-    compact = json.dumps(
-        [{"title": n["title"], "pages": n.get("page_range")}
-         for n in tree.get("structure", [])],
-        indent=1,
-    )
+    compact = json.dumps(_compact_tree(tree.get("structure", [])), indent=1)
     prompt = (
         f"Given these requirements:\n{hints}\n\n"
         f"And this document structure:\n{compact}\n\n"

@@ -2,6 +2,9 @@
 
 Invoked by Step Functions after the Router classifies a document as
 unstructured (has_sections=True). Stores the tree in DynamoDB and S3.
+
+Also supports standalone invocation for reference documents (compliance
+baselines) and plugin samples via entityType/entityId event parameters.
 """
 
 from __future__ import annotations
@@ -27,24 +30,42 @@ BEDROCK_MODEL_ID = os.environ.get(
 def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     """Build PageIndex tree and store results.
 
-    Input (from Step Functions):
-        documentId, bucket, key, pluginId, classification, metadata, ...
+    Input (from Step Functions or standalone invocation):
+        documentId       — pipeline document ID (optional if entityType+entityId provided)
+        bucket, key      — S3 location of the PDF
+        pluginId         — plugin identifier (optional)
+        classification   — router classification (optional)
+        metadata         — plugin config metadata (optional)
+        entityType       — "baseline" or "plugin" for standalone reference docs (optional)
+        entityId         — baseline or plugin ID for entity storage (optional)
+        entityDocKey     — S3 key label for the reference doc within the entity (optional)
 
     Output (merged back into Step Functions state):
-        pageIndexTree: { structure, doc_description, total_pages, ... }
+        hasPageIndexTree: bool
         pageIndexCost: { inputTokens, outputTokens, cost }
+        pageIndexStats: { nodeCount, totalPages, buildSeconds }
     """
-    document_id = event["documentId"]
+    document_id = event.get("documentId")
     bucket = event.get("bucket", BUCKET_NAME)
     key = event["key"]
     plugin_id = event.get("pluginId", "unknown")
     file_name = key.split("/")[-1] if "/" in key else key
 
-    print(f"[PageIndex] Starting tree build for {document_id} "
+    # For standalone entity invocations (baselines, plugins), documentId may be absent
+    entity_type = event.get("entityType")
+    entity_id = event.get("entityId")
+    is_standalone_entity = bool(entity_type and entity_id and not document_id)
+
+    if not document_id and not is_standalone_entity:
+        raise ValueError("Either documentId or entityType+entityId must be provided")
+
+    label = document_id or f"{entity_type}/{entity_id}"
+    print(f"[PageIndex] Starting tree build for {label} "
           f"(plugin={plugin_id}, key={key})")
 
-    # Record processing event
-    _update_status(document_id, "INDEXING", "Building document tree index")
+    # Record processing event (only for pipeline documents)
+    if document_id:
+        _update_status(document_id, "INDEXING", "Building document tree index")
 
     # Download PDF
     start_time = time.time()
@@ -53,7 +74,8 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         pdf_bytes = response["Body"].read()
     except Exception as e:
         print(f"[PageIndex] Failed to download PDF: {e}")
-        _update_status(document_id, "INDEXING", f"PageIndex failed: {e}")
+        if document_id:
+            _update_status(document_id, "INDEXING", f"PageIndex failed: {e}")
         return {**event, "hasPageIndexTree": False, "pageIndexCost": _zero_cost()}
 
     # Get plugin-specific PageIndex config
@@ -73,24 +95,66 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         )
     except Exception as e:
         print(f"[PageIndex] Tree build failed: {e}")
-        _update_status(document_id, "INDEXING", f"PageIndex failed: {e}")
+        if document_id:
+            _update_status(document_id, "INDEXING", f"PageIndex failed: {e}")
         return {**event, "hasPageIndexTree": False, "pageIndexCost": _zero_cost()}
 
     elapsed = time.time() - start_time
 
     # Store tree in S3 first (no size limit)
-    _store_audit(bucket, document_id, tree)
+    if document_id:
+        _store_audit(bucket, document_id, tree)
 
     # Store tree in DynamoDB (may fail for large trees > 400KB)
-    _store_tree(document_id, tree, bucket)
+    if document_id:
+        _store_tree(document_id, tree, bucket)
+
+    # Store tree for external consumers (compliance baselines, plugin configs)
+    entity_doc_key = event.get("entityDocKey", "")  # Which reference doc this tree is for
+
+    if entity_type and entity_id:
+        tree_data = _sanitize_for_dynamo(tree)
+        try:
+            if entity_type == "baseline":
+                entity_table = boto3.resource("dynamodb").Table(
+                    os.environ.get("BASELINES_TABLE", "compliance-baselines")
+                )
+                # Store tree keyed by document S3 key within the baseline's referenceTree map
+                tree_map_key = entity_doc_key or key
+                entity_table.update_item(
+                    Key={"baselineId": entity_id},
+                    UpdateExpression="SET referenceTree.#dk = :tree, generatingStatus = :done",
+                    ExpressionAttributeNames={"#dk": tree_map_key},
+                    ExpressionAttributeValues={
+                        ":tree": tree_data,
+                        ":done": "tree_ready",
+                    },
+                )
+                print(f"[PageIndex] Stored tree for baseline {entity_id} doc {tree_map_key}")
+
+            elif entity_type == "plugin":
+                entity_table = boto3.resource("dynamodb").Table(
+                    os.environ.get("PLUGIN_CONFIGS_TABLE", "document-plugin-configs")
+                )
+                tree_map_key = entity_doc_key or key
+                entity_table.update_item(
+                    Key={"pluginId": entity_id},
+                    UpdateExpression="SET sampleTree.#dk = :tree",
+                    ExpressionAttributeNames={"#dk": tree_map_key},
+                    ExpressionAttributeValues={":tree": tree_data},
+                )
+                print(f"[PageIndex] Stored tree for plugin {entity_id} doc {tree_map_key}")
+        except Exception as entity_err:
+            print(f"[PageIndex] Failed to store tree for {entity_type}/{entity_id}: {entity_err}")
 
     # Record completion
     node_count = _count_nodes(tree.get("structure", []))
-    _update_status(
-        document_id, "INDEXING",
-        f"Tree built: {node_count} nodes, {tree.get('total_pages', 0)} pages, "
-        f"{elapsed:.1f}s"
-    )
+    if document_id:
+        _update_status(
+            document_id, "INDEXING",
+            f"Tree built: {node_count} nodes, {tree.get('total_pages', 0)} pages, "
+            f"{elapsed:.1f}s"
+        )
 
     # Estimate cost (rough: based on typical token usage patterns)
     cost = _estimate_cost(tree)

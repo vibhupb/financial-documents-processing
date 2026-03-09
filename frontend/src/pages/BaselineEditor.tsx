@@ -85,22 +85,47 @@ export default function BaselineEditor() {
         documentKeys.push(documentKey);
       }
 
-      // Step 2: Trigger async requirement generation
+      // Step 2: Trigger PageIndex tree building for PDF files
+      const pdfKeys = documentKeys.filter(k => k.toLowerCase().endsWith('.pdf'));
+      if (pdfKeys.length > 0) {
+        setUploadPhase('generating');
+        setUploadProgress(`Building document structure for ${pdfKeys.length} PDF(s)...`);
+        for (const key of pdfKeys) {
+          await api.buildDocumentTree(key, 'baseline', baselineId!, key);
+        }
+
+        // Wait for trees to be built (poll generatingStatus)
+        let treeAttempts = 0;
+        const maxTreeAttempts = 60; // 5 min max
+        while (treeAttempts < maxTreeAttempts) {
+          await new Promise(resolve => setTimeout(resolve, 5000));
+          treeAttempts++;
+          setUploadProgress(
+            `Building document structure... (${treeAttempts * 5}s)`
+          );
+          const updated = await api.getBaseline(baselineId!);
+          if (updated?.baseline?.generatingStatus === 'tree_ready') {
+            break;
+          }
+        }
+      }
+
+      // Step 3: Trigger async requirement extraction
       setUploadPhase('generating');
       setUploadProgress(`Extracting requirements from ${documentKeys.length} document(s) using Sonnet 4.6...`);
-      await api.generateRequirementsMulti(baselineId, documentKeys);
+      await api.generateRequirementsMulti(baselineId!, documentKeys);
 
-      // Step 3: Poll baseline until requirements appear (async Lambda)
+      // Step 4: Poll baseline until requirements appear
       const startReqs = data?.baseline?.requirements?.length || 0;
       let attempts = 0;
-      const maxAttempts = 60; // 5 minutes max (5s intervals)
+      const maxAttempts = 60;
       while (attempts < maxAttempts) {
         await new Promise(resolve => setTimeout(resolve, 5000));
         attempts++;
         setUploadProgress(
-          `Extracting requirements from ${documentKeys.length} document(s)... (${attempts * 5}s)`
+          `Extracting requirements... (${attempts * 5}s)`
         );
-        const updated = await api.getBaseline(baselineId);
+        const updated = await api.getBaseline(baselineId!);
         const newReqs = updated?.baseline?.requirements?.length || 0;
         const genStatus = updated?.baseline?.generatingStatus;
         if (genStatus === 'complete' || newReqs > startReqs) {
@@ -112,7 +137,7 @@ export default function BaselineEditor() {
         }
       }
 
-      // Step 4: Refresh and show success
+      // Step 5: Refresh and show success
       setUploadPhase('success');
       queryClient.invalidateQueries({ queryKey: ['baseline', baselineId] });
       setTimeout(() => setUploadPhase('idle'), 4000);

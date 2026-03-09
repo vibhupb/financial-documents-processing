@@ -1254,6 +1254,56 @@ def get_document_tree(document_id: str) -> dict[str, Any]:
     }
 
 
+def build_document_tree(body: dict) -> dict:
+    """Invoke PageIndex Lambda to build tree for a document, baseline reference, or plugin sample.
+
+    Body:
+    - s3Key: S3 key of the PDF document (required)
+    - entityId: baseline ID or plugin ID (optional — if omitted, uses document pipeline)
+    - entityType: "baseline" or "plugin" (required if entityId provided)
+    - entityDocKey: reference doc identifier for multi-doc baselines (optional)
+    """
+    import json as json_mod
+
+    s3_key = body.get("s3Key", "")
+    entity_type = body.get("entityType")
+    entity_id = body.get("entityId")
+    entity_doc_key = body.get("entityDocKey", s3_key)
+
+    if not s3_key:
+        return {"error": "s3Key is required"}
+
+    # Invoke PageIndex Lambda asynchronously
+    lambda_client = boto3.client("lambda")
+    function_name = os.environ.get("PAGEINDEX_FUNCTION", "doc-processor-pageindex")
+
+    payload = {
+        "bucket": BUCKET_NAME,
+        "key": s3_key,
+        "entityType": entity_type,
+        "entityId": entity_id,
+        "entityDocKey": entity_doc_key,
+    }
+    # Add documentId if this is for a regular document
+    if not entity_type:
+        doc_id = s3_key.split("/")[1] if "/ingest/" in s3_key else ""
+        payload["documentId"] = doc_id
+
+    lambda_client.invoke(
+        FunctionName=function_name,
+        InvocationType="Event",  # Async
+        Payload=json_mod.dumps(payload),
+    )
+
+    return {
+        "status": "building",
+        "message": "PageIndex tree building started",
+        "s3Key": s3_key,
+        "entityType": entity_type,
+        "entityId": entity_id,
+    }
+
+
 def trigger_document_extraction(document_id: str) -> dict[str, Any]:
     """POST /documents/{id}/extract — trigger deferred extraction.
 
@@ -2128,6 +2178,10 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         # Route requests
         if path == "/documents" and http_method == "GET":
             return response(200, list_documents(query_params))
+
+        elif path == "/documents/build-tree" and http_method == "POST":
+            # POST /documents/build-tree — trigger PageIndex tree build
+            return response(200, build_document_tree(body or {}))
 
         elif path.startswith("/documents/") and "/audit" in path and http_method == "GET":
             return response(200, get_document_audit(_doc_id()))

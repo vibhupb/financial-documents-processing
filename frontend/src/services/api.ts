@@ -226,4 +226,11 @@ export const api = {
       `/baselines/${baselineId}/generate-requirements`,
       { method: 'POST', body: JSON.stringify({ documentKeys }) }
     ),
+
+  // PageIndex tree building (used by Plugin Builder for section detection)
+  buildDocumentTree: (s3Key: string, entityType: string, entityId: string, entityDocKey?: string) =>
+    fetchApi<{ status: string; message: string }>('/documents/build-tree', {
+      method: 'POST',
+      body: JSON.stringify({ s3Key, entityType, entityId, entityDocKey: entityDocKey || s3Key }),
+    }),
 };

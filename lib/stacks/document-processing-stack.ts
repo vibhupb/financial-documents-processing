@@ -310,6 +310,7 @@ export class DocumentProcessingStack extends cdk.Stack {
         BUCKET_NAME: documentBucket.bucketName,
         TABLE_NAME: documentTable.tableName,
         BEDROCK_MODEL_ID: 'us.anthropic.claude-haiku-4-5-20251001-v1:0',
+        BASELINES_TABLE: complianceBaselinesTable.tableName,
       },
       tracing: lambda.Tracing.ACTIVE,
     });
@@ -317,6 +318,7 @@ export class DocumentProcessingStack extends cdk.Stack {
     documentBucket.grantRead(pageIndexLambda);
     documentBucket.grantWrite(pageIndexLambda);  // For S3 audit trail
     documentTable.grantReadWriteData(pageIndexLambda);
+    complianceBaselinesTable.grantReadWriteData(pageIndexLambda);
     pageIndexLambda.addToRolePolicy(new iam.PolicyStatement({
       effect: iam.Effect.ALLOW,
       actions: ['bedrock:InvokeModel'],
@@ -1307,6 +1309,10 @@ export class DocumentProcessingStack extends cdk.Stack {
     complianceIngestLambda.grantInvoke(apiLambda);
     apiLambda.addEnvironment('COMPLIANCE_INGEST_FUNCTION', complianceIngestLambda.functionName);
 
+    // Allow API Lambda to invoke PageIndex for on-demand tree building
+    pageIndexLambda.grantInvoke(apiLambda);
+    apiLambda.addEnvironment('PAGEINDEX_FUNCTION', pageIndexLambda.functionName);
+
     // ==========================================
     // API Gateway
     // ==========================================
@@ -1530,7 +1536,8 @@ function handler(event) {
     pluginConfigsTable.grantReadData(routerLambda);
     pluginConfigsTable.grantReadData(extractorLambda);
     pluginConfigsTable.grantReadData(normalizerLambda);
-    pluginConfigsTable.grantReadData(pageIndexLambda);
+    pluginConfigsTable.grantReadWriteData(pageIndexLambda);
+    pageIndexLambda.addEnvironment('PLUGIN_CONFIGS_TABLE', pluginConfigsTable.tableName);
 
     // ==========================================
     // Outputs

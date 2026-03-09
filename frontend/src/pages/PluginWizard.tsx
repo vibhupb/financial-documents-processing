@@ -138,6 +138,10 @@ export default function PluginWizard() {
           pageCount: result.pageCount,
           fieldCount: result.formFieldCount || 0,
         });
+
+        // Trigger PageIndex tree build in background (enhances section detection)
+        api.buildDocumentTree(urlRes.key, 'plugin', pluginId || docName.replace(/\s+/g, '_').toLowerCase(), urlRes.key)
+          .catch(() => {}); // Fire-and-forget
       }
 
       if (newAnalyses.length > 0) {
