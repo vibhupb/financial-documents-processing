@@ -349,7 +349,21 @@ export class DocumentProcessingStack extends cdk.Stack {
     complianceIngestLambda.addToRolePolicy(new iam.PolicyStatement({
       effect: iam.Effect.ALLOW,
       resources: ['*'],
-      actions: ['bedrock:InvokeModel', 'textract:AnalyzeDocument', 'textract:DetectDocumentText'],
+      actions: [
+        'bedrock:InvokeModel',
+        'bedrock:GetFoundationModel',
+        'bedrock:ListFoundationModels',
+        'bedrock:GetInferenceProfile',
+        'bedrock:ListInferenceProfiles',
+        'textract:AnalyzeDocument',
+        'textract:DetectDocumentText',
+      ],
+    }));
+    // Marketplace permissions required for Sonnet 4.6 inference profile
+    complianceIngestLambda.addToRolePolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      resources: ['*'],
+      actions: ['aws-marketplace:ViewSubscriptions', 'aws-marketplace:Subscribe'],
     }));
 
     // compliance-evaluate: evaluate documents against baselines
@@ -379,7 +393,17 @@ export class DocumentProcessingStack extends cdk.Stack {
     complianceFeedbackTable.grantReadData(complianceEvaluateLambda);
     complianceEvaluateLambda.addToRolePolicy(new iam.PolicyStatement({
       effect: iam.Effect.ALLOW,
-      actions: ['bedrock:InvokeModel'],
+      actions: [
+        'bedrock:InvokeModel',
+        'bedrock:GetFoundationModel',
+        'bedrock:GetInferenceProfile',
+        'bedrock:ListInferenceProfiles',
+      ],
+      resources: ['*'],
+    }));
+    complianceEvaluateLambda.addToRolePolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: ['aws-marketplace:ViewSubscriptions', 'aws-marketplace:Subscribe'],
       resources: ['*'],
     }));
 
