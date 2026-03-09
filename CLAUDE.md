@@ -127,7 +127,19 @@ Detailed guidelines are split across path-scoped rules and on-demand skills:
 
 ## Version History
 
-See `docs/VERSION_HISTORY.md` for full history. Current: **v5.2.0** (2026-03-06)
+See `docs/VERSION_HISTORY.md` for full history. Current: **v5.3.0** (2026-03-09)
+
+### v5.3.0 — Signature Detection, Semantic Compliance, Multi-Doc Builders (2026-03-09)
+
+- **Signature detection**: Low-quality pages (scanned/handwritten) routed to signature sections; sourcePage remapped from image indices to actual document page numbers
+- **Plugin registry TTL refresh**: DynamoDB dynamic plugins re-read every 60s so Plugin Studio publishes are picked up by warm Lambda containers
+- **Normalizer parallelResults fix**: Extraction data properly unwrapped from extractionAndCompliance Parallel state (was missing all section data)
+- **Router datetime fix**: `import datetime` shadow fixed — processing event logging restored
+- **Reprocess button**: Added to document detail header for all completed documents
+- **Click-to-jump**: Credit agreement fields navigate PDF to source section page via `_sectionPageMap`
+- **Compliance Sonnet 4.6**: Evaluation upgraded with semantic-aware prompts (intent over literal matching), NOT_APPLICABLE verdict, reasoning field, score excludes N/A requirements
+- **Multi-doc compliance builder**: Multiple reference documents (PDF/DOCX/PPTX/XLSX), Sonnet 4.6 extraction, LLM deduplication across documents, source tracking per requirement
+- **Multi-sample plugin builder**: Multiple sample PDFs with merged Textract analysis for comprehensive field detection, incremental "Add more samples" support
 
 ### v5.1.0 — Testing Toolkit + Bug Fixes (2026-03-05)
 
