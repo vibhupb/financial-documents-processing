@@ -49,7 +49,7 @@ def extract_requirements(content: ParsedContent, source_document: str = "") -> l
     resp = bedrock_client.converse(
         modelId=MODEL_ID,
         messages=[{"role": "user", "content": [{"text": build_extraction_prompt(content)}]}],
-        inferenceConfig={"temperature": 0, "maxTokens": 16384},
+        inferenceConfig={"temperature": 0, "maxTokens": 4096},
     )
     raw = resp["output"]["message"]["content"][0]["text"].strip()
     # Strip markdown code fences if present

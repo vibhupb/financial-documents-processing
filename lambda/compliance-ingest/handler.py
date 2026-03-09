@@ -23,6 +23,65 @@ PARSERS = {
 }
 
 
+import time
+import json
+
+
+PAGEINDEX_FUNCTION = os.environ.get("PAGEINDEX_FUNCTION", "doc-processor-pageindex")
+lambda_client = boto3.client("lambda")
+
+
+def _wait_for_tree(baseline_id: str, doc_key: str, max_wait: int = 180) -> dict | None:
+    """Poll baseline until PageIndex tree is available for a document.
+
+    The frontend triggers tree building before calling ingest. This function
+    waits for the tree to appear in the baseline's referenceTree map.
+    """
+    start = time.time()
+    poll_interval = 5
+    while time.time() - start < max_wait:
+        baseline = bl_table.get_item(Key={"baselineId": baseline_id}).get("Item", {})
+        trees = baseline.get("referenceTree", {})
+        tree = trees.get(doc_key)
+        if tree and isinstance(tree, dict) and tree.get("structure"):
+            return tree
+        gen_status = baseline.get("generatingStatus", "")
+        if gen_status == "tree_ready":
+            # Tree ready but might be under a different key — check all
+            for k, v in trees.items():
+                if isinstance(v, dict) and v.get("structure"):
+                    return v
+        elapsed = int(time.time() - start)
+        print(f"[Ingest] Waiting for PageIndex tree ({elapsed}s / {max_wait}s)...")
+        time.sleep(poll_interval)
+    print(f"[Ingest] Tree wait timed out after {max_wait}s")
+    return None
+
+
+def _build_tree_inline(baseline_id: str, doc_key: str) -> dict | None:
+    """Invoke PageIndex Lambda synchronously as a last resort."""
+    try:
+        resp = lambda_client.invoke(
+            FunctionName=PAGEINDEX_FUNCTION,
+            InvocationType="RequestResponse",
+            Payload=json.dumps({
+                "bucket": BUCKET,
+                "key": doc_key,
+                "entityType": "baseline",
+                "entityId": baseline_id,
+                "entityDocKey": doc_key,
+            }),
+        )
+        result = json.loads(resp["Payload"].read())
+        if result.get("hasPageIndexTree"):
+            # Re-fetch from DynamoDB
+            baseline = bl_table.get_item(Key={"baselineId": baseline_id}).get("Item", {})
+            return baseline.get("referenceTree", {}).get(doc_key)
+    except Exception as e:
+        print(f"[Ingest] Inline tree build failed: {e}")
+    return None
+
+
 def _extract_with_tree(pdf_bytes: bytes, tree: dict, source_key: str) -> list:
     """Extract requirements section-by-section using PageIndex tree.
 
@@ -40,8 +99,8 @@ def _extract_with_tree(pdf_bytes: bytes, tree: dict, source_key: str) -> list:
         sections = []
         for node in nodes:
             children = node.get("nodes", [])
-            start = node.get("start_index", 1)
-            end = node.get("end_index", start)
+            start = int(node.get("start_index", 1))
+            end = int(node.get("end_index", start))
             title = node.get("title", "Unknown")
             # If node has children, recurse to get more specific sections
             if children and depth < 2:
@@ -107,10 +166,6 @@ def lambda_handler(event, context):
     if not keys:
         raise ValueError("No document keys provided")
 
-    # Check if trees are available for any documents
-    baseline = bl_table.get_item(Key={"baselineId": bid}).get("Item", {})
-    reference_trees = baseline.get("referenceTree", {})
-
     # Parse and extract requirements from each document
     all_reqs = []
     source_docs = []
@@ -127,13 +182,25 @@ def lambda_handler(event, context):
         print(f"[Ingest] Processing: {key} (format: {fmt})")
         file_bytes = s3.get_object(Bucket=BUCKET, Key=key)["Body"].read()
 
-        # Check for PageIndex tree (only for PDFs)
-        tree = reference_trees.get(key)
-        if tree and fmt == "pdf" and tree.get("structure"):
-            print(f"[Ingest] Using PageIndex tree ({len(tree['structure'])} root nodes) for {key}")
-            reqs = _extract_with_tree(file_bytes, tree, key)
+        if fmt == "pdf":
+            # PDFs MUST use PageIndex tree — poll until tree is ready
+            tree = _wait_for_tree(bid, key)
+            if tree and tree.get("structure"):
+                print(f"[Ingest] Using PageIndex tree ({len(tree['structure'])} root nodes) for {key}")
+                reqs = _extract_with_tree(file_bytes, tree, key)
+            else:
+                # Tree build failed or timed out — invoke PageIndex synchronously
+                print(f"[Ingest] No tree available, triggering inline PageIndex build for {key}")
+                tree = _build_tree_inline(bid, key)
+                if tree and tree.get("structure"):
+                    reqs = _extract_with_tree(file_bytes, tree, key)
+                else:
+                    print(f"[Ingest] Tree build failed, falling back to raw text for {key}")
+                    parsed = PARSERS[fmt](file_bytes)
+                    reqs = extract_requirements(parsed, source_document=key)
         else:
-            print(f"[Ingest] Using raw text extraction for {key}")
+            # Non-PDF formats (DOCX, XLSX, PPTX) — use parser directly
+            print(f"[Ingest] Parsing {fmt} document: {key}")
             parsed = PARSERS[fmt](file_bytes)
             reqs = extract_requirements(parsed, source_document=key)
 

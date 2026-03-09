@@ -330,6 +330,7 @@ export class DocumentProcessingStack extends cdk.Stack {
     // ==========================================
 
     // compliance-ingest: parse reference docs, extract requirements
+    // Timeout: 10 min to allow PageIndex tree wait (up to 3 min) + per-section Sonnet extraction
     const complianceIngestLambda = new lambda.Function(this, 'ComplianceIngestLambda', {
       functionName: 'doc-processor-compliance-ingest',
       runtime: lambda.Runtime.PYTHON_3_13,
@@ -337,17 +338,19 @@ export class DocumentProcessingStack extends cdk.Stack {
       code: lambda.Code.fromAsset(path.join(__dirname, '../../lambda/compliance-ingest')),
       layers: [pypdfLayer, complianceParsersLayer],
       memorySize: 2048,
-      timeout: cdk.Duration.seconds(300),
-      // Uses Sonnet 4.6 for comprehensive requirement extraction from reference docs
+      timeout: cdk.Duration.minutes(5),
+      // Haiku 4.5 for fast per-section extraction (Sonnet 4.6 used only in evaluate)
       environment: {
         BUCKET_NAME: documentBucket.bucketName,
         BASELINES_TABLE: complianceBaselinesTable.tableName,
-        BEDROCK_MODEL_ID: 'us.anthropic.claude-sonnet-4-6',
+        BEDROCK_MODEL_ID: 'us.anthropic.claude-haiku-4-5-20251001-v1:0',
+        PAGEINDEX_FUNCTION: pageIndexLambda.functionName,
       },
       tracing: lambda.Tracing.ACTIVE,
     });
     documentBucket.grantRead(complianceIngestLambda);
     complianceBaselinesTable.grantReadWriteData(complianceIngestLambda);
+    pageIndexLambda.grantInvoke(complianceIngestLambda);  // For inline tree building fallback
     complianceIngestLambda.addToRolePolicy(new iam.PolicyStatement({
       effect: iam.Effect.ALLOW,
       resources: ['*'],

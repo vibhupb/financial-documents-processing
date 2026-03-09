@@ -119,8 +119,13 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 entity_table = boto3.resource("dynamodb").Table(
                     os.environ.get("BASELINES_TABLE", "compliance-baselines")
                 )
-                # Store tree keyed by document S3 key within the baseline's referenceTree map
                 tree_map_key = entity_doc_key or key
+                # Initialize referenceTree map if it doesn't exist yet
+                entity_table.update_item(
+                    Key={"baselineId": entity_id},
+                    UpdateExpression="SET referenceTree = if_not_exists(referenceTree, :empty)",
+                    ExpressionAttributeValues={":empty": {}},
+                )
                 entity_table.update_item(
                     Key={"baselineId": entity_id},
                     UpdateExpression="SET referenceTree.#dk = :tree, generatingStatus = :done",
@@ -137,6 +142,12 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                     os.environ.get("PLUGIN_CONFIGS_TABLE", "document-plugin-configs")
                 )
                 tree_map_key = entity_doc_key or key
+                # Initialize sampleTree map if it doesn't exist yet
+                entity_table.update_item(
+                    Key={"pluginId": entity_id},
+                    UpdateExpression="SET sampleTree = if_not_exists(sampleTree, :empty)",
+                    ExpressionAttributeValues={":empty": {}},
+                )
                 entity_table.update_item(
                     Key={"pluginId": entity_id},
                     UpdateExpression="SET sampleTree.#dk = :tree",
