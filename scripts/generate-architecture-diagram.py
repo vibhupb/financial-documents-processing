@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
 """
-Generate AWS Architecture Diagram for Financial Documents Processing System.
+Generate AWS Architecture Diagram for Financial Documents Processing System (v5.5.0).
 
-This creates a professional, publication-ready architecture diagram showing:
-- React Frontend on CloudFront/S3 (SPA with independent panel scrolling)
-- API Gateway + Lambda API (CRUD, Q&A, section summaries)
-- S3 Document Ingestion
-- Step Functions Orchestration (Router Pattern)
-- Lambda Processing Pipeline:
-  - Router -> PageIndex (unstructured) -> Extractor -> Normalizer
-  - Router -> Extractor (structured forms, skip PageIndex)
-- Bedrock AI (Claude Haiku 4.5): Classification, PageIndex tree, Q&A, summaries
-- Textract: Targeted page extraction
-- DynamoDB & S3 Audit Storage
+Full architecture including:
+- React Frontend on CloudFront/S3
+- API Gateway + API Lambda + Compliance API Lambda
+- S3 Document Ingestion + Trigger (SHA-256 dedup)
+- Step Functions Orchestration with Router Pattern Pipeline + Compliance Pipeline
+- 9 Lambda functions total
+- Bedrock AI (Haiku 4.5 + Sonnet 4.6)
+- Textract targeted extraction
+- 6 DynamoDB tables + S3 Audit
+- Cognito RBAC (3 groups) + KMS PII encryption
+- CloudWatch monitoring
 """
 
 from diagrams import Diagram, Cluster, Edge
@@ -24,16 +24,17 @@ from diagrams.aws.integration import StepFunctions
 from diagrams.aws.ml import Bedrock, Textract
 from diagrams.aws.general import Users
 from diagrams.aws.management import Cloudwatch
+from diagrams.aws.security import Cognito, KMS
 
 
-# Light theme configuration for presentations
+# --- Light theme configuration ---
 graph_attr = {
-    "bgcolor": "#f8fafc",       # Light slate background
-    "fontcolor": "#1e293b",     # Dark text for titles
+    "bgcolor": "#f8fafc",
+    "fontcolor": "#1e293b",
     "fontname": "Arial Bold",
     "fontsize": "24",
     "pad": "1.0",
-    "splines": "ortho",         # Straight orthogonal lines
+    "splines": "ortho",
     "nodesep": "0.8",
     "ranksep": "1.0",
     "dpi": "200",
@@ -52,18 +53,18 @@ edge_attr = {
     "fontsize": "9",
 }
 
-# Cluster styles - Light theme
+# --- Cluster styles ---
 aws_cloud_style = {
-    "bgcolor": "#fff7ed",       # Light orange tint
-    "fontcolor": "#c2410c",     # AWS Orange darker
+    "bgcolor": "#fff7ed",
+    "fontcolor": "#c2410c",
     "fontsize": "18",
-    "pencolor": "#f97316",      # AWS Orange
+    "pencolor": "#f97316",
     "penwidth": "3",
     "style": "rounded",
 }
 
 frontend_cluster_style = {
-    "bgcolor": "#eff6ff",       # Light blue
+    "bgcolor": "#eff6ff",
     "fontcolor": "#1d4ed8",
     "fontsize": "14",
     "pencolor": "#3b82f6",
@@ -72,7 +73,7 @@ frontend_cluster_style = {
 }
 
 api_cluster_style = {
-    "bgcolor": "#f0fdf4",       # Light green
+    "bgcolor": "#f0fdf4",
     "fontcolor": "#15803d",
     "fontsize": "14",
     "pencolor": "#22c55e",
@@ -80,26 +81,8 @@ api_cluster_style = {
     "style": "rounded",
 }
 
-processing_cluster_style = {
-    "bgcolor": "#faf5ff",       # Light purple
-    "fontcolor": "#7c3aed",
-    "fontsize": "14",
-    "pencolor": "#8b5cf6",
-    "penwidth": "2",
-    "style": "rounded",
-}
-
-ai_cluster_style = {
-    "bgcolor": "#fffbeb",       # Light amber
-    "fontcolor": "#b45309",
-    "fontsize": "12",
-    "pencolor": "#f59e0b",
-    "penwidth": "2",
-    "style": "rounded",
-}
-
-storage_cluster_style = {
-    "bgcolor": "#f1f5f9",       # Light slate
+ingestion_cluster_style = {
+    "bgcolor": "#f1f5f9",
     "fontcolor": "#475569",
     "fontsize": "14",
     "pencolor": "#64748b",
@@ -108,7 +91,7 @@ storage_cluster_style = {
 }
 
 step_functions_cluster_style = {
-    "bgcolor": "#fff1f2",       # Light rose
+    "bgcolor": "#fff1f2",
     "fontcolor": "#be123c",
     "fontsize": "14",
     "pencolor": "#f43f5e",
@@ -116,8 +99,55 @@ step_functions_cluster_style = {
     "style": "rounded",
 }
 
+router_pipeline_style = {
+    "bgcolor": "#faf5ff",
+    "fontcolor": "#7c3aed",
+    "fontsize": "12",
+    "pencolor": "#8b5cf6",
+    "penwidth": "2",
+    "style": "rounded",
+}
+
+compliance_pipeline_style = {
+    "bgcolor": "#fefce8",
+    "fontcolor": "#a16207",
+    "fontsize": "12",
+    "pencolor": "#eab308",
+    "penwidth": "2",
+    "style": "rounded",
+}
+
+ai_cluster_style = {
+    "bgcolor": "#fffbeb",
+    "fontcolor": "#b45309",
+    "fontsize": "14",
+    "pencolor": "#f59e0b",
+    "penwidth": "2",
+    "style": "rounded",
+}
+
+storage_cluster_style = {
+    "bgcolor": "#f1f5f9",
+    "fontcolor": "#475569",
+    "fontsize": "14",
+    "pencolor": "#64748b",
+    "penwidth": "2",
+    "style": "rounded",
+}
+
+security_cluster_style = {
+    "bgcolor": "#fdf2f8",
+    "fontcolor": "#9d174d",
+    "fontsize": "14",
+    "pencolor": "#ec4899",
+    "penwidth": "2",
+    "style": "rounded",
+}
+
+
+# --- Diagram ---
 with Diagram(
-    "Financial Documents Processing - Router Pattern Architecture",
+    "Financial Documents Processing - v5.5.0 Architecture",
     filename="docs/aws-architecture",
     outformat="png",
     show=False,
@@ -131,97 +161,156 @@ with Diagram(
 
     with Cluster("AWS Cloud", graph_attr=aws_cloud_style):
 
-        # Frontend Layer
-        with Cluster("Frontend (CloudFront + S3)", graph_attr=frontend_cluster_style):
+        # ---- 1. Frontend ----
+        with Cluster("Frontend", graph_attr=frontend_cluster_style):
             cloudfront = CloudFront("CloudFront CDN")
-            s3_frontend = S3("S3 Static\nHosting")
+            s3_frontend = S3("S3 Frontend\nStatic Hosting")
 
-        # API Layer
-        with Cluster("REST API", graph_attr=api_cluster_style):
+        # ---- 7. Security ----
+        with Cluster("Security", graph_attr=security_cluster_style):
+            cognito = Cognito("Cognito\n(3 RBAC Groups)")
+            kms = KMS("KMS\nPII Encryption")
+
+        # ---- 2. API Layer ----
+        with Cluster("API Layer", graph_attr=api_cluster_style):
             api_gw = APIGateway("API Gateway")
-            api_lambda = Lambda("API Lambda\n(CRUD, Upload,\nReview)")
+            api_lambda = Lambda("doc-processor-api\n(CRUD, Upload,\nReview, Q&A)")
+            compliance_api = Lambda("doc-processor-\ncompliance-api\n(Baseline CRUD)")
 
-        # Ingestion
-        with Cluster("Document Ingestion", graph_attr=storage_cluster_style):
-            s3_ingest = S3("S3 Ingest\nBucket")
-            trigger_lambda = Lambda("Trigger Lambda\n(Dedup, SHA-256)")
+        # ---- 3. Document Ingestion ----
+        with Cluster("Document Ingestion", graph_attr=ingestion_cluster_style):
+            s3_ingest = S3("S3 Documents\nBucket")
+            trigger_lambda = Lambda("doc-processor-trigger\n(SHA-256 Dedup)")
 
-        # Step Functions Orchestration
+        # ---- 4. Step Functions ----
         with Cluster("Step Functions Orchestrator", graph_attr=step_functions_cluster_style):
-            sfn = StepFunctions("State Machine")
+            sfn = StepFunctions("financial-doc-\nprocessor")
 
-            # Processing Pipeline inside Step Functions
-            with Cluster("Router Pattern Pipeline", graph_attr=processing_cluster_style):
+            # Router Pipeline
+            with Cluster("Router Pipeline", graph_attr=router_pipeline_style):
+                router_lambda = Lambda("doc-processor-\nrouter\n(Classification)")
+                pageindex_lambda = Lambda("doc-processor-\npageindex\n(Tree Building)")
+                extractor_lambda = Lambda("doc-processor-\nextractor\n(Textract)")
+                normalizer_lambda = Lambda("doc-processor-\nnormalizer\n(Refinement)")
 
-                # Router Stage
-                with Cluster("1. ROUTER: Classification", graph_attr=ai_cluster_style):
-                    router_lambda = Lambda("Router Lambda")
-                    bedrock_haiku = Bedrock("Claude Haiku 4.5\n~$0.023/doc")
+            # Compliance Pipeline
+            with Cluster("Compliance Pipeline", graph_attr=compliance_pipeline_style):
+                compliance_ingest = Lambda("doc-processor-\ncompliance-ingest\n(Req Extraction)")
+                compliance_evaluate = Lambda("doc-processor-\ncompliance-evaluate\n(Semantic Eval)")
 
-                # PageIndex Stage (unstructured docs only)
-                with Cluster("2. PAGEINDEX: Tree Building\n(unstructured docs)", graph_attr=ai_cluster_style):
-                    pageindex_lambda = Lambda("PageIndex Lambda")
-                    bedrock_haiku_pi = Bedrock("Claude Haiku 4.5\nTree + Summaries")
+        # ---- 5. AI Services ----
+        with Cluster("AI Services", graph_attr=ai_cluster_style):
+            bedrock_haiku = Bedrock("Bedrock\nClaude Haiku 4.5")
+            bedrock_sonnet = Bedrock("Bedrock\nClaude Sonnet 4.6")
+            textract = Textract("Amazon Textract\nTables + Queries")
 
-                # Extractor Stage
-                with Cluster("3. EXTRACTOR: Targeted Pages", graph_attr=ai_cluster_style):
-                    extractor_lambda = Lambda("Extractor Lambda")
-                    textract = Textract("Textract\nTables+Queries\n~$0.30/doc")
-
-                # Normalizer Stage
-                with Cluster("4. NORMALIZER: Refinement", graph_attr=ai_cluster_style):
-                    normalizer_lambda = Lambda("Normalizer Lambda")
-                    bedrock_haiku_norm = Bedrock("Claude Haiku 4.5\n~$0.013/doc")
-
-        # Data Storage
+        # ---- 6. Data Storage ----
         with Cluster("Data Storage", graph_attr=storage_cluster_style):
-            dynamodb = Dynamodb("DynamoDB\n(Documents +\nExtracted Data)")
+            ddb_documents = Dynamodb("financial-\ndocuments")
+            ddb_baselines = Dynamodb("compliance-\nbaselines")
+            ddb_reports = Dynamodb("compliance-\nreports")
+            ddb_feedback = Dynamodb("compliance-\nfeedback")
+            ddb_plugins = Dynamodb("document-\nplugin-configs")
+            ddb_pii = Dynamodb("financial-documents-\npii-audit")
             s3_audit = S3("S3 Audit Trail\n(Raw Results)")
 
         # Monitoring
         cloudwatch = Cloudwatch("CloudWatch\nLogs & Metrics")
 
-    # Connections - User Flow
+    # ===== Edge Flows =====
+
+    # 1. Users -> CloudFront -> S3 Frontend
     users >> Edge(color="#3b82f6", penwidth="2", label="HTTPS") >> cloudfront
     cloudfront >> Edge(color="#3b82f6") >> s3_frontend
 
-    # API Flow
+    # 2. Users -> API Gateway -> API Lambda -> DynamoDB
     users >> Edge(color="#22c55e", penwidth="2", label="REST API") >> api_gw
     api_gw >> Edge(color="#22c55e") >> api_lambda
-    api_lambda >> Edge(color="#22c55e", style="dashed") >> dynamodb
-    api_lambda >> Edge(color="#22c55e", style="dashed", label="Presigned URL") >> s3_ingest
+    api_gw >> Edge(color="#22c55e") >> compliance_api
+    api_lambda >> Edge(color="#22c55e", style="dashed") >> ddb_documents
+    compliance_api >> Edge(color="#22c55e", style="dashed") >> ddb_baselines
 
-    # Document Upload Flow
-    cloudfront >> Edge(color="#f97316", label="Upload") >> s3_ingest
-    s3_ingest >> Edge(color="#f43f5e", penwidth="2", label="S3 Event") >> trigger_lambda
-    trigger_lambda >> Edge(color="#f43f5e", label="Check Duplicate") >> dynamodb
-    trigger_lambda >> Edge(color="#f43f5e", penwidth="2", label="Start Execution") >> sfn
+    # 8. Cognito -> API Gateway (auth)
+    cognito >> Edge(color="#ec4899", penwidth="2", label="Auth") >> api_gw
 
-    # Step Functions Internal Flow
+    # 3. S3 Ingest -> Trigger -> Step Functions
+    api_lambda >> Edge(
+        color="#22c55e", style="dashed", label="Presigned URL"
+    ) >> s3_ingest
+    s3_ingest >> Edge(
+        color="#f43f5e", penwidth="2", label="S3 Event"
+    ) >> trigger_lambda
+    trigger_lambda >> Edge(
+        color="#f43f5e", label="Check Dup"
+    ) >> ddb_documents
+    trigger_lambda >> Edge(
+        color="#f43f5e", penwidth="2", label="Start Execution"
+    ) >> sfn
+
+    # 4. Step Functions internal: Router Pipeline
     sfn >> Edge(color="#8b5cf6", penwidth="2") >> router_lambda
+    router_lambda >> Edge(
+        color="#8b5cf6", penwidth="2"
+    ) >> pageindex_lambda
+    pageindex_lambda >> Edge(
+        color="#8b5cf6", penwidth="2"
+    ) >> extractor_lambda
+    extractor_lambda >> Edge(
+        color="#8b5cf6", penwidth="2"
+    ) >> normalizer_lambda
+    normalizer_lambda >> Edge(
+        color="#64748b", penwidth="2", label="Final Data"
+    ) >> ddb_documents
+
+    # 4b. Step Functions internal: Compliance Pipeline (parallel with extraction)
+    sfn >> Edge(
+        color="#eab308", penwidth="2", style="dashed"
+    ) >> compliance_ingest
+    compliance_ingest >> Edge(
+        color="#eab308", penwidth="2"
+    ) >> compliance_evaluate
+    compliance_evaluate >> Edge(
+        color="#64748b", style="dashed"
+    ) >> ddb_reports
+
+    # 6. Router/PageIndex/Normalizer -> Bedrock Haiku
     router_lambda >> Edge(color="#f59e0b", label="Classify") >> bedrock_haiku
+    pageindex_lambda >> Edge(
+        color="#f59e0b", label="Build Tree"
+    ) >> bedrock_haiku
+    normalizer_lambda >> Edge(
+        color="#f59e0b", label="Normalize"
+    ) >> bedrock_haiku
 
-    # PageIndex branch (unstructured documents)
-    router_lambda >> Edge(color="#8b5cf6", penwidth="2", label="Unstructured\n(has_sections)") >> pageindex_lambda
-    pageindex_lambda >> Edge(color="#f59e0b", label="Build Tree") >> bedrock_haiku_pi
-    pageindex_lambda >> Edge(color="#8b5cf6", penwidth="2", label="Tree-Assisted\nPage Map") >> extractor_lambda
+    # 5. Compliance Ingest/Evaluate -> Bedrock Sonnet
+    compliance_ingest >> Edge(
+        color="#f59e0b", label="Extract Reqs"
+    ) >> bedrock_haiku
+    compliance_evaluate >> Edge(
+        color="#f59e0b", label="Semantic Eval"
+    ) >> bedrock_sonnet
 
-    # Direct extractor branch (structured forms)
-    router_lambda >> Edge(color="#8b5cf6", style="dashed", label="Structured\n(all pages)") >> extractor_lambda
-    extractor_lambda >> Edge(color="#f59e0b", label="OCR Pages") >> textract
+    # 7. Extractor -> Textract
+    extractor_lambda >> Edge(
+        color="#f59e0b", label="OCR Pages"
+    ) >> textract
 
-    extractor_lambda >> Edge(color="#8b5cf6", penwidth="2", label="Raw Data") >> normalizer_lambda
-    normalizer_lambda >> Edge(color="#f59e0b", label="Normalize") >> bedrock_haiku_norm
+    # 9. KMS encryption (dashed to storage)
+    kms >> Edge(
+        color="#ec4899", style="dashed", label="Encrypt"
+    ) >> ddb_pii
+    kms >> Edge(color="#ec4899", style="dashed") >> s3_ingest
 
-    # Storage Output
-    normalizer_lambda >> Edge(color="#64748b", penwidth="2", label="Final Data") >> dynamodb
-    normalizer_lambda >> Edge(color="#64748b", style="dashed", label="Audit") >> s3_audit
-    pageindex_lambda >> Edge(color="#64748b", style="dashed", label="Cache Tree") >> dynamodb
-
-    # API Lambda connections for Q&A and summaries
-    api_lambda >> Edge(color="#f59e0b", style="dashed", label="Q&A +\nSummaries") >> bedrock_haiku_norm
+    # Audit trail
+    normalizer_lambda >> Edge(
+        color="#64748b", style="dashed", label="Audit"
+    ) >> s3_audit
+    pageindex_lambda >> Edge(
+        color="#64748b", style="dashed", label="Cache Tree"
+    ) >> ddb_documents
 
     # Monitoring
     sfn >> Edge(color="#94a3b8", style="dashed") >> cloudwatch
+
 
 print("Architecture diagram saved to docs/aws-architecture.png")

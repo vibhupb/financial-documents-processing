@@ -90,6 +90,7 @@ docs/*.py
 docs/*.md
 !docs/VERSION_HISTORY.md
 !docs/CREDITS.md
+!docs/ARCHITECTURE.md
 !docs/plans/*.md
 .project-notes.md
 # Keep architecture diagrams
