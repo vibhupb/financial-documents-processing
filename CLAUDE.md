@@ -127,16 +127,25 @@ Detailed guidelines are split across path-scoped rules and on-demand skills:
 
 ## Version History
 
-See `docs/VERSION_HISTORY.md` for full history. Current: **v5.4.0** (2026-03-09)
+See `docs/VERSION_HISTORY.md` for full history. Current: **v5.5.0** (2026-03-09)
+
+### v5.5.0 — Compliance Pipeline Hardening + Performance (2026-03-09)
+
+- **PageIndex tree builder fix**: Double-offset bug in subdivision — was adding offset to already-physical page numbers (page 73 became 145). Root cause of 5% compliance scores
+- **Compliance evaluation**: Loads tree from DynamoDB when not in event, parallel batch evaluation (3 workers), Haiku for tree navigation + Sonnet 4.6 for evaluation only, Bedrock adaptive retry with 120s timeout
+- **Parallel processing**: Compliance-ingest processes documents (3 workers) and tree sections (5 workers) concurrently
+- **Cost calculation**: Now includes PageIndex (Haiku), compliance evaluation (Sonnet 4.6), proper Lambda invocation counts
+- **Time calculation**: Uses Step Functions execution ARN for actual timing
+- **Reprocess API**: Now accepts baselineIds and processingMode
+- **Result**: Equipment SPE compliance score 5% → 49% (139 PASS, 117 PARTIAL)
 
 ### v5.4.0 — PageIndex Unification (2026-03-09)
 
-- **PageIndex as shared foundation**: All document consumers now use PageIndex tree for structured understanding — compliance policy builder, plugin builder, compliance evaluation
+- **PageIndex as shared foundation**: All document consumers now use PageIndex tree — compliance policy builder, plugin builder, compliance evaluation
 - **`POST /documents/build-tree`**: New API endpoint for on-demand tree building (async). PageIndex Lambda supports `entityType`/`entityId` for baselines and plugins
-- **Compliance policy builder**: Tree-assisted per-section Sonnet 4.6 extraction (no more 120K truncation). Async invocation avoids API Gateway 29s timeout. Frontend polls for tree build + requirement extraction progress
-- **Plugin builder**: Background tree build on sample upload. Section structure from trees passed to AI config generation for section-aware field suggestions. Text limit increased 5K→30K
-- **Compliance evaluation**: Fixed `page_range` bug (was always null). `_compact_tree` with recursive children gives LLM actual page ranges for navigation
-- **Infra**: Sonnet 4.6 inference profile ID fix, marketplace permissions for Lambda roles, maxTokens increases (ingest 16K, evaluate 8K, dedup 4K)
+- **Compliance policy builder**: Tree-assisted per-section extraction (no more 120K truncation). Async invocation avoids API Gateway 29s timeout. Frontend polls for progress
+- **Plugin builder**: Background tree build on sample upload. Section structure from trees passed to AI config generation
+- **Compliance evaluation**: Fixed `page_range` bug (was always null). `_compact_tree` with recursive children for LLM page navigation
 
 ### v5.3.0 — Signature Detection, Semantic Compliance, Multi-Doc Builders (2026-03-09)
 
