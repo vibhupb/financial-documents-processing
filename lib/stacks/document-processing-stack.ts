@@ -373,6 +373,7 @@ export class DocumentProcessingStack extends cdk.Stack {
 
     // compliance-evaluate: evaluate documents against baselines
     // Uses Sonnet 4.6 for stronger semantic reasoning in compliance assessment
+    // 10 min timeout: 76 reqs ÷ 6/batch = 13 Sonnet calls × ~40s each = ~520s
     const complianceEvaluateLambda = new lambda.Function(this, 'ComplianceEvaluateLambda', {
       functionName: 'doc-processor-compliance-evaluate',
       runtime: lambda.Runtime.PYTHON_3_13,
@@ -380,7 +381,7 @@ export class DocumentProcessingStack extends cdk.Stack {
       code: lambda.Code.fromAsset(path.join(__dirname, '../../lambda/compliance-evaluate')),
       layers: [pypdfLayer, pluginsLayer],
       memorySize: 2048,
-      timeout: cdk.Duration.seconds(300),
+      timeout: cdk.Duration.minutes(10),
       environment: {
         BUCKET_NAME: documentBucket.bucketName,
         TABLE_NAME: documentTable.tableName,

@@ -26,7 +26,7 @@ reports_table = dynamodb.Table(
 feedback_table = dynamodb.Table(
     os.environ.get("FEEDBACK_TABLE", "compliance-feedback")
 )
-BATCH_SIZE = int(os.environ.get("REQUIREMENT_BATCH_SIZE", "6"))
+BATCH_SIZE = int(os.environ.get("REQUIREMENT_BATCH_SIZE", "10"))
 MAX_CORRECTIONS = int(os.environ.get("MAX_CORRECTIONS", "5"))
 MODEL_ID = os.environ.get(
     "BEDROCK_MODEL_ID", "us.anthropic.claude-haiku-4-5-20251001-v1:0"
@@ -92,14 +92,31 @@ def evaluate_document(doc_id, plugin_id, tree, pdf_bytes, baseline_ids=None):
         baseline_results = []
         reqs = baseline.get("requirements", [])
         batches = [reqs[i : i + BATCH_SIZE] for i in range(0, len(reqs), BATCH_SIZE)]
-        evaluated_count = 0
-        for batch in batches:
+
+        # Parallel batch evaluation — process all batches concurrently
+        # to avoid sequential Sonnet 4.6 calls timing out the Lambda
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        def _process_batch(batch):
             pages = _navigate_tree_for_batch(tree, batch)
             page_text = _extract_pages(pdf_bytes, pages)
-            verdicts = _evaluate_batch(batch, page_text, doc_id, baseline["baselineId"])
-            baseline_results.extend(verdicts)
-            evaluated_count += len(verdicts)
-            _append_event(doc_id, f"Evaluated {evaluated_count}/{len(reqs)} requirements ({bl_name})")
+            return _evaluate_batch(batch, page_text, doc_id, baseline["baselineId"])
+
+        with ThreadPoolExecutor(max_workers=min(len(batches), 5)) as executor:
+            futures = {executor.submit(_process_batch, b): i for i, b in enumerate(batches)}
+            results_by_idx = {}
+            for future in as_completed(futures):
+                idx = futures[future]
+                try:
+                    results_by_idx[idx] = future.result()
+                except Exception as e:
+                    print(f"[Compliance] Batch {idx} failed: {e}")
+                    results_by_idx[idx] = []
+
+        # Merge results in original order
+        for idx in sorted(results_by_idx.keys()):
+            baseline_results.extend(results_by_idx[idx])
+        _append_event(doc_id, f"Evaluated {len(baseline_results)}/{len(reqs)} requirements ({bl_name})")
 
         # Score excludes NOT_APPLICABLE requirements (they don't apply to this doc type)
         applicable = [r for r in baseline_results if r.get("verdict") != "NOT_APPLICABLE"]

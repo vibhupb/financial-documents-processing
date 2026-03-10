@@ -2083,6 +2083,8 @@ def reprocess_document(document_id: str, body: dict[str, Any]) -> dict[str, Any]
 
     Body:
     - force: Force reprocessing even if already processed (default: false)
+    - baselineIds: Optional list of compliance baseline IDs to evaluate against
+    - processingMode: Optional processing mode override (extract/understand/both)
     """
     if not STATE_MACHINE_ARN:
         return {"error": "State machine ARN not configured"}
@@ -2123,16 +2125,24 @@ def reprocess_document(document_id: str, body: dict[str, Any]) -> dict[str, Any]
         safe_id = re.sub(r"[^a-zA-Z0-9_-]", "_", document_id)[:8]
         execution_name = f"{safe_id}-reprocess-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
 
+        # Build execution input — include baselines and processing mode if provided
+        sfn_input = {
+            "documentId": document_id,
+            "bucket": BUCKET_NAME,
+            "key": original_s3_key,
+            "reprocess": True,
+            "contentHash": doc.get("contentHash"),
+        }
+        baseline_ids = body.get("baselineIds") or doc.get("baselineIds")
+        if baseline_ids:
+            sfn_input["baselineIds"] = baseline_ids
+        processing_mode = body.get("processingMode") or doc.get("processingMode", "extract")
+        sfn_input["processingMode"] = processing_mode
+
         sfn_response = sfn_client.start_execution(
             stateMachineArn=STATE_MACHINE_ARN,
             name=execution_name,
-            input=json.dumps({
-                "documentId": document_id,
-                "bucket": BUCKET_NAME,
-                "key": original_s3_key,
-                "reprocess": True,
-                "contentHash": doc.get("contentHash"),
-            }),
+            input=json.dumps(sfn_input),
         )
 
         # Update document status
