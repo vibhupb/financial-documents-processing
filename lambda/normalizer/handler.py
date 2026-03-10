@@ -2006,163 +2006,117 @@ def calculate_processing_cost(
     is_credit_agreement: bool = False,
     lambda_memory_mb: int = 1024,
     estimated_duration_ms: int = 30000,
+    compliance_tokens: Optional[Dict[str, int]] = None,
+    pageindex_tokens: Optional[Dict[str, int]] = None,
 ) -> Dict[str, Any]:
     """Calculate the total processing cost for a document including ALL AWS services.
 
-    Pricing:
-    - Claude Haiku 4.5 (Router): $0.001/1K input, $0.005/1K output
-    - Claude Haiku 4.5 (Normalizer): $0.001/1K input, $0.005/1K output
+    Pricing (per 1K tokens):
+    - Claude Haiku 4.5: $0.001 input, $0.005 output (router, normalizer, pageindex, nav)
+    - Claude Sonnet 4.6: $0.003 input, $0.015 output (compliance evaluation)
     - Textract (Tables + Queries): $0.02 per page
     - Step Functions (Standard): $0.000025 per state transition
     - Lambda: $0.0000002 per invocation + $0.0000166667 per GB-second
-
-    Args:
-        normalizer_tokens: Dict with inputTokens and outputTokens from normalizer
-        textract_pages: Number of pages processed by Textract
-        router_tokens: Optional dict with inputTokens and outputTokens from router
-        is_credit_agreement: Whether this is a Credit Agreement (affects state count)
-        lambda_memory_mb: Lambda memory allocation in MB
-        estimated_duration_ms: Estimated total Lambda execution time in ms
-
-    Returns:
-        Dict with cost breakdown and total
     """
     # Pricing constants (per 1K tokens)
-    # Claude Haiku 4.5: $1.00/MTok input = $0.001/1K, $5.00/MTok output = $0.005/1K
-    HAIKU_45_INPUT = 0.001
-    HAIKU_45_OUTPUT = 0.005
-    TEXTRACT_PER_PAGE = 0.02  # Tables + Queries combined
-
-    # Step Functions pricing (Standard Workflow)
-    STEP_FUNCTIONS_PER_TRANSITION = 0.000025  # $25 per million
-
-    # Lambda pricing
-    LAMBDA_PER_INVOCATION = 0.0000002  # $0.20 per million
+    HAIKU_INPUT = 0.001
+    HAIKU_OUTPUT = 0.005
+    SONNET_INPUT = 0.003
+    SONNET_OUTPUT = 0.015
+    TEXTRACT_PER_PAGE = 0.02
+    STEP_FUNCTIONS_PER_TRANSITION = 0.000025
+    LAMBDA_PER_INVOCATION = 0.0000002
     LAMBDA_PER_GB_SECOND = 0.0000166667
 
-    # Router cost (Claude Haiku 4.5)
-    router_cost = 0.0
-    router_input = 0
-    router_output = 0
-    router_tokens_are_real = bool(router_tokens)  # Track if we have real data
+    def _llm_cost(tokens, input_price, output_price):
+        inp = tokens.get('inputTokens', 0)
+        out = tokens.get('outputTokens', 0)
+        return (inp / 1000) * input_price + (out / 1000) * output_price, inp, out
+
+    # Router (Haiku)
+    router_cost, router_input, router_output = (0, 0, 0)
     if router_tokens:
-        router_input = router_tokens.get('inputTokens', 0)
-        router_output = router_tokens.get('outputTokens', 0)
-        router_cost = (
-            (router_input / 1000) * HAIKU_45_INPUT +
-            (router_output / 1000) * HAIKU_45_OUTPUT
-        )
-    else:
-        # Estimate router cost if not provided (~20K input, 500 output typical)
-        # This should NOT happen with the updated pipeline - log a warning
-        print("WARNING: Using estimated router tokens - pipeline may not be passing real values")
-        router_input = 20000
-        router_output = 500
-        router_cost = (
-            (router_input / 1000) * HAIKU_45_INPUT +
-            (router_output / 1000) * HAIKU_45_OUTPUT
-        )
+        router_cost, router_input, router_output = _llm_cost(router_tokens, HAIKU_INPUT, HAIKU_OUTPUT)
 
-    # Normalizer cost (Claude Haiku 4.5)
-    normalizer_input = normalizer_tokens.get('inputTokens', 0)
-    normalizer_output = normalizer_tokens.get('outputTokens', 0)
-    normalizer_cost = (
-        (normalizer_input / 1000) * HAIKU_45_INPUT +
-        (normalizer_output / 1000) * HAIKU_45_OUTPUT
-    )
+    # Normalizer (Haiku)
+    normalizer_cost, norm_input, norm_output = _llm_cost(normalizer_tokens, HAIKU_INPUT, HAIKU_OUTPUT)
 
-    # Textract cost
+    # PageIndex (Haiku) — tree building
+    pageindex_cost, pi_input, pi_output = (0, 0, 0)
+    if pageindex_tokens:
+        pageindex_cost, pi_input, pi_output = _llm_cost(pageindex_tokens, HAIKU_INPUT, HAIKU_OUTPUT)
+
+    # Compliance evaluation (Sonnet 4.6)
+    compliance_cost, comp_input, comp_output = (0, 0, 0)
+    if compliance_tokens:
+        comp_input = compliance_tokens.get('inputTokens', 0)
+        comp_output = compliance_tokens.get('outputTokens', 0)
+        # Navigation uses Haiku, evaluation uses Sonnet — split estimate 30/70
+        nav_cost = (comp_input * 0.3 / 1000) * HAIKU_INPUT + (comp_output * 0.3 / 1000) * HAIKU_OUTPUT
+        eval_cost = (comp_input * 0.7 / 1000) * SONNET_INPUT + (comp_output * 0.7 / 1000) * SONNET_OUTPUT
+        compliance_cost = nav_cost + eval_cost
+
+    # Textract
     textract_cost = textract_pages * TEXTRACT_PER_PAGE
 
-    # Step Functions cost
-    # Credit Agreement: classify -> choice -> 7 parallel branches -> normalize -> complete = 11 transitions
-    # Mortgage: classify -> choice -> 3 parallel branches -> normalize -> complete = 7 transitions
-    state_transitions = 11 if is_credit_agreement else 7
+    # Step Functions
+    state_transitions = 15 if is_credit_agreement else 10
     step_functions_cost = state_transitions * STEP_FUNCTIONS_PER_TRANSITION
 
-    # Lambda cost
-    # 4 Lambda invocations per document: trigger, router, extractor, normalizer
-    lambda_invocations = 4
+    # Lambda (trigger + router + pageindex + extractor(s) + compliance + normalizer)
+    lambda_invocations = 6 + textract_pages  # base + per-section extraction
     lambda_invocation_cost = lambda_invocations * LAMBDA_PER_INVOCATION
-
-    # Lambda compute cost (GB-seconds)
-    # Convert memory from MB to GB, duration from ms to seconds
     lambda_gb_seconds = (lambda_memory_mb / 1024) * (estimated_duration_ms / 1000)
     lambda_compute_cost = lambda_gb_seconds * LAMBDA_PER_GB_SECOND
-
     total_lambda_cost = lambda_invocation_cost + lambda_compute_cost
 
-    # Total cost
-    total_cost = router_cost + textract_cost + normalizer_cost + step_functions_cost + total_lambda_cost
+    total_cost = (router_cost + normalizer_cost + pageindex_cost + compliance_cost +
+                  textract_cost + step_functions_cost + total_lambda_cost)
 
-    return {
-        'totalCost': round(total_cost, 4),
-        'breakdown': {
-            'router': {
-                'model': 'claude-haiku-4.5',
-                'inputTokens': router_input,
-                'outputTokens': router_output,
-                'cost': round(router_cost, 6),
-                'isReal': router_tokens_are_real,  # True = from Bedrock API, False = estimated
-            },
-            'textract': {
-                'pages': textract_pages,
-                'costPerPage': TEXTRACT_PER_PAGE,
-                'cost': round(textract_cost, 4),
-                'isReal': True,  # Always real - counted from extractions
-            },
-            'normalizer': {
-                'model': 'claude-haiku-4.5',
-                'inputTokens': normalizer_input,
-                'outputTokens': normalizer_output,
-                'cost': round(normalizer_cost, 6),
-                'isReal': True,  # Always real - from Bedrock API in this Lambda
-            },
-            'stepFunctions': {
-                'stateTransitions': state_transitions,
-                'costPerTransition': STEP_FUNCTIONS_PER_TRANSITION,
-                'cost': round(step_functions_cost, 6),
-                'isReal': True,  # Deterministic based on workflow path
-            },
-            'lambda': {
-                'invocations': lambda_invocations,
-                'gbSeconds': round(lambda_gb_seconds, 2),
-                'memoryMb': lambda_memory_mb,
-                'estimatedDurationMs': estimated_duration_ms,
-                'invocationCost': round(lambda_invocation_cost, 8),
-                'computeCost': round(lambda_compute_cost, 6),
-                'cost': round(total_lambda_cost, 6),
-                'isReal': False,  # Duration is estimated - actual Lambda metrics not available here
-            },
-        },
-        'currency': 'USD',
-        # Summary flag: True only if ALL cost components are real/measured
-        'allCostsReal': router_tokens_are_real,  # Lambda duration is always estimated
+    breakdown = {
+        'router': {'model': 'haiku-4.5', 'inputTokens': router_input, 'outputTokens': router_output, 'cost': round(router_cost, 6)},
+        'normalizer': {'model': 'haiku-4.5', 'inputTokens': norm_input, 'outputTokens': norm_output, 'cost': round(normalizer_cost, 6)},
+        'textract': {'pages': textract_pages, 'cost': round(textract_cost, 4)},
+        'stepFunctions': {'transitions': state_transitions, 'cost': round(step_functions_cost, 6)},
+        'lambda': {'invocations': lambda_invocations, 'gbSeconds': round(lambda_gb_seconds, 2), 'cost': round(total_lambda_cost, 6)},
     }
+    if pageindex_tokens:
+        breakdown['pageIndex'] = {'model': 'haiku-4.5', 'inputTokens': pi_input, 'outputTokens': pi_output, 'cost': round(pageindex_cost, 6)}
+    if compliance_tokens:
+        breakdown['compliance'] = {'model': 'sonnet-4.6+haiku-4.5', 'inputTokens': comp_input, 'outputTokens': comp_output, 'cost': round(compliance_cost, 6)}
+
+    return {'totalCost': round(total_cost, 4), 'breakdown': breakdown, 'currency': 'USD'}
 
 
 def calculate_processing_time(
     uploaded_at: Optional[str],
     textract_pages: int,
+    execution_arn: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Calculate the total processing time for a document.
 
-    Args:
-        uploaded_at: ISO timestamp when document was uploaded (from trigger)
-        textract_pages: Number of pages processed by Textract
-
-    Returns:
-        Dict with processing time breakdown
+    Uses the Step Functions execution ARN to get actual start/end times
+    when available, falling back to uploadedAt timestamp.
     """
     completed_at = datetime.utcnow()
-
-    # Calculate total duration
     total_seconds = 0.0
     started_at_str = None
 
-    if uploaded_at:
+    # Try execution ARN for actual timing
+    if execution_arn:
         try:
-            # Parse ISO timestamp (handles 'Z' suffix)
+            sfn = boto3.client("stepfunctions")
+            desc = sfn.describe_execution(executionArn=execution_arn)
+            start_time = desc.get("startDate")
+            if start_time:
+                total_seconds = (completed_at - start_time.replace(tzinfo=None)).total_seconds()
+                started_at_str = start_time.isoformat()
+        except Exception:
+            pass
+
+    # Fallback to uploadedAt
+    if total_seconds <= 0 and uploaded_at:
+        try:
             if uploaded_at.endswith('Z'):
                 uploaded_at = uploaded_at[:-1] + '+00:00'
             started_at = datetime.fromisoformat(uploaded_at.replace('+00:00', ''))
@@ -2171,15 +2125,13 @@ def calculate_processing_time(
         except (ValueError, TypeError) as e:
             print(f"Warning: Could not parse uploadedAt timestamp: {uploaded_at} - {e}")
 
-    # Estimate phase breakdown (approximate based on actual parallel processing patterns)
-    # With 30-worker parallel Textract extraction:
-    # - Router: ~45% of time (PyPDF text extraction + Claude Haiku classification)
-    # - Textract: ~20% of time (parallel extraction across all sections)
-    # - Normalizer: ~35% of time (Claude Haiku 4.5 data normalization)
-    # NOTE: These are approximations - individual Lambda durations are not tracked
-    router_seconds = total_seconds * 0.45
-    textract_seconds = total_seconds * 0.20
-    normalizer_seconds = total_seconds * 0.35
+    # Clamp to reasonable range (negative = clock skew, >1hr = stale)
+    total_seconds = max(0, min(total_seconds, 3600))
+
+    router_seconds = total_seconds * 0.30
+    textract_seconds = total_seconds * 0.25
+    normalizer_seconds = total_seconds * 0.15
+    compliance_seconds = total_seconds * 0.30
 
     return {
         'totalSeconds': round(total_seconds, 2),
@@ -2622,6 +2574,15 @@ def lambda_handler(event, context):
                     textract_pages += ext.get("pageCount", 0) or (1 if ext.get("status") == "EXTRACTED" else 0)
 
             router_tokens = event.get("routerTokenUsage")
+            pageindex_tokens = event.get("pageIndexCost")  # From PageIndex Lambda
+            compliance_tokens = None
+            # Extract compliance token usage from parallelResults if available
+            parallel_results = event.get("parallelResults", [])
+            for branch in parallel_results:
+                if isinstance(branch, dict) and "complianceReport" in branch:
+                    compliance_tokens = branch.get("complianceTokenUsage")
+                    break
+
             processing_cost = calculate_processing_cost(
                 normalizer_tokens=normalizer_tokens,
                 textract_pages=textract_pages,
@@ -2629,9 +2590,12 @@ def lambda_handler(event, context):
                 is_credit_agreement=(plugin_id == "credit_agreement"),
                 lambda_memory_mb=2048,
                 estimated_duration_ms=30000 + (textract_pages * 1000),
+                compliance_tokens=compliance_tokens,
+                pageindex_tokens=pageindex_tokens,
             )
             processing_time = calculate_processing_time(
                 uploaded_at=uploaded_at, textract_pages=textract_pages,
+                execution_arn=event.get("executionArn") or _preserved_execution_arn,
             )
 
             # Store results
@@ -2888,6 +2852,7 @@ def lambda_handler(event, context):
         processing_time = calculate_processing_time(
             uploaded_at=uploaded_at,
             textract_pages=textract_pages,
+            execution_arn=event.get("executionArn"),
         )
         print(f"Processing time: {processing_time['totalSeconds']:.1f}s")
 
