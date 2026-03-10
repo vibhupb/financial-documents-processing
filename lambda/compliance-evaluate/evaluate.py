@@ -29,8 +29,10 @@ feedback_table = dynamodb.Table(
 BATCH_SIZE = int(os.environ.get("REQUIREMENT_BATCH_SIZE", "10"))
 MAX_CORRECTIONS = int(os.environ.get("MAX_CORRECTIONS", "5"))
 MODEL_ID = os.environ.get(
-    "BEDROCK_MODEL_ID", "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+    "BEDROCK_MODEL_ID", "us.anthropic.claude-sonnet-4-6"
 )
+# Haiku for fast tasks (tree navigation, page finding) — Sonnet only for evaluation
+FAST_MODEL_ID = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
 BUCKET = os.environ.get("BUCKET_NAME", "")
 
 
@@ -210,7 +212,7 @@ def _navigate_tree_for_batch(tree, batch):
         "Include pages from ALL relevant sections, not just the first match."
     )
     resp = bedrock_client.converse(
-        modelId=MODEL_ID,
+        modelId=FAST_MODEL_ID,  # Haiku for navigation — fast, cheap
         messages=[{"role": "user", "content": [{"text": prompt}]}],
         inferenceConfig={"temperature": 0, "maxTokens": 512},
     )
