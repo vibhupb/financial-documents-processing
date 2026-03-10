@@ -110,14 +110,15 @@ def _extract_with_tree(pdf_bytes: bytes, tree: dict, source_key: str) -> list:
         return sections
 
     sections = _get_all_sections(tree.get("structure", []))
-    print(f"[Ingest] Tree has {len(sections)} sections to process")
+    print(f"[Ingest] Tree has {len(sections)} sections to process (parallel)")
 
-    for i, section in enumerate(sections):
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    def _process_section(i, section):
         start = section["start"]
         end = section["end"]
         title = section["title"]
 
-        # Extract text for this section
         pages_text = []
         for p in range(start, min(end + 1, len(reader.pages) + 1)):
             text = reader.pages[p - 1].extract_text() or ""
@@ -126,20 +127,33 @@ def _extract_with_tree(pdf_bytes: bytes, tree: dict, source_key: str) -> list:
 
         section_text = "\n\n".join(pages_text)
         if not section_text.strip():
-            continue
+            return []
 
         print(f"[Ingest] Section {i+1}/{len(sections)}: '{title}' (pp. {start}-{end}, {len(section_text)} chars)")
 
-        # Create a ParsedContent for this section
         section_content = ParsedContent(text=f"SECTION: {title}\n\n{section_text}")
         section_reqs = extract_requirements(section_content, source_document=source_key)
 
-        # Tag requirements with their source section
         for req in section_reqs:
             req["sourceSection"] = title
             req["sourcePages"] = f"{start}-{end}"
 
-        all_reqs.extend(section_reqs)
+        return section_reqs
+
+    with ThreadPoolExecutor(max_workers=min(len(sections), 5)) as executor:
+        futures = {executor.submit(_process_section, i, sec): i for i, sec in enumerate(sections)}
+        results_by_idx = {}
+        for future in as_completed(futures):
+            idx = futures[future]
+            try:
+                results_by_idx[idx] = future.result()
+            except Exception as e:
+                print(f"[Ingest] Section {idx} failed: {e}")
+                results_by_idx[idx] = []
+
+    # Merge in original order
+    for idx in sorted(results_by_idx.keys()):
+        all_reqs.extend(results_by_idx[idx])
 
     return all_reqs
 
@@ -166,10 +180,10 @@ def lambda_handler(event, context):
     if not keys:
         raise ValueError("No document keys provided")
 
-    # Parse and extract requirements from each document
-    all_reqs = []
-    source_docs = []
-    for key in keys:
+    # Process each document — parallel when multiple docs
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    def _process_document(key):
         fmt = key.rsplit(".", 1)[-1].lower()
         if fmt == "doc":
             fmt = "docx"
@@ -177,19 +191,17 @@ def lambda_handler(event, context):
             fmt = "xlsx"
         if fmt not in PARSERS:
             print(f"[Ingest] Skipping unsupported format: {fmt} ({key})")
-            continue
+            return key, []
 
         print(f"[Ingest] Processing: {key} (format: {fmt})")
         file_bytes = s3.get_object(Bucket=BUCKET, Key=key)["Body"].read()
 
         if fmt == "pdf":
-            # PDFs MUST use PageIndex tree — poll until tree is ready
             tree = _wait_for_tree(bid, key)
             if tree and tree.get("structure"):
                 print(f"[Ingest] Using PageIndex tree ({len(tree['structure'])} root nodes) for {key}")
                 reqs = _extract_with_tree(file_bytes, tree, key)
             else:
-                # Tree build failed or timed out — invoke PageIndex synchronously
                 print(f"[Ingest] No tree available, triggering inline PageIndex build for {key}")
                 tree = _build_tree_inline(bid, key)
                 if tree and tree.get("structure"):
@@ -199,14 +211,24 @@ def lambda_handler(event, context):
                     parsed = PARSERS[fmt](file_bytes)
                     reqs = extract_requirements(parsed, source_document=key)
         else:
-            # Non-PDF formats (DOCX, XLSX, PPTX) — use parser directly
             print(f"[Ingest] Parsing {fmt} document: {key}")
             parsed = PARSERS[fmt](file_bytes)
             reqs = extract_requirements(parsed, source_document=key)
 
         print(f"[Ingest] Extracted {len(reqs)} requirements from {key}")
-        all_reqs.extend(reqs)
-        source_docs.append(key)
+        return key, reqs
+
+    all_reqs = []
+    source_docs = []
+    with ThreadPoolExecutor(max_workers=min(len(keys), 3)) as executor:
+        futures = {executor.submit(_process_document, key): key for key in keys}
+        for future in as_completed(futures):
+            try:
+                key, reqs = future.result()
+                all_reqs.extend(reqs)
+                source_docs.append(key)
+            except Exception as e:
+                print(f"[Ingest] Document failed: {futures[future]}: {e}")
 
     # Deduplicate if multiple documents produced overlapping requirements
     if len(source_docs) > 1 and all_reqs:
