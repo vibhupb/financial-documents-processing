@@ -14,7 +14,11 @@ from decimal import Decimal
 
 s3_client = boto3.client("s3")
 bedrock_client = boto3.client(
-    "bedrock-runtime", config=Config(max_pool_connections=50)
+    "bedrock-runtime", config=Config(
+        max_pool_connections=50,
+        read_timeout=120,
+        retries={"max_attempts": 3, "mode": "adaptive"},
+    )
 )
 dynamodb = boto3.resource("dynamodb")
 baselines_table = dynamodb.Table(
@@ -104,7 +108,7 @@ def evaluate_document(doc_id, plugin_id, tree, pdf_bytes, baseline_ids=None):
             page_text = _extract_pages(pdf_bytes, pages)
             return _evaluate_batch(batch, page_text, doc_id, baseline["baselineId"])
 
-        with ThreadPoolExecutor(max_workers=min(len(batches), 5)) as executor:
+        with ThreadPoolExecutor(max_workers=min(len(batches), 3)) as executor:
             futures = {executor.submit(_process_batch, b): i for i, b in enumerate(batches)}
             results_by_idx = {}
             for future in as_completed(futures):
