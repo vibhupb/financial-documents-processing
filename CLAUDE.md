@@ -87,6 +87,7 @@ frontend/src/
 | POST | `/review/{id}/approve` | Approve document |
 | POST | `/review/{id}/reject` | Reject document |
 | GET | `/plugins` | Registered plugin types |
+| POST | `/plugins/upload` | Presigned URL for plugin sample uploads (samples/ prefix, no pipeline trigger) |
 | POST | `/documents/{id}/ask` | Hybrid Q&A |
 | POST | `/documents/{id}/extract` | Trigger deferred extraction |
 | GET/POST | `/baselines[/{id}]` | Baseline CRUD |
@@ -127,7 +128,17 @@ Detailed guidelines are split across path-scoped rules and on-demand skills:
 
 ## Version History
 
-See `docs/VERSION_HISTORY.md` for full history. Current: **v5.5.0** (2026-03-09)
+See `docs/VERSION_HISTORY.md` for full history. Current: **v5.6.0** (2026-03-10)
+
+### v5.6.0 — Plugin Architecture Hardening (2026-03-10)
+
+- **Plugin sample isolation**: New `POST /plugins/upload` → `samples/` S3 prefix. Plugin Wizard samples no longer trigger pipeline or appear in Work Queue
+- **Wizard config persistence**: `_build_config_from_wizard_fields()` converts flat wizard fields (fields, keywords, promptRules) into proper plugin config (classification, sections, normalization) — was saving empty config to DynamoDB
+- **Dynamic plugin registry**: Injects `plugin_id` and `name` into config dict loaded from DynamoDB — was causing KeyError in router's `_resolve_plugin()`
+- **Explicit pluginId routing**: Trigger Lambda reads `plugin-id` S3 metadata → passes to Step Functions → Router skips AI classification, uses explicit plugin directly
+- **API route fix**: `/plugins/{id}/publish` and `/test` use `path.endswith()` — plugin IDs containing "test" no longer match wrong route
+- **Normalizer scope fix**: `_preserved_execution_arn` referenced across function boundaries
+- **analyzeSample bucket fix**: Empty string bucket falls through to BUCKET_NAME env var
 
 ### v5.5.0 — Compliance Pipeline Hardening + Performance (2026-03-09)
 
