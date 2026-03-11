@@ -127,6 +127,8 @@ export const api = {
   updatePluginConfig: (pluginId: string, data: any) => fetchApi<any>(`/plugins/${pluginId}`, { method: 'PUT', body: JSON.stringify(data) }),
   publishPlugin: (pluginId: string) => fetchApi<any>(`/plugins/${pluginId}/publish`, { method: 'POST' }),
   deletePlugin: (pluginId: string) => fetchApi<any>(`/plugins/${pluginId}`, { method: 'DELETE' }),
+  uploadPluginSample: (filename: string) =>
+    fetchApi<{ sampleId: string; uploadUrl: string; fields: Record<string, string>; key: string; expiresIn: number }>('/plugins/upload', { method: 'POST', body: JSON.stringify({ filename }) }),
   analyzeSample: (data: { s3Key: string; bucket: string }) =>
     fetchApi<any>('/plugins/analyze', { method: 'POST', body: JSON.stringify(data) }),
   getPlugin: (pluginId: string) => fetchApi<any>(`/plugins/${pluginId}`),

@@ -2595,7 +2595,7 @@ def lambda_handler(event, context):
             )
             processing_time = calculate_processing_time(
                 uploaded_at=uploaded_at, textract_pages=textract_pages,
-                execution_arn=event.get("executionArn") or _preserved_execution_arn,
+                execution_arn=event.get("executionArn") or "",
             )
 
             # Store results

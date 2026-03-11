@@ -2432,8 +2432,11 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     content_hash = event.get("contentHash")  # Pass through for deduplication
     file_size = event.get("size")
     uploaded_at = event.get("uploadedAt")
+    explicit_plugin_id = event.get("pluginId", "")  # Skip classification if set
 
     print(f"Processing document: {document_id} from s3://{bucket}/{key}")
+    if explicit_plugin_id:
+        print(f"Explicit pluginId from upload: {explicit_plugin_id}")
     if content_hash:
         print(f"Content hash: {content_hash[:16]}...")
 
@@ -2464,11 +2467,21 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         if low_quality_pages:
             print(f"Detected {len(low_quality_pages)} pages with low text quality (need OCR): {low_quality_pages}")
 
-        # 3. Classify pages using Bedrock
-        # Pass filename as hint for scanned PDFs where text extraction fails
+        # 3. Classify pages using Bedrock (or use explicit pluginId)
         filename_from_key = key.rsplit("/", 1)[-1] if "/" in key else key
-        print("Classifying pages with Claude Haiku...")
-        classification = classify_pages_with_bedrock(page_snippets, filename=filename_from_key)
+        if explicit_plugin_id:
+            # Skip LLM classification — user explicitly selected this plugin
+            print(f"Using explicit pluginId: {explicit_plugin_id} (skipping AI classification)")
+            classification = {
+                "primary_document_type": explicit_plugin_id,
+                explicit_plugin_id: 1,  # Start page 1
+                "confidence": "high",
+                "total_pages": total_pages,
+                "document_types": {explicit_plugin_id: 1},
+            }
+        else:
+            print("Classifying pages with Claude Haiku...")
+            classification = classify_pages_with_bedrock(page_snippets, filename=filename_from_key)
         print(f"Classification result: {json.dumps(classification)}")
 
         # Programmatic fallback: if LLM returned "unknown" but filename matches
@@ -2646,7 +2659,9 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 from document_plugins.registry import get_all_plugins
 
                 all_plugins = get_all_plugins()
+                print(f"[Plugin path] Registry has {len(all_plugins)} plugins: {list(all_plugins.keys())}")
                 plugin = _resolve_plugin(classification, all_plugins)
+                print(f"[Plugin path] _resolve_plugin returned: {'found ' + plugin.get('plugin_id', '?') if plugin else 'None'}")
                 if plugin:
                     plugin_id = plugin["plugin_id"]
                     plugin_cls = plugin.get("classification", {})

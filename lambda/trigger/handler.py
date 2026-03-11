@@ -178,6 +178,7 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             # (set by frontend upload via presigned POST)
             processing_mode = "extract"  # default
             baseline_ids = []
+            plugin_id = ""
             try:
                 head_resp = s3_client.head_object(Bucket=bucket, Key=key)
                 metadata = head_resp.get("Metadata", {})
@@ -185,6 +186,9 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 baseline_ids_str = metadata.get("baseline-ids", "")
                 if baseline_ids_str:
                     baseline_ids = [bid.strip() for bid in baseline_ids_str.split(",") if bid.strip()]
+                plugin_id = metadata.get("plugin-id", "")
+                if plugin_id:
+                    print(f"Plugin ID from metadata: {plugin_id}")
             except Exception as e:
                 print(f"Warning: Could not read S3 metadata: {e}")
 
@@ -201,6 +205,8 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             }
             if baseline_ids:
                 sfn_input["baselineIds"] = baseline_ids
+            if plugin_id:
+                sfn_input["pluginId"] = plugin_id
 
             # Start Step Functions execution
             # Sanitize name: Step Functions only allows [a-zA-Z0-9-_]

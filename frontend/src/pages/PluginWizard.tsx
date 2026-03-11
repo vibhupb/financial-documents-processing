@@ -118,7 +118,7 @@ export default function PluginWizard() {
       for (let i = 0; i < files.length; i++) {
         const file = files[i];
         setUploadProgress(`Uploading ${i + 1}/${files.length}: ${file.name}`);
-        const urlRes = await api.createUploadUrl(file.name);
+        const urlRes = await api.uploadPluginSample(file.name);
         await api.uploadFile(urlRes.uploadUrl, urlRes.fields, file);
 
         setUploadProgress(`Analyzing ${i + 1}/${files.length}: ${file.name}`);

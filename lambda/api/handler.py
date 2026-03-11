@@ -263,6 +263,48 @@ def get_document_audit(document_id: str) -> dict[str, Any]:
         return {"error": f"Failed to get audit trail: {str(e)}"}
 
 
+def create_sample_upload_url(filename: str) -> dict[str, Any]:
+    """Generate a presigned POST URL for plugin sample uploads.
+
+    Files are uploaded to the `samples/` prefix which does NOT trigger the
+    main Step Functions pipeline. Used by Plugin Wizard for sample analysis.
+    """
+    sample_id = str(uuid.uuid4())
+    key = f"samples/{sample_id}/{filename}"
+
+    try:
+        fields = {"Content-Type": "application/pdf"}
+        conditions = [
+            {"Content-Type": "application/pdf"},
+            ["content-length-range", 1, 52428800],
+        ]
+
+        presigned_post = s3_client.generate_presigned_post(
+            Bucket=BUCKET_NAME,
+            Key=key,
+            Fields=fields,
+            Conditions=conditions,
+            ExpiresIn=3600,
+        )
+
+        upload_url = presigned_post["url"]
+        if ".s3.amazonaws.com" in upload_url:
+            upload_url = upload_url.replace(
+                ".s3.amazonaws.com",
+                f".s3.{AWS_REGION}.amazonaws.com"
+            )
+
+        return {
+            "sampleId": sample_id,
+            "uploadUrl": upload_url,
+            "fields": presigned_post["fields"],
+            "key": key,
+            "expiresIn": 3600,
+        }
+    except Exception as e:
+        return {"error": f"Failed to generate sample upload URL: {str(e)}"}
+
+
 def create_upload_url(filename: str, processing_mode: str = "extract", baseline_ids: list | None = None, plugin_id: str | None = None) -> dict[str, Any]:
     """Generate a presigned POST URL for document upload.
 
@@ -634,6 +676,60 @@ def _convert_floats_to_decimal(obj: Any) -> Any:
     return obj
 
 
+def _build_config_from_wizard_fields(body: dict[str, Any]) -> dict[str, Any]:
+    """Convert Plugin Wizard flat fields into a proper plugin config.
+
+    The wizard sends: { fields, keywords, promptRules, pageCount }
+    The registry expects: { classification, sections, normalization }
+    """
+    fields = body.get("fields", [])
+    keywords = body.get("keywords", [])
+    prompt_rules = body.get("promptRules", [])
+    page_count = body.get("pageCount", 10)
+
+    # Build queries from fields
+    queries = [f.get("query", "") for f in fields if f.get("query")]
+    extraction_fields = [f.get("name", "") for f in fields if f.get("name")]
+
+    # Build a single extraction section (wizard creates flat documents)
+    sections = {
+        "main": {
+            "name": "Document Content",
+            "max_pages": min(page_count, 50),
+            "classification_hints": {
+                "keywords": keywords[:20] if keywords else [],
+                "typical_pages": f"1-{min(page_count, 50)}",
+            },
+            "textract_features": ["QUERIES"],
+            "queries": queries,
+            "include_pypdf_text": True,
+            "render_as_images": True,
+            "render_dpi": 150,
+            "parallel_extraction": True,
+            "extract_tables": False,
+            "extract_signatures": False,
+            "extraction_fields": extraction_fields,
+        }
+    }
+
+    config = {
+        "classification": {
+            "keywords": keywords,
+            "has_sections": False,
+            "target_all_pages": True,
+        },
+        "sections": sections,
+        "fields": fields,
+        "promptRules": prompt_rules,
+        "normalization": {
+            "llm_model": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+            "max_tokens": 4096,
+            "temperature": 0.0,
+        },
+    }
+    return config
+
+
 def create_plugin_config(body: dict[str, Any], user: Any) -> dict[str, Any]:
     """Create a new draft plugin configuration."""
     plugin_id = body.get("pluginId", "").strip().lower().replace(" ", "_")
@@ -641,7 +737,13 @@ def create_plugin_config(body: dict[str, Any], user: Any) -> dict[str, Any]:
         return {"error": "pluginId is required"}
 
     name = body.get("name", plugin_id)
-    config = _convert_floats_to_decimal(body.get("config", {}))
+    # If wizard sends flat fields (fields, keywords, promptRules) without
+    # a nested "config" key, build the config from those fields.
+    config = body.get("config", {})
+    if not config and body.get("fields"):
+        config = _build_config_from_wizard_fields(body)
+    config = _convert_floats_to_decimal(config)
+
     prompt_template = body.get("promptTemplate", "")
     timestamp = datetime.utcnow().isoformat() + "Z"
 
@@ -763,6 +865,11 @@ def update_plugin_config(plugin_id: str, body: dict[str, Any], user: Any) -> dic
         Limit=1,
     )
     items = result.get("Items", [])
+    # Build config from wizard fields if needed
+    config_from_body = body.get("config", {})
+    if not config_from_body and body.get("fields"):
+        config_from_body = _build_config_from_wizard_fields(body)
+
     if not items:
         # First edit of a file-based plugin — create DynamoDB override entry
         item = {
@@ -771,7 +878,7 @@ def update_plugin_config(plugin_id: str, body: dict[str, Any], user: Any) -> dic
             "status": "DRAFT",
             "name": body.get("name", plugin_id),
             "description": body.get("description", ""),
-            "config": _convert_floats_to_decimal(body.get("config", {})),
+            "config": _convert_floats_to_decimal(config_from_body),
             "promptTemplate": body.get("promptTemplate", ""),
             "createdBy": getattr(user, 'email', 'unknown') if user else 'unknown',
             "createdAt": timestamp,
@@ -795,7 +902,7 @@ def update_plugin_config(plugin_id: str, body: dict[str, Any], user: Any) -> dic
             "status": "DRAFT",
             "name": body.get("name", latest.get("name", "")),
             "description": body.get("description", latest.get("description", "")),
-            "config": _convert_floats_to_decimal(body.get("config", latest.get("config", {}))),
+            "config": _convert_floats_to_decimal(config_from_body if config_from_body else latest.get("config", {})),
             "promptTemplate": body.get("promptTemplate", latest.get("promptTemplate", "")),
             "createdBy": getattr(user, 'email', 'unknown') if user else 'unknown',
             "createdAt": timestamp,
@@ -919,7 +1026,7 @@ def analyze_sample_document(body: dict[str, Any]) -> dict[str, Any]:
     that the wizard displays to the analyst.
     """
     s3_key = body.get("s3Key", "")
-    bucket = body.get("bucket", os.environ.get("BUCKET_NAME", ""))
+    bucket = body.get("bucket") or os.environ.get("BUCKET_NAME", "")
     if not s3_key or not bucket:
         return {"error": "s3Key and bucket are required"}
 
@@ -2282,6 +2389,10 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         elif path == "/plugins" and http_method == "POST":
             return response(200, create_plugin_config(body or {}, user))
 
+        elif path == "/plugins/upload" and http_method == "POST":
+            filename = (body or {}).get("filename", "sample.pdf")
+            return response(200, create_sample_upload_url(filename))
+
         elif path == "/plugins/analyze" and http_method == "POST":
             return response(200, analyze_sample_document(body or {}))
 
@@ -2291,14 +2402,13 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         elif path == "/plugins/refine" and http_method == "POST":
             return response(200, refine_plugin_config(body or {}))
 
-        elif path.startswith("/plugins/") and "/test" in path and http_method == "POST":
-            pid = path.split("/")[2]
-            # Test runs the full pipeline on the sample - reuse existing Step Functions
-            return response(200, {"pluginId": pid, "status": "TEST_QUEUED", "message": "Test run queued (Phase 3)"})
-
-        elif path.startswith("/plugins/") and "/publish" in path and http_method == "POST":
+        elif path.startswith("/plugins/") and path.endswith("/publish") and http_method == "POST":
             pid = path.split("/")[2]
             return response(200, publish_plugin_config(pid, user))
+
+        elif path.startswith("/plugins/") and path.endswith("/test") and http_method == "POST":
+            pid = path.split("/")[2]
+            return response(200, {"pluginId": pid, "status": "TEST_QUEUED", "message": "Test run queued (Phase 3)"})
 
         elif path.startswith("/plugins/") and http_method == "GET":
             pid = path_params.get("pluginId") or path.split("/")[2]

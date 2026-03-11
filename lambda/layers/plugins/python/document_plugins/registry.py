@@ -137,6 +137,9 @@ def _discover_dynamic_plugins() -> None:
                     file_base.pop(k, None)
                 config = _deep_merge(file_base, config)
 
+            config["plugin_id"] = plugin_id
+            if "name" not in config:
+                config["name"] = item.get("name", plugin_id)
             config["_source"] = "dynamic"
             config["_version"] = str(item.get("version", "v1"))
             config["_dynamodb_item"] = {
